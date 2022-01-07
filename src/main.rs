@@ -9,11 +9,24 @@ use termion::raw::IntoRawMode;
 
 struct Game {
     grid: Vec<Vec<char>>,
+    stdout: MouseTerminal<termion::raw::RawTerminal<std::io::Stdout>>,
 }
+
 impl Game {
-    fn draw_line<W: std::io::Write>(
+    // fn set_output<W: std::io::Write>(&mut self, stdout: &mut MouseTerminal<W>) {
+    //     self.stdout = stdout;
+    // }
+    // 
+    fn new_game() -> Game {
+        let (width, height) = termion::terminal_size().unwrap();
+        Game {
+            grid: vec![vec![' '; height as usize]; width as usize],
+            stdout: MouseTerminal::from(stdout().into_raw_mode().unwrap()),
+        }
+    }
+
+    fn draw_line(
         &mut self,
-        stdout: &mut MouseTerminal<W>,
         pos0: (u16, u16),
         pos1: (u16, u16),
         character: char,
@@ -22,8 +35,9 @@ impl Game {
             (pos0.0 as i32, pos0.1 as i32),
             (pos1.0 as i32, pos1.1 as i32),
         ) {
+            self.grid[x1 as usize][y1 as usize] = character;
             write!(
-                stdout,
+                self.stdout,
                 "{}{}",
                 termion::cursor::Goto(x1 as u16, y1 as u16),
                 character
@@ -32,17 +46,29 @@ impl Game {
         }
     }
 
-    fn draw_point<W: std::io::Write>(
+    fn draw_point(
         &mut self,
-        stdout: &mut MouseTerminal<W>,
         pos: (u16, u16),
         character: char,
     ) {
+        self.grid[pos.0 as usize][pos.1 as usize] = character;
         write!(
-            stdout,
+            self.stdout,
             "{}{}",
             termion::cursor::Goto(pos.0, pos.1),
             character
+        )
+        .unwrap();
+    }
+
+    fn clear(&mut self) {
+        let (width, height) = termion::terminal_size().unwrap();
+        self.grid = vec![vec![' '; height as usize]; width as usize];
+        write!(
+            self.stdout,
+            "{}{}",
+            termion::clear::All,
+            termion::cursor::Goto(1, 1)
         )
         .unwrap();
     }
@@ -50,51 +76,42 @@ impl Game {
 
 fn main() {
     let stdin = stdin();
-    let mut stdout = MouseTerminal::from(stdout().into_raw_mode().unwrap());
     let mut prev_mouse_pos = (1, 1);
-    let (width, height) = termion::terminal_size().unwrap();
     let selected_char = '█';
-    let mut game = Game {
-        grid: vec![vec![' '; width as usize]; height as usize],
-    };
+    let mut game = Game::new_game();
 
     write!(
-        stdout,
+        game.stdout,
         "{}{}q to exit. Click, click, click!",
         termion::clear::All,
         termion::cursor::Goto(1, 1)
     )
     .unwrap();
-    stdout.flush().unwrap();
+    game.stdout.flush().unwrap();
 
     for c in stdin.events() {
         let evt = c.unwrap();
         match evt {
             Event::Key(Key::Char('q')) => break,
+            // 'c' to clear screen
             Event::Key(Key::Char('c')) => {
-                write!(
-                    stdout,
-                    "{}{}",
-                    termion::clear::All,
-                    termion::cursor::Goto(1, 1)
-                )
-                .unwrap();
+                game.clear();
             }
             Event::Mouse(me) => match me {
                 MouseEvent::Press(MouseButton::Left, x, y) => {
-                    game.draw_point(&mut stdout, (x, y), selected_char);
-                    write!(stdout, "{}", termion::cursor::Goto(1, 1)).unwrap();
+                    game.draw_point((x, y), selected_char);
+                    write!(game.stdout, "{}", termion::cursor::Goto(1, 1)).unwrap();
                     prev_mouse_pos = (x, y);
                 }
                 MouseEvent::Hold(x, y) => {
-                    game.draw_line(&mut stdout, prev_mouse_pos, (x, y), selected_char);
-                    write!(stdout, "{}", termion::cursor::Goto(1, 1)).unwrap();
+                    game.draw_line(prev_mouse_pos, (x, y), selected_char);
+                    write!(game.stdout, "{}", termion::cursor::Goto(1, 1)).unwrap();
                     prev_mouse_pos = (x, y);
                 }
                 _ => {}
             },
             _ => {}
         }
-        stdout.flush().unwrap();
+        game.stdout.flush().unwrap();
     }
 }
