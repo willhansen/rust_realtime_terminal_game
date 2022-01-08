@@ -3,9 +3,13 @@ extern crate std;
 extern crate termion;
 
 use std::io::{stdin, stdout, Write};
+use std::sync::mpsc::channel;
+use std::thread;
+use std::time::{Duration, Instant};
 use termion::event::{Event, Key, MouseButton, MouseEvent};
 use termion::input::{MouseTerminal, TermRead};
 use termion::raw::IntoRawMode;
+use std::process;
 
 struct Game {
     grid: Vec<Vec<char>>,
@@ -13,10 +17,6 @@ struct Game {
 }
 
 impl Game {
-    // fn set_output<W: std::io::Write>(&mut self, stdout: &mut MouseTerminal<W>) {
-    //     self.stdout = stdout;
-    // }
-    // 
     fn new_game() -> Game {
         let (width, height) = termion::terminal_size().unwrap();
         Game {
@@ -25,12 +25,7 @@ impl Game {
         }
     }
 
-    fn draw_line(
-        &mut self,
-        pos0: (u16, u16),
-        pos1: (u16, u16),
-        character: char,
-    ) {
+    fn draw_line(&mut self, pos0: (u16, u16), pos1: (u16, u16), character: char) {
         for (x1, y1) in line_drawing::Bresenham::new(
             (pos0.0 as i32, pos0.1 as i32),
             (pos1.0 as i32, pos1.1 as i32),
@@ -46,11 +41,7 @@ impl Game {
         }
     }
 
-    fn draw_point(
-        &mut self,
-        pos: (u16, u16),
-        character: char,
-    ) {
+    fn draw_point(&mut self, pos: (u16, u16), character: char) {
         self.grid[pos.0 as usize][pos.1 as usize] = character;
         write!(
             self.stdout,
@@ -72,6 +63,8 @@ impl Game {
         )
         .unwrap();
     }
+
+    fn tick(&mut self) {}
 }
 
 fn main() {
@@ -82,36 +75,46 @@ fn main() {
 
     write!(
         game.stdout,
-        "{}{}q to exit. Click, click, click!",
+        "{}{}q to exit.  c to clear.  Mouse to draw.  Begin!",
         termion::clear::All,
         termion::cursor::Goto(1, 1)
     )
     .unwrap();
     game.stdout.flush().unwrap();
+    let (tx, rx) = channel();
 
-    for c in stdin.events() {
-        let evt = c.unwrap();
-        match evt {
-            Event::Key(Key::Char('q')) => break,
-            // 'c' to clear screen
-            Event::Key(Key::Char('c')) => {
-                game.clear();
-            }
-            Event::Mouse(me) => match me {
-                MouseEvent::Press(MouseButton::Left, x, y) => {
-                    game.draw_point((x, y), selected_char);
-                    write!(game.stdout, "{}", termion::cursor::Goto(1, 1)).unwrap();
-                    prev_mouse_pos = (x, y);
-                }
-                MouseEvent::Hold(x, y) => {
-                    game.draw_line(prev_mouse_pos, (x, y), selected_char);
-                    write!(game.stdout, "{}", termion::cursor::Goto(1, 1)).unwrap();
-                    prev_mouse_pos = (x, y);
-                }
-                _ => {}
-            },
-            _ => {}
+    thread::spawn(move || {
+        for c in stdin.events() {
+            let evt = c.unwrap();
+            tx.send(evt).unwrap();
         }
-        game.stdout.flush().unwrap();
+    });
+
+    'mainloop: loop {
+        while let Ok(evt) = rx.try_recv() {
+            match evt {
+                Event::Key(Key::Char('q')) => break 'mainloop,
+                // 'c' to clear screen
+                Event::Key(Key::Char('c')) => {
+                    game.clear();
+                }
+                Event::Mouse(me) => match me {
+                    MouseEvent::Press(MouseButton::Left, x, y) => {
+                        game.draw_point((x, y), selected_char);
+                        write!(game.stdout, "{}", termion::cursor::Goto(1, 1)).unwrap();
+                        prev_mouse_pos = (x, y);
+                    }
+                    MouseEvent::Hold(x, y) => {
+                        game.draw_line(prev_mouse_pos, (x, y), selected_char);
+                        write!(game.stdout, "{}", termion::cursor::Goto(1, 1)).unwrap();
+                        prev_mouse_pos = (x, y);
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+            game.stdout.flush().unwrap();
+        }
+        thread::sleep(Duration::from_millis(20));
     }
 }
