@@ -80,8 +80,10 @@ impl Block {
 
 struct Game {
     grid: Vec<Vec<Block>>, // (x,y), left to right, top to bottom
+    prev_grid: Vec<Vec<Block>>, // (x,y), left to right, top to bottom
     stdout: MouseTerminal<termion::raw::RawTerminal<std::io::Stdout>>,
-    prev_mouse_pos: (u16, u16), // where mouse was last frame (if pressed)
+    terminal_size: (u16, u16),  // (width, height)
+    prev_mouse_pos: (i32, i32), // where mouse was last frame (if pressed)
     last_pressed_key: Option<termion::event::Key>,
     running: bool,         // set false to quit
     selected_block: Block, // What the mouse places
@@ -95,7 +97,9 @@ impl Game {
         let (width, height) = termion::terminal_size().unwrap();
         Game {
             grid: vec![vec![Block::None; height as usize]; width as usize],
+            prev_grid: vec![vec![Block::None; height as usize]; width as usize],
             stdout: MouseTerminal::from(stdout().into_raw_mode().unwrap()),
+            terminal_size: termion::terminal_size().unwrap(),
             prev_mouse_pos: (1, 1),
             last_pressed_key: None,
             running: true,
@@ -105,46 +109,38 @@ impl Game {
             player_alive: false,
         }
     }
+    fn screen_to_world(&self, terminal_position: &(u16, u16)) -> (i32, i32) {
+        // terminal indexes from 1, and the y axis goes top to bottom
+        (
+            terminal_position.0 as i32 - 1,
+            self.terminal_size.1 as i32 - terminal_position.1 as i32,
+        )
+    }
 
-    fn draw_line(&mut self, pos0: (u16, u16), pos1: (u16, u16), block: Block) {
-        for (x1, y1) in line_drawing::Bresenham::new(
-            (pos0.0 as i32, pos0.1 as i32),
-            (pos1.0 as i32, pos1.1 as i32),
-        ) {
+    fn world_to_screen(&self, world_position: &(i32, i32)) -> (u16, u16) {
+        // terminal indexes from 1, and the y axis goes top to bottom
+        // world indexes from 0, origin at bottom left
+        (
+            world_position.0 as u16 + 1,
+            (self.terminal_size.1 as i32 - world_position.1) as u16,
+        )
+    }
+
+    fn draw_line(&mut self, pos0: (i32, i32), pos1: (i32, i32), block: Block) {
+        for (x1, y1) in line_drawing::Bresenham::new(pos0, pos1) {
             self.grid[x1 as usize][y1 as usize] = block;
-            write!(
-                self.stdout,
-                "{}{}",
-                termion::cursor::Goto(x1 as u16 + 1, y1 as u16 + 1),
-                block.glyph()
-            )
-            .unwrap();
         }
     }
 
-    fn draw_point(&mut self, pos: (u16, u16), block: Block) {
+    fn draw_point(&mut self, pos: (i32, i32), block: Block) {
         self.grid[pos.0 as usize][pos.1 as usize] = block;
-        write!(
-            self.stdout,
-            "{}{}",
-            termion::cursor::Goto(pos.0 + 1, pos.1 + 1),
-            block.glyph()
-        )
-        .unwrap();
     }
 
     fn clear(&mut self) {
         let (width, height) = termion::terminal_size().unwrap();
         self.grid = vec![vec![Block::None; height as usize]; width as usize];
-        write!(
-            self.stdout,
-            "{}{}",
-            termion::clear::All,
-            termion::cursor::Goto(1, 1)
-        )
-        .unwrap();
     }
-    fn place_player(&mut self, x: u16, y: u16) {
+    fn place_player(&mut self, x: i32, y: i32) {
         // Need to kill existing player if still alive
         if self.player_alive {
             self.grid[self.player_pos.0 as usize][self.player_pos.1 as usize] = Block::None;
@@ -181,22 +177,19 @@ impl Game {
                 _ => {}
             },
             Event::Mouse(me) => match me {
-                MouseEvent::Press(MouseButton::Left, x_from_1, y_from_1) => {
-                    let (x, y) = (x_from_1 - 1, y_from_1 - 1);
+                MouseEvent::Press(MouseButton::Left, term_x, term_y) => {
+                    let (x, y) = self.screen_to_world(&(term_x, term_y));
                     self.draw_point((x, y), self.selected_block);
-                    write!(self.stdout, "{}", termion::cursor::Goto(1, 1)).unwrap();
                     self.prev_mouse_pos = (x, y);
                 }
-                MouseEvent::Press(MouseButton::Right, x_from_1, y_from_1) => {
-                    let (x, y) = (x_from_1 - 1, y_from_1 - 1);
+                MouseEvent::Press(MouseButton::Right, term_x, term_y) => {
+                    let (x, y) = self.screen_to_world(&(term_x, term_y));
                     self.place_player(x, y);
                     self.draw_point((x, y), Block::Player);
-                    write!(self.stdout, "{}", termion::cursor::Goto(1, 1)).unwrap();
                 }
-                MouseEvent::Hold(x_from_1, y_from_1) => {
-                    let (x, y) = (x_from_1 - 1, y_from_1 - 1);
+                MouseEvent::Hold(term_x, term_y) => {
+                    let (x, y) = self.screen_to_world(&(term_x, term_y));
                     self.draw_line(self.prev_mouse_pos, (x, y), self.selected_block);
-                    write!(self.stdout, "{}", termion::cursor::Goto(1, 1)).unwrap();
                     self.prev_mouse_pos = (x, y);
                 }
                 _ => {}
@@ -207,21 +200,22 @@ impl Game {
     }
 
     fn tick_physics(&mut self) {
-        let width = self.grid.len();
-        let height = self.grid[0].len();
-        let old_grid = self.grid.clone();
-
         self.apply_gravity();
         // self.apply_player_motion();
-
+    }
+    
+    fn update_screen(&mut self) {
+        let width = self.grid.len();
+        let height = self.grid[0].len();
         // Now update the graphics where applicable
         for x in 0..width {
             for y in 0..height {
-                if self.grid[x][y] != old_grid[x][y] {
+                if self.grid[x][y] != self.prev_grid[x][y] {
+                    let (term_x, term_y) = self.world_to_screen(&(x as i32, y as i32));
                     write!(
                         self.stdout,
                         "{}{}",
-                        termion::cursor::Goto(x as u16, y as u16),
+                        termion::cursor::Goto(term_x, term_y),
                         self.grid[x][y].glyph(),
                     )
                     .unwrap();
@@ -230,29 +224,27 @@ impl Game {
         }
         write!(self.stdout, "{}", termion::cursor::Goto(1, 1),).unwrap();
         self.stdout.flush().unwrap();
+        self.prev_grid = self.grid.clone();
     }
 
     fn apply_gravity(&mut self) {
-        let width = self.grid.len();
-        let height = self.grid[0].len();
-        for x in 0..width {
-            for forward_y in 0..height {
-                // We want to count from high y to low y, so things fall correctly
-                let y = (height - 1) - forward_y;
-                let block = self.grid[x][y];
+        for x in 0..self.terminal_size.0 as usize {
+            for y in 0..self.terminal_size.1 as usize {
+                // We want to count from bottom to top, because things fall down
+                let block = self.grid[x as usize][y];
                 if block.does_fall() {
-                    let is_bottom_row = y == (height - 1);
-                    let has_direct_support = !is_bottom_row && self.grid[x][y + 1] != Block::None;
+                    let is_bottom_row = y == 0;
+                    let has_direct_support = !is_bottom_row && self.grid[x][y - 1] != Block::None;
                     if is_bottom_row {
                         self.grid[x][y] = Block::None;
                         if block == Block::Player {
                             self.player_alive = false;
                         }
                     } else if !has_direct_support {
-                        self.grid[x][y + 1] = block;
+                        self.grid[x][y - 1] = block;
                         self.grid[x][y] = Block::None;
                         if block == Block::Player {
-                            self.player_pos.1 += 1;
+                            self.player_pos.1 -= 1;
                         }
                     }
                 }
@@ -288,6 +280,7 @@ fn main() {
             game.handle_input(evt);
         }
         game.tick_physics();
+        game.update_screen();
         thread::sleep(Duration::from_millis(20));
     }
 }
