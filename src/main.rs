@@ -30,7 +30,7 @@ impl Block {
             Block::Wall => '█',
             Block::Brick => '▪',
             Block::Water => '█',
-            Block::Player => '🯅',
+            Block::Player => '█',
             _ => 'E',
         }
     }
@@ -79,7 +79,7 @@ impl Block {
 }
 
 struct Game {
-    grid: Vec<Vec<Block>>, // (x,y), left to right, top to bottom
+    grid: Vec<Vec<Block>>,      // (x,y), left to right, top to bottom
     prev_grid: Vec<Vec<Block>>, // (x,y), left to right, top to bottom
     stdout: MouseTerminal<termion::raw::RawTerminal<std::io::Stdout>>,
     terminal_size: (u16, u16),  // (width, height)
@@ -143,7 +143,7 @@ impl Game {
     fn place_player(&mut self, x: i32, y: i32) {
         // Need to kill existing player if still alive
         if self.player_alive {
-            self.grid[self.player_pos.0 as usize][self.player_pos.1 as usize] = Block::None;
+            // self.grid[self.player_pos.0 as usize][self.player_pos.1 as usize] = Block::None;
         }
         self.grid[x as usize][y as usize] = Block::Player;
         self.player_speed = (0, 0);
@@ -203,7 +203,6 @@ impl Game {
         self.apply_gravity();
         // self.apply_player_motion();
     }
-    
     fn update_screen(&mut self) {
         let width = self.grid.len();
         let height = self.grid[0].len();
@@ -212,13 +211,25 @@ impl Game {
             for y in 0..height {
                 if self.grid[x][y] != self.prev_grid[x][y] {
                     let (term_x, term_y) = self.world_to_screen(&(x as i32, y as i32));
-                    write!(
-                        self.stdout,
-                        "{}{}",
-                        termion::cursor::Goto(term_x, term_y),
-                        self.grid[x][y].glyph(),
-                    )
-                    .unwrap();
+                    if self.grid[x][y] == Block::Player {
+                        write!(
+                            self.stdout,
+                            "{}{}{}{}",
+                            termion::cursor::Goto(term_x, term_y),
+                            color::Fg(color::Red).to_string(),
+                            self.grid[x][y].glyph(),
+                            color::Fg(color::White).to_string(),
+                        )
+                        .unwrap();
+                    } else {
+                        write!(
+                            self.stdout,
+                            "{}{}",
+                            termion::cursor::Goto(term_x, term_y),
+                            self.grid[x][y].glyph(),
+                        )
+                        .unwrap();
+                    }
                 }
             }
         }
