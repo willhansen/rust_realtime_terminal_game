@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 termion = "*"
 line_drawing = "*"
+num = "0.4"

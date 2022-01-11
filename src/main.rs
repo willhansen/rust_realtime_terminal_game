@@ -1,7 +1,9 @@
 extern crate line_drawing;
+extern crate num;
 extern crate std;
 extern crate termion;
 
+use num::signum;
 use std::io::{stdin, stdout, Write};
 use std::sync::mpsc::channel;
 use std::thread;
@@ -13,6 +15,11 @@ use termion::raw::IntoRawMode;
 
 // const player_jump_height: i32 = 3;
 // const player_jump_hang_frames: i32 = 4;
+const MAX_FPS: i32 = 30; // frames per second
+
+// a block every two ticks
+const PLAYER_DEFAULT_MAX_SPEED_BPS: f32 = 59.5; // blocks per second
+const PLAYER_DEFAULT_MAX_SPEED_BPF: f32 = PLAYER_DEFAULT_MAX_SPEED_BPS / MAX_FPS as f32; // blocks per frame
 
 // These have no positional information
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -66,8 +73,10 @@ struct Game {
     selected_block: Block, // What the mouse places
     player_alive: bool,
     player_pos: (i32, i32),
-    player_speed: (i32, i32),
-    player_desired_direction: (i32, i32),
+    player_x_max_speed_bpf: f32,
+    player_x_vel_bpf: f32,
+    player_desired_x_direction: i32,
+    player_accumulated_x_err: f32, // speed can be a float
 }
 
 impl Game {
@@ -82,8 +91,10 @@ impl Game {
             selected_block: Block::Wall,
             player_alive: false,
             player_pos: (0, 0),
-            player_speed: (0, 0),
-            player_desired_direction: (0, 0),
+            player_x_max_speed_bpf: PLAYER_DEFAULT_MAX_SPEED_BPF,
+            player_x_vel_bpf: 0.0,
+            player_desired_x_direction: 0,
+            player_accumulated_x_err: 0.0,
         }
     }
 
@@ -126,15 +137,22 @@ impl Game {
             self.grid[self.player_pos.0 as usize][self.player_pos.1 as usize] = Block::None;
         }
         self.grid[x as usize][y as usize] = Block::Player;
-        self.player_speed = (0, 0);
-        self.player_desired_direction = (0, 0);
+        self.player_x_vel_bpf = 0.0;
+        self.player_desired_x_direction = 0;
         self.player_pos = (x, y);
         self.player_alive = true;
     }
 
     // When The player presses the jump button
     fn player_jump(&mut self) {
-        self.player_speed.1 = 3;
+        // TODO
+    }
+
+    fn player_set_desired_x_direction(&mut self, new_x_dir: i32) {
+        if new_x_dir != self.player_desired_x_direction {
+            self.player_desired_x_direction = signum(new_x_dir);
+            self.player_accumulated_x_err = 0.0;
+        }
     }
 
     fn handle_input(&mut self, evt: termion::event::Event) {
@@ -146,9 +164,9 @@ impl Game {
                 Key::Char('3') => self.selected_block = Block::Brick,
                 Key::Char('c') => self.clear(),
                 Key::Char(' ') => self.player_jump(),
-                Key::Char('a') | Key::Left => self.player_desired_direction.0 = -1,
-                Key::Char('s') | Key::Down => self.player_desired_direction.0 = 0,
-                Key::Char('d') | Key::Right => self.player_desired_direction.0 = 1,
+                Key::Char('a') | Key::Left => self.player_set_desired_x_direction(-1),
+                Key::Char('s') | Key::Down => self.player_set_desired_x_direction(0),
+                Key::Char('d') | Key::Right => self.player_set_desired_x_direction(1),
                 _ => {}
             },
             Event::Mouse(me) => match me {
@@ -248,8 +266,14 @@ impl Game {
 
     // not counting gravity
     fn apply_player_motion(&mut self) {
-        if self.player_desired_direction.0 != 0 && self.player_is_supported() {
-            let target_x = self.player_pos.0 + self.player_desired_direction.0;
+        if self.player_desired_x_direction != 0 && self.player_is_supported() {
+            // instant acceleration
+            self.player_x_vel_bpf =
+                self.player_x_max_speed_bpf * signum(self.player_desired_x_direction) as f32;
+            let dx_ideal: f32 = self.player_x_vel_bpf + self.player_accumulated_x_err;
+            let dx_actual: i32 = dx_ideal.trunc() as i32;
+            self.player_accumulated_x_err = dx_ideal.fract();
+            let target_x = self.player_pos.0 + dx_actual;
             let target_y = self.player_pos.1;
             if self.in_world(target_x, target_y)
                 && self.grid[target_x as usize][target_y as usize] == Block::None
@@ -330,6 +354,7 @@ mod tests {
     #[test]
     fn place_player() {
         let mut game = Game::new(30, 30);
+        // TODO: should these be variables?  Or should I just hardcode them?
         let (x1, y1, x2, y2) = (15, 11, 12, 5);
         assert_eq!(game.player_alive, false);
         game.place_player(x1, y1);
@@ -350,16 +375,46 @@ mod tests {
         let mut game = Game::new(30, 30);
         game.draw_line((10, 10), (20, 10), Block::Wall);
         game.place_player(15, 11);
-
-        game.player_desired_direction = (1, 0);
+        game.player_x_max_speed_bpf = 1.0;
+        game.player_desired_x_direction = 1;
 
         game.tick_physics();
 
         assert_eq!(game.grid[15][11], Block::None);
         assert_eq!(game.grid[16][11], Block::Player);
         assert_eq!(game.player_pos, (16, 11));
-        
+
         game.place_player(15, 11);
-        assert_eq!(game.player_desired_direction, (0, 0));
+        assert_eq!(game.player_desired_x_direction, 0);
+        game.player_desired_x_direction = -1;
+
+        game.tick_physics();
+        game.tick_physics();
+
+        assert_eq!(game.grid[15][11], Block::None);
+        assert_eq!(game.grid[13][11], Block::Player);
+        assert_eq!(game.player_pos, (13, 11));
     }
+
+    #[test]
+    fn move_player_slowly() {
+        let mut game = Game::new(30, 30);
+        game.draw_line((10, 10), (20, 10), Block::Wall);
+        game.place_player(15, 11);
+        game.player_x_max_speed_bpf = 0.5;
+        game.player_desired_x_direction = 1;
+
+        game.tick_physics();
+
+        assert_eq!(game.player_pos, (15, 11));
+
+        game.tick_physics();
+
+        assert_eq!(game.player_pos, (16, 11));
+    }
+    
+    #[test]
+    fn test_move_player_quickly() {}
+    #[test]
+    fn test_move_player_too_quickly() {}
 }
