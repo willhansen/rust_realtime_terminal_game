@@ -18,7 +18,7 @@ use termion::raw::IntoRawMode;
 const MAX_FPS: i32 = 30; // frames per second
 
 // a block every two ticks
-const PLAYER_DEFAULT_MAX_SPEED_BPS: f32 = 59.5; // blocks per second
+const PLAYER_DEFAULT_MAX_SPEED_BPS: f32 = 30.0; // blocks per second
 const PLAYER_DEFAULT_MAX_SPEED_BPF: f32 = PLAYER_DEFAULT_MAX_SPEED_BPS / MAX_FPS as f32; // blocks per frame
 
 // These have no positional information
@@ -55,9 +55,9 @@ impl Block {
         }
     }
 
-    fn does_fall(&self) -> bool {
+    fn subject_to_normal_gravity(&self) -> bool {
         match self {
-            Block::None | Block::Wall => false,
+            Block::None | Block::Wall | Block::Player => false,
             _ => true,
         }
     }
@@ -75,8 +75,10 @@ struct Game {
     player_pos: (i32, i32),
     player_x_max_speed_bpf: f32,
     player_x_vel_bpf: f32,
+    player_y_vel_bpf: f32,
     player_desired_x_direction: i32,
     player_accumulated_x_err: f32, // speed can be a float
+    player_accumulated_y_err: f32, // speed can be a float
 }
 
 impl Game {
@@ -93,8 +95,10 @@ impl Game {
             player_pos: (0, 0),
             player_x_max_speed_bpf: PLAYER_DEFAULT_MAX_SPEED_BPF,
             player_x_vel_bpf: 0.0,
+            player_y_vel_bpf: 0.0,
             player_desired_x_direction: 0,
             player_accumulated_x_err: 0.0,
+            player_accumulated_y_err: 0.0,
         }
     }
 
@@ -113,6 +117,9 @@ impl Game {
             world_position.0 as u16 + 1,
             (self.terminal_size.1 as i32 - world_position.1) as u16,
         )
+    }
+    fn get_block(&self, pos: (i32, i32)) -> Block {
+        return self.grid[pos.0 as usize][pos.1 as usize];
     }
 
     fn draw_line(&mut self, pos0: (i32, i32), pos1: (i32, i32), block: Block) {
@@ -134,10 +141,11 @@ impl Game {
     fn place_player(&mut self, x: i32, y: i32) {
         // Need to kill existing player if still alive
         if self.player_alive {
-            self.grid[self.player_pos.0 as usize][self.player_pos.1 as usize] = Block::None;
+            self.kill_player();
         }
         self.grid[x as usize][y as usize] = Block::Player;
         self.player_x_vel_bpf = 0.0;
+        self.player_y_vel_bpf = 0.0;
         self.player_desired_x_direction = 0;
         self.player_pos = (x, y);
         self.player_alive = true;
@@ -145,6 +153,7 @@ impl Game {
 
     // When The player presses the jump button
     fn player_jump(&mut self) {
+        self.player_y_vel_bpf = 1.0;
         // TODO
     }
 
@@ -239,48 +248,86 @@ impl Game {
             for y in 0..self.terminal_size.1 as usize {
                 // We want to count from bottom to top, because things fall down
                 let block = self.grid[x as usize][y];
-                if block.does_fall() {
+                if block.subject_to_normal_gravity() {
                     let is_bottom_row = y == 0;
                     let has_direct_support = !is_bottom_row && self.grid[x][y - 1] != Block::None;
                     if is_bottom_row {
                         self.grid[x][y] = Block::None;
-                        if block == Block::Player {
-                            self.player_alive = false;
-                        }
                     } else if !has_direct_support {
                         self.grid[x][y - 1] = block;
                         self.grid[x][y] = Block::None;
-                        if block == Block::Player {
-                            self.player_pos.1 -= 1;
-                        }
                     }
                 }
             }
         }
     }
+
     fn move_player_to(&mut self, x: i32, y: i32) {
         self.grid[self.player_pos.0 as usize][self.player_pos.1 as usize] = Block::None;
         self.grid[x as usize][y as usize] = Block::Player;
         self.player_pos = (x, y);
     }
 
+    fn kill_player(&mut self) {
+        self.grid[self.player_pos.0 as usize][self.player_pos.1 as usize] = Block::None;
+        self.player_alive = false;
+    }
+
     // not counting gravity
     fn apply_player_motion(&mut self) {
-        if self.player_desired_x_direction != 0 && self.player_is_supported() {
-            // instant acceleration
-            self.player_x_vel_bpf =
-                self.player_x_max_speed_bpf * signum(self.player_desired_x_direction) as f32;
-            let dx_ideal: f32 = self.player_x_vel_bpf + self.player_accumulated_x_err;
-            let dx_actual: i32 = dx_ideal.trunc() as i32;
-            self.player_accumulated_x_err = dx_ideal.fract();
-            let target_x = self.player_pos.0 + dx_actual;
-            let target_y = self.player_pos.1;
-            if self.in_world(target_x, target_y)
-                && self.grid[target_x as usize][target_y as usize] == Block::None
-            {
-                self.move_player_to(target_x, target_y);
-            }
+        if !self.player_is_supported() {
+            return;
         }
+        let x_dir: i32 = signum(self.player_desired_x_direction);
+        // instant acceleration
+        self.player_x_vel_bpf = self.player_x_max_speed_bpf * x_dir as f32;
+
+        let dx_ideal: f32 = self.player_x_vel_bpf + self.player_accumulated_x_err;
+        let dx_actual: i32 = dx_ideal.trunc() as i32;
+        self.player_accumulated_x_err = dx_ideal.fract();
+
+        let target_x = self.player_pos.0 + dx_actual;
+        let target_y = self.player_pos.1;
+
+        // need to check intermediate blocks for being clear
+        if let Some((x, y)) = self.movecast(self.player_pos, (target_x, target_y)) {
+            self.move_player_to(x, y);
+            if (x, y) != (target_x, target_y) {
+                // hit an obstacle and lose velocity
+                self.player_accumulated_x_err = 0.0;
+                self.player_x_vel_bpf = 0.0;
+            }
+        } else {
+            // Player went out of bounds and died
+            self.kill_player();
+        }
+    }
+
+    // Where the player can move to in a line
+    // tries to draw a line in air
+    // returns None if out of bounds
+    // returns the start position if start is not Block::None
+    fn movecast(&self, start: (i32, i32), end: (i32, i32)) -> Option<(i32, i32)> {
+        let mut prev_pos = start;
+        // TODO: maybe use a different line algorithm because corners
+        for pos in line_drawing::Bresenham::new(start, end) {
+            if self.in_world(pos.0, pos.1) {
+                if self.get_block(pos) != Block::None && self.get_block(pos) != Block::Player {
+                    // one before the block
+                    return Some(prev_pos);
+                } else if pos == end {
+                    // if we made it to the end, return that
+                    return Some(end);
+                }
+            } else {
+                // ran off the grid
+                return None;
+            }
+            // the prev_pos will be the start pos for the first 2 run throughs of the loop
+            prev_pos = pos;
+        }
+        // shouldn't get here
+        return None;
     }
 
     fn player_is_supported(&self) -> bool {
@@ -321,13 +368,21 @@ fn main() {
         }
     });
 
+    // time saver
+    game.draw_line(
+        ((width / 5) as i32, (height / 4) as i32),
+        ((4 * width / 5) as i32, (height / 4) as i32),
+        Block::Wall,
+    );
+
     while game.running {
         while let Ok(evt) = rx.try_recv() {
             game.handle_input(evt);
         }
         game.tick_physics();
         game.update_screen(&mut stdout);
-        thread::sleep(Duration::from_millis(20));
+        // TODO: make better
+        thread::sleep(Duration::from_millis(16));
     }
 }
 
@@ -352,7 +407,7 @@ mod tests {
     }
 
     #[test]
-    fn place_player() {
+    fn test_place_player() {
         let mut game = Game::new(30, 30);
         // TODO: should these be variables?  Or should I just hardcode them?
         let (x1, y1, x2, y2) = (15, 11, 12, 5);
@@ -371,6 +426,29 @@ mod tests {
     }
 
     #[test]
+    fn test_movecast() {
+        let mut game = Game::new(30, 30);
+        game.draw_line((10, 10), (20, 10), Block::Wall);
+
+        assert_eq!(game.movecast((15, 9), (15, 11)), Some((15, 9)));
+        assert_eq!(game.movecast((15, 10), (15, 11)), Some((15, 10)));
+        assert_eq!(game.movecast((15, 9), (17, 11)), Some((15, 9)));
+        assert_eq!(game.movecast((15, 9), (17, 110)), Some((15, 9)));
+        assert_eq!(game.movecast((150, 9), (17, 11)), None);
+        assert_eq!(game.movecast((1, 9), (-17, 9)), None);
+        assert_eq!(game.movecast((15, 9), (17, -11)), None);
+    }
+
+    #[test]
+    fn test_movecast_ignore_player() {
+        let mut game = Game::new(30, 30);
+        game.draw_line((10, 10), (20, 10), Block::Wall);
+        game.place_player(15, 11);
+
+        assert_eq!(game.movecast((15, 11), (15, 13)), Some((15, 13)));
+    }
+
+    #[test]
     fn move_player() {
         let mut game = Game::new(30, 30);
         game.draw_line((10, 10), (20, 10), Block::Wall);
@@ -380,9 +458,9 @@ mod tests {
 
         game.tick_physics();
 
+        assert_eq!(game.player_pos, (16, 11));
         assert_eq!(game.grid[15][11], Block::None);
         assert_eq!(game.grid[16][11], Block::Player);
-        assert_eq!(game.player_pos, (16, 11));
 
         game.place_player(15, 11);
         assert_eq!(game.player_desired_x_direction, 0);
@@ -394,6 +472,22 @@ mod tests {
         assert_eq!(game.grid[15][11], Block::None);
         assert_eq!(game.grid[13][11], Block::Player);
         assert_eq!(game.player_pos, (13, 11));
+    }
+    #[test]
+    fn test_stop_on_collision() {
+        let mut game = Game::new(30, 30);
+        game.draw_line((10, 10), (20, 10), Block::Wall);
+        game.draw_point((16, 11), Block::Wall);
+        game.place_player(15, 11);
+        game.player_x_max_speed_bpf = 1.0;
+        game.player_desired_x_direction = 1;
+
+        game.tick_physics();
+
+        assert_eq!(game.player_pos, (15, 11));
+        assert_eq!(game.grid[16][11], Block::Wall);
+        assert_eq!(game.grid[15][11], Block::Player);
+        assert_eq!(game.player_x_vel_bpf, 0.0);
     }
 
     #[test]
@@ -412,9 +506,52 @@ mod tests {
 
         assert_eq!(game.player_pos, (16, 11));
     }
+    #[test]
+    fn test_move_player_quickly() {
+        let mut game = Game::new(30, 30);
+        game.draw_line((10, 10), (20, 10), Block::Wall);
+        game.place_player(15, 11);
+        game.player_x_max_speed_bpf = 2.0;
+        game.player_desired_x_direction = 1;
+
+        game.tick_physics();
+        assert_eq!(game.player_pos, (17, 11));
+        game.tick_physics();
+        assert_eq!(game.player_pos, (19, 11));
+    }
+    #[test]
+    fn test_fast_player_collision_between_frames() {
+        let mut game = Game::new(30, 30);
+        game.draw_line((10, 10), (20, 10), Block::Wall);
+        // Player should not teleport through this block
+        game.draw_point((16, 11), Block::Wall);
+        game.place_player(15, 11);
+        game.player_x_max_speed_bpf = 2.0;
+        game.player_desired_x_direction = 1;
+
+        game.tick_physics();
+        assert_eq!(game.player_pos, (15, 11));
+        assert_eq!(game.player_x_vel_bpf, 0.0);
+    }
+    #[test]
+    fn test_can_jump() {
+        let mut game = Game::new(30, 30);
+        game.draw_line((10, 10), (20, 10), Block::Wall);
+
+        game.place_player(15, 11);
+
+        game.player_jump();
+        game.tick_physics();
+        assert_eq!(game.player_pos, (15, 12));
+    }
+    #[test]
+    fn test_player_gravity() {
+        let mut game = Game::new(30, 30);
+        game.place_player(15, 11);
+
+        game.tick_physics();
+
+        assert_eq!(game.player_pos, (15, 10));
+    }
     
-    #[test]
-    fn test_move_player_quickly() {}
-    #[test]
-    fn test_move_player_too_quickly() {}
 }
