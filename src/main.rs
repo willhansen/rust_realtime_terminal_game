@@ -3,7 +3,10 @@ extern crate num;
 extern crate std;
 extern crate termion;
 
-use num::signum;
+#[macro_use]
+extern crate more_asserts;
+
+use num::{clamp, signum};
 use std::io::{stdin, stdout, Write};
 use std::sync::mpsc::channel;
 use std::thread;
@@ -20,6 +23,7 @@ const MAX_FPS: i32 = 30; // frames per second
 // a block every two ticks
 const PLAYER_DEFAULT_MAX_SPEED_BPS: f32 = 30.0; // blocks per second
 const PLAYER_DEFAULT_MAX_SPEED_BPF: f32 = PLAYER_DEFAULT_MAX_SPEED_BPS / MAX_FPS as f32; // blocks per frame
+const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
 
 // These have no positional information
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -79,6 +83,7 @@ struct Game {
     player_desired_x_direction: i32,
     player_accumulated_x_err: f32, // speed can be a float
     player_accumulated_y_err: f32, // speed can be a float
+    player_acceleration_from_gravity: f32,
 }
 
 impl Game {
@@ -99,6 +104,7 @@ impl Game {
             player_desired_x_direction: 0,
             player_accumulated_x_err: 0.0,
             player_accumulated_y_err: 0.0,
+            player_acceleration_from_gravity: DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
         }
     }
 
@@ -273,21 +279,54 @@ impl Game {
         self.player_alive = false;
     }
 
-    // not counting gravity
-    fn apply_player_motion(&mut self) {
-        if !self.player_is_supported() {
-            return;
+    fn apply_player_acceleration_from_traction(&mut self) {
+        let acceleration_from_traction = 1.0;
+        let start_x_vel = self.player_x_vel_bpf;
+        let mut desired_acceleration_direction = self.player_desired_x_direction.signum();
+        if desired_acceleration_direction == 0 && start_x_vel != 0.0 {
+            desired_acceleration_direction = -start_x_vel.signum() as i32;
         }
-        let x_dir: i32 = signum(self.player_desired_x_direction);
+        let delta_vx = signum(desired_acceleration_direction) as f32 * acceleration_from_traction;
+        let end_x_vel = clamp(
+            self.player_x_vel_bpf + delta_vx,
+            -self.player_x_max_speed_bpf,
+            self.player_x_max_speed_bpf,
+        );
+        // if trying to stop and overshot, don't
+        if self.player_desired_x_direction == 0 && signum(start_x_vel) != signum(end_x_vel) {
+            self.player_x_vel_bpf = 0.0;
+            self.player_accumulated_x_err = 0.0; // TODO: double check this
+        } else {
+            self.player_x_vel_bpf = end_x_vel;
+        }
+    }
+
+    fn apply_player_acceleration_from_gravity(&mut self) {
+        self.player_y_vel_bpf -= self.player_acceleration_from_gravity;
+    }
+
+    // including_gravity
+    fn apply_player_motion(&mut self) {
+        if self.player_is_supported() {
+        } else {
+            self.apply_player_acceleration_from_gravity();
+        }
+        self.apply_player_acceleration_from_traction();
+
+        // let x_dir: i32 = signum(self.player_desired_x_direction);
         // instant acceleration
-        self.player_x_vel_bpf = self.player_x_max_speed_bpf * x_dir as f32;
+        // self.player_x_vel_bpf = self.player_x_max_speed_bpf * x_dir as f32;
 
         let dx_ideal: f32 = self.player_x_vel_bpf + self.player_accumulated_x_err;
         let dx_actual: i32 = dx_ideal.trunc() as i32;
         self.player_accumulated_x_err = dx_ideal.fract();
 
+        let dy_ideal: f32 = self.player_y_vel_bpf + self.player_accumulated_y_err;
+        let dy_actual: i32 = dy_ideal.trunc() as i32;
+        self.player_accumulated_y_err = dy_ideal.fract();
+
         let target_x = self.player_pos.0 + dx_actual;
-        let target_y = self.player_pos.1;
+        let target_y = self.player_pos.1 + dy_actual;
 
         // need to check intermediate blocks for being clear
         if let Some((x, y)) = self.movecast(self.player_pos, (target_x, target_y)) {
@@ -296,6 +335,8 @@ impl Game {
                 // hit an obstacle and lose velocity
                 self.player_accumulated_x_err = 0.0;
                 self.player_x_vel_bpf = 0.0;
+                self.player_accumulated_y_err = 0.0;
+                self.player_y_vel_bpf = 0.0;
             }
         } else {
             // Player went out of bounds and died
@@ -309,8 +350,7 @@ impl Game {
     // returns the start position if start is not Block::None
     fn movecast(&self, start: (i32, i32), end: (i32, i32)) -> Option<(i32, i32)> {
         let mut prev_pos = start;
-        // TODO: maybe use a different line algorithm because corners
-        for pos in line_drawing::Bresenham::new(start, end) {
+        for pos in line_drawing::WalkGrid::new(start, end) {
             if self.in_world(pos.0, pos.1) {
                 if self.get_block(pos) != Block::None && self.get_block(pos) != Block::Player {
                     // one before the block
@@ -332,7 +372,7 @@ impl Game {
 
     fn player_is_supported(&self) -> bool {
         self.player_pos.1 > 0
-            && self.grid[self.player_pos.0 as usize][self.player_pos.1 as usize] != Block::None
+            && self.grid[self.player_pos.0 as usize][self.player_pos.1 as usize - 1] != Block::None
     }
 
     fn in_world(&self, x: i32, y: i32) -> bool {
@@ -515,9 +555,10 @@ mod tests {
         game.player_desired_x_direction = 1;
 
         game.tick_physics();
-        assert_eq!(game.player_pos, (17, 11));
         game.tick_physics();
-        assert_eq!(game.player_pos, (19, 11));
+        assert_gt!(game.player_pos.0, 17);
+        game.tick_physics();
+        assert_gt!(game.player_pos.0, 19);
     }
     #[test]
     fn test_fast_player_collision_between_frames() {
@@ -547,11 +588,12 @@ mod tests {
     #[test]
     fn test_player_gravity() {
         let mut game = Game::new(30, 30);
+        game.player_acceleration_from_gravity = 1.0;
         game.place_player(15, 11);
 
         game.tick_physics();
+        game.tick_physics();
 
-        assert_eq!(game.player_pos, (15, 10));
+        assert_lt!(game.player_pos.1, 11);
     }
-    
 }

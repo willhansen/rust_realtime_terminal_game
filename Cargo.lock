@@ -30,6 +30,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "more-asserts"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7843ec2de400bcbc6a6328c958dc38e5359da6e93e72e37bc5246bf1ae776389"
+
+[[package]]
 name = "num"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -116,6 +122,7 @@ name = "realtime_terminal_game"
 version = "0.1.0"
 dependencies = [
  "line_drawing",
+ "more-asserts",
  "num",
  "termion",
 ]
