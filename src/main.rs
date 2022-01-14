@@ -8,7 +8,6 @@ extern crate termion;
 extern crate more_asserts;
 
 use nalgebra::{point, vector, Point2, Vector2};
-use num::{clamp, signum};
 use std::io::{stdin, stdout, Write};
 use std::sync::mpsc::channel;
 use std::thread;
@@ -173,7 +172,7 @@ impl Game {
 
     fn player_set_desired_x_direction(&mut self, new_x_dir: i32) {
         if new_x_dir != self.player_desired_x_direction {
-            self.player_desired_x_direction = signum(new_x_dir);
+            self.player_desired_x_direction = new_x_dir.signum();
             self.player_accumulated_x_err = 0.0;
         }
     }
@@ -292,23 +291,40 @@ impl Game {
     fn apply_player_acceleration_from_traction(&mut self) {
         let acceleration_from_traction = 1.0;
         let start_x_vel = self.player_x_vel_bpf;
-        let mut desired_acceleration_direction = self.player_desired_x_direction.signum();
-        if desired_acceleration_direction == 0 && start_x_vel != 0.0 {
-            desired_acceleration_direction = -start_x_vel.signum() as i32;
-        }
-        let delta_vx = signum(desired_acceleration_direction) as f32 * acceleration_from_traction;
-        let end_x_vel = clamp(
-            self.player_x_vel_bpf + delta_vx,
-            -self.player_x_max_speed_bpf,
-            self.player_x_max_speed_bpf,
-        );
-        // if trying to stop and overshot, don't
-        if self.player_desired_x_direction == 0 && signum(start_x_vel) != signum(end_x_vel) {
-            self.player_x_vel_bpf = 0.0;
-            self.player_accumulated_x_err = 0.0; // TODO: double check this
+        let desired_acceleration_direction = self.player_desired_x_direction.signum();
+
+        let trying_to_stop = desired_acceleration_direction == 0 && start_x_vel != 0.0;
+        let started_above_max_speed = start_x_vel.abs() > self.player_x_max_speed_bpf;
+
+        let real_acceleration_direction;
+        if trying_to_stop || started_above_max_speed {
+            real_acceleration_direction = -start_x_vel.signum() as i32;
         } else {
-            self.player_x_vel_bpf = end_x_vel;
+            real_acceleration_direction = desired_acceleration_direction;
         }
+        let delta_vx = real_acceleration_direction.signum() as f32 * acceleration_from_traction;
+        let mut end_x_vel = self.player_x_vel_bpf + delta_vx;
+        let changed_direction = start_x_vel * end_x_vel < 0.0;
+
+        if trying_to_stop && changed_direction {
+            end_x_vel = 0.0;
+        }
+
+        let want_to_go_faster =
+            start_x_vel.signum() == desired_acceleration_direction.signum() as f32;
+        let ended_below_max_speed = end_x_vel.abs() < self.player_x_max_speed_bpf;
+        if started_above_max_speed && ended_below_max_speed && want_to_go_faster {
+            end_x_vel = end_x_vel.signum() * self.player_x_max_speed_bpf;
+        }
+        // if want go fast, but starting less than max speed.  Can't go past max speed.
+        if !started_above_max_speed && !ended_below_max_speed {
+            end_x_vel = end_x_vel.signum() * self.player_x_max_speed_bpf;
+        }
+
+        if end_x_vel == 0.0 {
+            self.player_accumulated_x_err = 0.0; // TODO: double check this
+        }
+        self.player_x_vel_bpf = end_x_vel;
     }
 
     fn apply_player_acceleration_from_gravity(&mut self) {
@@ -317,8 +333,7 @@ impl Game {
 
     // including_gravity
     fn apply_player_motion(&mut self) {
-        if self.player_is_supported() {
-        } else {
+        if !self.player_is_supported() {
             self.apply_player_acceleration_from_gravity();
         }
         self.apply_player_acceleration_from_traction();
@@ -521,7 +536,8 @@ mod tests {
                 normal: vector![0, -1]
             })
         );
-        assert_eq!(game.movecast((15, 9), (17, 110)),
+        assert_eq!(
+            game.movecast((15, 9), (17, 110)),
             Some(MovecastCollision {
                 pos: point![15, 9],
                 normal: vector![0, -1]
@@ -666,11 +682,21 @@ mod tests {
         game.draw_line((14, 10), (14, 20), Block::Wall);
 
         game.place_player(15, 11);
-        // really really fast towards top-left
-        game.player_x_vel_bpf = -20.0;
-        game.player_y_vel_bpf = 20.0;
+        game.player_x_vel_bpf = -2.0;
+        game.player_y_vel_bpf = 2.0;
         game.tick_physics();
         assert_eq!(game.player_x_vel_bpf, 0.0);
         assert_gt!(game.player_y_vel_bpf, 0.0);
+    }
+    #[test]
+    fn test_decellerate_when_already_moving_faster_than_max_speed() {
+        let mut game = Game::new(30, 30);
+        game.place_player(15, 11);
+        game.player_x_max_speed_bpf = 1.0;
+        game.player_x_vel_bpf = 5.0;
+        game.player_desired_x_direction = 1;
+        game.tick_physics();
+        assert_gt!(game.player_x_vel_bpf, game.player_x_max_speed_bpf);
+        assert_lt!(game.player_x_vel_bpf, 5.0);
     }
 }
