@@ -1,4 +1,5 @@
 extern crate line_drawing;
+extern crate nalgebra;
 extern crate num;
 extern crate std;
 extern crate termion;
@@ -6,6 +7,7 @@ extern crate termion;
 #[macro_use]
 extern crate more_asserts;
 
+use nalgebra::{point, vector, Point2, Vector2};
 use num::{clamp, signum};
 use std::io::{stdin, stdout, Write};
 use std::sync::mpsc::channel;
@@ -65,6 +67,12 @@ impl Block {
             _ => true,
         }
     }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+struct MovecastCollision {
+    pos: Point2<i32>,
+    normal: Vector2<i32>,
 }
 
 struct Game {
@@ -208,7 +216,9 @@ impl Game {
 
     fn tick_physics(&mut self) {
         self.apply_gravity();
-        self.apply_player_motion();
+        if self.player_alive {
+            self.apply_player_motion();
+        }
     }
 
     fn update_screen(
@@ -329,18 +339,26 @@ impl Game {
         let target_y = self.player_pos.1 + dy_actual;
 
         // need to check intermediate blocks for being clear
-        if let Some((x, y)) = self.movecast(self.player_pos, (target_x, target_y)) {
+        if let Some(collision) = self.movecast(self.player_pos, (target_x, target_y)) {
+            let (x, y) = (collision.pos.x, collision.pos.y);
             self.move_player_to(x, y);
-            if (x, y) != (target_x, target_y) {
+            if collision.normal.x != 0 {
                 // hit an obstacle and lose velocity
                 self.player_accumulated_x_err = 0.0;
                 self.player_x_vel_bpf = 0.0;
+            }
+            if collision.normal.y != 0 {
                 self.player_accumulated_y_err = 0.0;
                 self.player_y_vel_bpf = 0.0;
             }
         } else {
-            // Player went out of bounds and died
-            self.kill_player();
+            if !self.in_world(target_x, target_y) {
+                // Player went out of bounds and died
+                self.kill_player();
+            } else {
+                // no collision, and in world
+                self.move_player_to(target_x, target_y);
+            }
         }
     }
 
@@ -348,19 +366,22 @@ impl Game {
     // tries to draw a line in air
     // returns None if out of bounds
     // returns the start position if start is not Block::None
-    fn movecast(&self, start: (i32, i32), end: (i32, i32)) -> Option<(i32, i32)> {
+    fn movecast(&self, start: (i32, i32), end: (i32, i32)) -> Option<MovecastCollision> {
         let mut prev_pos = start;
         for pos in line_drawing::WalkGrid::new(start, end) {
             if self.in_world(pos.0, pos.1) {
                 if self.get_block(pos) != Block::None && self.get_block(pos) != Block::Player {
                     // one before the block
-                    return Some(prev_pos);
+                    return Some(MovecastCollision {
+                        pos: Point2::new(prev_pos.0, prev_pos.1),
+                        normal: Vector2::new(prev_pos.0 - pos.0, prev_pos.1 - pos.1),
+                    });
                 } else if pos == end {
-                    // if we made it to the end, return that
-                    return Some(end);
+                    // if we made it to the end, no collision
+                    return None;
                 }
             } else {
-                // ran off the grid
+                // ran off the grid.  No collision
                 return None;
             }
             // the prev_pos will be the start pos for the first 2 run throughs of the loop
@@ -466,14 +487,46 @@ mod tests {
     }
 
     #[test]
+    fn test_player_dies_when_falling_off_screen() {
+        let mut game = Game::new(30, 30);
+        game.place_player(15, 1);
+        game.player_acceleration_from_gravity = 10.0;
+        game.tick_physics();
+        assert_eq!(game.player_alive, false);
+    }
+
+    #[test]
     fn test_movecast() {
         let mut game = Game::new(30, 30);
         game.draw_line((10, 10), (20, 10), Block::Wall);
 
-        assert_eq!(game.movecast((15, 9), (15, 11)), Some((15, 9)));
-        assert_eq!(game.movecast((15, 10), (15, 11)), Some((15, 10)));
-        assert_eq!(game.movecast((15, 9), (17, 11)), Some((15, 9)));
-        assert_eq!(game.movecast((15, 9), (17, 110)), Some((15, 9)));
+        assert_eq!(
+            game.movecast((15, 9), (15, 11)),
+            Some(MovecastCollision {
+                pos: point![15, 9],
+                normal: vector![0, -1]
+            })
+        );
+        assert_eq!(
+            game.movecast((15, 10), (15, 11)),
+            Some(MovecastCollision {
+                pos: point![15, 10],
+                normal: vector![0, 0]
+            })
+        );
+        assert_eq!(
+            game.movecast((15, 9), (17, 11)),
+            Some(MovecastCollision {
+                pos: point![15, 9],
+                normal: vector![0, -1]
+            })
+        );
+        assert_eq!(game.movecast((15, 9), (17, 110)),
+            Some(MovecastCollision {
+                pos: point![15, 9],
+                normal: vector![0, -1]
+            })
+        );
         assert_eq!(game.movecast((150, 9), (17, 11)), None);
         assert_eq!(game.movecast((1, 9), (-17, 9)), None);
         assert_eq!(game.movecast((15, 9), (17, -11)), None);
@@ -485,7 +538,16 @@ mod tests {
         game.draw_line((10, 10), (20, 10), Block::Wall);
         game.place_player(15, 11);
 
-        assert_eq!(game.movecast((15, 11), (15, 13)), Some((15, 13)));
+        assert_eq!(game.movecast((15, 11), (15, 13)), None);
+    }
+    #[test]
+    fn test_in_world_check() {
+        let game = Game::new(30, 30);
+        assert!(game.in_world(0, 0));
+        assert!(game.in_world(29, 29));
+        assert!(!game.in_world(30, 30));
+        assert!(!game.in_world(10, -1));
+        assert!(!game.in_world(-1, 10));
     }
 
     #[test]
@@ -595,5 +657,20 @@ mod tests {
         game.tick_physics();
 
         assert_lt!(game.player_pos.1, 11);
+    }
+
+    #[test]
+    fn test_slide_on_collision() {
+        let mut game = Game::new(30, 30);
+        game.draw_line((10, 10), (20, 10), Block::Wall);
+        game.draw_line((14, 10), (14, 20), Block::Wall);
+
+        game.place_player(15, 11);
+        // really really fast towards top-left
+        game.player_x_vel_bpf = -20.0;
+        game.player_y_vel_bpf = 20.0;
+        game.tick_physics();
+        assert_eq!(game.player_x_vel_bpf, 0.0);
+        assert_gt!(game.player_y_vel_bpf, 0.0);
     }
 }

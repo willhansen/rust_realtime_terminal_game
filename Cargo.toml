@@ -6,7 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-termion = "*"
-line_drawing = "*"
+termion = "1.5.6"
+line_drawing = "1.0"
 num = "0.4"
 more-asserts = "0.2"
+nalgebra = "0.30.1"
