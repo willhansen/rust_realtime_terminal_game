@@ -7,7 +7,7 @@ extern crate termion;
 #[macro_use]
 extern crate more_asserts;
 
-use nalgebra::{point, vector, Point2, Vector, Vector2};
+use nalgebra::{point, vector, Point2, Vector2};
 use std::io::{stdin, stdout, Write};
 use std::sync::mpsc::channel;
 use std::thread;
@@ -46,24 +46,15 @@ impl Block {
         }
     }
 
-    fn color_str(&self) -> String {
-        match self {
-            Block::Player => format!(
-                "{}{}",
-                color::Fg(color::Red).to_string(),
-                color::Bg(color::Black).to_string()
-            ),
-            _ => format!(
-                "{}{}",
-                color::Fg(color::White).to_string(),
-                color::Bg(color::Black).to_string()
-            ),
-        }
-    }
-
     fn subject_to_normal_gravity(&self) -> bool {
         match self {
             Block::None | Block::Wall | Block::Player => false,
+            _ => true,
+        }
+    }
+    fn wall_grabbable(&self) -> bool {
+        match self {
+            Block::None => false,
             _ => true,
         }
     }
@@ -166,14 +157,17 @@ impl Game {
         self.player_pos = point![x, y];
         self.player_alive = true;
     }
-
     // When The player presses the jump button
     fn player_jump(&mut self) {
-        self.player_vel_bpf.y = 1.0;
+        let jump_delta_v = 1.0;
+        self.player_vel_bpf.y = jump_delta_v;
+        if self.player_is_grabbing_wall() {
+            self.player_vel_bpf.x += jump_delta_v * -self.player_wall_grab_direction() as f32;
+            self.player_desired_x_direction *= -1;
+        }
     }
-
     fn player_jump_if_possible(&mut self) {
-        if self.player_is_supported() {
+        if self.player_is_supported() || self.player_is_grabbing_wall() {
             self.player_jump();
         }
     }
@@ -271,10 +265,10 @@ impl Game {
     }
 
     fn apply_gravity(&mut self) {
+        // We want to count from bottom to top, because things fall down
         for x in 0..self.terminal_size.0 as usize {
             for y in 0..self.terminal_size.1 as usize {
-                // We want to count from bottom to top, because things fall down
-                let block = self.grid[x as usize][y];
+                let block = self.grid[x][y];
                 if block.subject_to_normal_gravity() {
                     let is_bottom_row = y == 0;
                     let has_direct_support = !is_bottom_row && self.grid[x][y - 1] != Block::None;
@@ -300,7 +294,40 @@ impl Game {
         self.player_alive = false;
     }
 
-    fn apply_player_acceleration_from_traction(&mut self) {
+    fn player_is_grabbing_wall(&self) -> bool {
+        assert!(self.player_desired_x_direction.abs() <= 1);
+        if self.player_desired_x_direction != 0  && self.player_vel_bpf.y <= 0.0{
+            if let Some(block) =
+                self.get_block_relative_to_player(vector![self.player_desired_x_direction, 0])
+            {
+                return block.wall_grabbable();
+            }
+        }
+        return false;
+    }
+    fn player_wall_grab_direction(&self) -> i32 {
+        //TODO: is this good?
+        assert!(self.player_desired_x_direction.abs() <= 1);
+
+        // TODO: is this good?
+        if self.player_is_grabbing_wall() {
+            return self.player_desired_x_direction;
+        } else {
+            return 0;
+        }
+    }
+
+    fn apply_player_acceleration_from_wall_friction(&mut self) {
+        let direction_of_acceleration = -self.player_vel_bpf.y.signum();
+        let delta_v = direction_of_acceleration * self.player_acceleration_from_traction;
+        if delta_v.abs() > self.player_vel_bpf.y.abs() {
+            self.player_vel_bpf.y = 0.0;
+        } else {
+            self.player_vel_bpf.y += delta_v;
+        }
+    }
+
+    fn apply_player_acceleration_from_floor_traction(&mut self) {
         let start_x_vel = self.player_vel_bpf.x;
         let desired_acceleration_direction = self.player_desired_x_direction.signum();
 
@@ -313,7 +340,8 @@ impl Game {
         } else {
             real_acceleration_direction = desired_acceleration_direction;
         }
-        let delta_vx = real_acceleration_direction.signum() as f32 * self.player_acceleration_from_traction;
+        let delta_vx =
+            real_acceleration_direction.signum() as f32 * self.player_acceleration_from_traction;
         let mut end_x_vel = self.player_vel_bpf.x + delta_vx;
         let changed_direction = start_x_vel * end_x_vel < 0.0;
 
@@ -343,10 +371,16 @@ impl Game {
     }
     // including_gravity
     fn apply_player_motion(&mut self) {
-        if !self.player_is_supported() {
-            self.apply_player_acceleration_from_gravity();
+        if self.player_is_grabbing_wall() {
+            if self.player_vel_bpf.y != 0.0 {
+                self.apply_player_acceleration_from_wall_friction();
+            }
+        } else {
+            if !self.player_is_supported() {
+                self.apply_player_acceleration_from_gravity();
+            }
+            self.apply_player_acceleration_from_floor_traction();
         }
-        self.apply_player_acceleration_from_traction();
 
         // let x_dir: i32 = signum(self.player_desired_x_direction);
         // instant acceleration
@@ -414,6 +448,14 @@ impl Game {
     fn player_is_supported(&self) -> bool {
         return self.player_pos.y > 0
             && self.get_block(self.player_pos + vector![0, -1]) != Block::None;
+    }
+
+    fn get_block_relative_to_player(&self, rel_pos: Vector2<i32>) -> Option<Block> {
+        let target_pos = self.player_pos + rel_pos;
+        if self.player_alive && self.in_world(target_pos) {
+            return Some(self.get_block(target_pos));
+        }
+        return None;
     }
 
     fn in_world(&self, pos: Point2<i32>) -> bool {
@@ -602,7 +644,7 @@ mod tests {
     }
 
     #[test]
-    fn move_player() {
+    fn test_move_player() {
         let mut game = Game::new(30, 30);
         game.draw_line((10, 10), (20, 10), Block::Wall);
         game.place_player(15, 11);
@@ -644,7 +686,7 @@ mod tests {
     }
 
     #[test]
-    fn move_player_slowly() {
+    fn test_move_player_slowly() {
         let mut game = Game::new(30, 30);
         game.draw_line((10, 10), (20, 10), Block::Wall);
         game.place_player(15, 11);
@@ -749,12 +791,46 @@ mod tests {
     }
 
     #[test]
-    fn test_wall_traction() {
+    fn test_wall_grab() {
         let mut game = Game::new(30, 30);
         game.draw_line((14, 0), (14, 20), Block::Wall);
         game.place_player(15, 11);
         game.player_desired_x_direction = -1;
         game.tick_physics();
         assert_eq!(game.player_vel_bpf.y, 0.0);
+    }
+
+    #[test]
+    fn test_wall_jump() {
+        let mut game = Game::new(30, 30);
+        game.draw_line((14, 0), (14, 20), Block::Wall);
+        game.place_player(15, 11);
+        game.player_desired_x_direction = -1;
+        game.player_jump_if_possible();
+        game.tick_physics();
+        assert_gt!(game.player_vel_bpf.y, 0.0);
+        assert_gt!(game.player_vel_bpf.x, 0.0);
+    }
+
+    #[test]
+    fn test_no_running_up_walls() {
+        let mut game = Game::new(30, 30);
+        game.draw_line((14, 0), (14, 20), Block::Wall);
+        game.place_player(15, 11);
+        game.player_desired_x_direction = -1;
+        let start_vel = v(-1.0, 1.0);
+        game.player_vel_bpf = start_vel;
+        game.tick_physics();
+        assert_lt!(game.player_vel_bpf.y, start_vel.y);
+    }
+    
+    #[test]
+    fn test_dont_grab_wall_while_moving_up() {
+        let mut game = Game::new(30, 30);
+        game.draw_line((14, 0), (14, 20), Block::Wall);
+        game.place_player(15, 11);
+        game.player_desired_x_direction = -1;
+        game.player_vel_bpf = v(0.0, 1.0);
+        assert!(!game.player_is_grabbing_wall());
     }
 }
