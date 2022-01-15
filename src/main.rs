@@ -857,6 +857,7 @@ mod tests {
         game.player_vel_bpf = v(-1.0, 1.0);
         let start_vel_y = game.player_vel_bpf.y;
         // currently supported by coyote frames -> no gravity acceleration this tick
+        // TODO: Should this happen?  Or should the player immediately start slowing down?
         game.tick_physics();
         // no longer supported by coyote frames due to vertical movement last tick
         game.tick_physics();
@@ -898,5 +899,25 @@ mod tests {
         game2.tick_physics();
 
         assert!(game1.player_vel_bpf.y == game2.player_vel_bpf.y);
+    }
+    #[test]
+    fn test_wall_jump_while_sliding_up_wall() {
+        let mut game = set_up_player_hanging_on_wall_on_left();
+        game.player_vel_bpf.y = 1.0;
+        game.player_remaining_coyote_frames = 0;
+        game.player_jump_if_possible();
+        assert!(game.player_vel_bpf.x > 0.0);
+    }
+    
+    #[ignore]
+    #[test]
+    fn test_allow_early_jump() {
+        
+    }
+
+    #[ignore]
+    #[test]
+    fn test_wall_jump_adds_velocity() {
+        
     }
 }
