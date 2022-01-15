@@ -105,7 +105,7 @@ impl Game {
             player_accumulated_pos_err: Vector2::<f32>::new(0.0, 0.0),
             player_acceleration_from_gravity: DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
             player_acceleration_from_traction: DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION,
-            player_remaining_coyote_frames: 0,
+            player_remaining_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
             player_max_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
         }
     }
@@ -223,7 +223,7 @@ impl Game {
     }
 
     fn tick_physics(&mut self) {
-        self.apply_gravity();
+        self.apply_gravity_to_blocks();
         if self.player_alive {
             self.apply_player_motion();
         }
@@ -267,7 +267,7 @@ impl Game {
         self.prev_grid = self.grid.clone();
     }
 
-    fn apply_gravity(&mut self) {
+    fn apply_gravity_to_blocks(&mut self) {
         // We want to count from bottom to top, because things fall down
         for x in 0..self.terminal_size.0 as usize {
             for y in 0..self.terminal_size.1 as usize {
@@ -370,29 +370,22 @@ impl Game {
     }
     // including_gravity
     fn apply_player_motion(&mut self) {
-        if self.player_is_grabbing_wall() {
-            if self.player_vel_bpf.y != 0.0 {
-                self.apply_player_acceleration_from_wall_friction();
-            }
-        } else {
-            if !self.player_is_supported() {
-                self.apply_player_acceleration_from_gravity();
-            }
-            self.apply_player_acceleration_from_floor_traction();
-        }
+        self.update_player_acceleration();
 
         // let x_dir: i32 = signum(self.player_desired_x_direction);
         // instant acceleration
         // self.player_x_vel_bpf = self.player_max_run_speed_bpf * x_dir as f32;
 
         let ideal_step: Vector2<f32> = self.player_vel_bpf + self.player_accumulated_pos_err;
-        let actual_step: Vector2<i32> = trunc(ideal_step);
+        let attempted_step: Vector2<i32> = trunc(ideal_step);
         self.player_accumulated_pos_err = fract(ideal_step);
 
-        let target = self.player_pos + actual_step;
+        let target = self.player_pos + attempted_step;
 
+        let step_taken: Vector2<i32>;
         // need to check intermediate blocks for being clear
         if let Some(collision) = self.movecast(self.player_pos, target) {
+            step_taken = collision.pos - self.player_pos;
             self.move_player_to(collision.pos);
             if collision.normal.x != 0 {
                 // hit an obstacle and lose velocity
@@ -407,18 +400,32 @@ impl Game {
             if !self.in_world(target) {
                 // Player went out of bounds and died
                 self.kill_player();
+                return;
             } else {
                 // no collision, and in world
+                step_taken = target - self.player_pos;
                 self.move_player_to(target);
             }
         }
-        self.update_coyote_frames();
-    }
-    fn update_coyote_frames(&mut self) {
+
+        // moved vertically => instant empty charge
+        if step_taken.y != 0 {
+            self.player_remaining_coyote_frames = 0;
+        }
         if self.player_is_standing_on_block() {
             self.player_remaining_coyote_frames = self.player_max_coyote_frames;
         } else if self.player_remaining_coyote_frames > 0 {
             self.player_remaining_coyote_frames -= 1;
+        }
+    }
+    fn update_player_acceleration(&mut self) {
+        if self.player_is_grabbing_wall() && self.player_vel_bpf.y <= 0.0 {
+            self.apply_player_acceleration_from_wall_friction();
+        } else {
+            if !self.player_is_supported() {
+                self.apply_player_acceleration_from_gravity();
+            }
+            self.apply_player_acceleration_from_floor_traction();
         }
     }
 
@@ -453,11 +460,9 @@ impl Game {
     }
 
     fn player_is_supported(&self) -> bool {
-        let on_block = self.player_is_standing_on_block();
-        let supported_by_coyote_physics =
-            !on_block && self.player_remaining_coyote_frames > 0;
-        return on_block || supported_by_coyote_physics;
+        return self.player_is_standing_on_block() || self.player_remaining_coyote_frames > 0;
     }
+
     fn player_is_standing_on_block(&self) -> bool {
         match self.get_block_below_player() {
             None | Some(Block::None) => false,
@@ -484,15 +489,18 @@ impl Game {
             && pos.y < self.terminal_size.1 as i32;
     }
     fn init_world(&mut self) {
+        let bottom_left = (
+            (self.terminal_size.0 / 5) as i32,
+            (self.terminal_size.1 / 4) as i32,
+        );
         self.draw_line(
-            (
-                (self.terminal_size.0 / 5) as i32,
-                (self.terminal_size.1 / 4) as i32,
-            ),
-            (
-                (4 * self.terminal_size.0 / 5) as i32,
-                (self.terminal_size.1 / 4) as i32,
-            ),
+            bottom_left,
+            ((4 * self.terminal_size.0 / 5) as i32, bottom_left.1),
+            Block::Wall,
+        );
+        self.draw_line(
+            bottom_left,
+            (bottom_left.0, 3 * (self.terminal_size.1 / 4) as i32),
             Block::Wall,
         );
         self.place_player(
@@ -562,6 +570,21 @@ mod tests {
         return vector![x, y];
     }
 
+    fn set_up_player_on_platform() -> Game {
+        let mut game = Game::new(30, 30);
+        game.draw_line((10, 10), (20, 10), Block::Wall);
+        game.place_player(15, 11);
+        return game;
+    }
+
+    fn set_up_player_hanging_on_wall_on_left() -> Game {
+        let mut game = Game::new(30, 30);
+        game.draw_line((14, 0), (14, 20), Block::Wall);
+        game.place_player(15, 11);
+        game.player_desired_x_direction = -1;
+        return game;
+    }
+
     #[test]
     fn test_placement_and_gravity() {
         let mut game = Game::new(30, 30);
@@ -601,8 +624,9 @@ mod tests {
     #[test]
     fn test_player_dies_when_falling_off_screen() {
         let mut game = Game::new(30, 30);
-        game.place_player(15, 1);
-        game.player_acceleration_from_gravity = 10.0;
+        game.place_player(15, 0);
+        game.player_acceleration_from_gravity = 1.0;
+        game.player_remaining_coyote_frames = 0;
         game.tick_physics();
         assert!(game.player_alive == false);
     }
@@ -751,22 +775,20 @@ mod tests {
     }
     #[test]
     fn test_can_jump() {
-        let mut game = Game::new(30, 30);
-        game.draw_line((10, 10), (20, 10), Block::Wall);
-
-        game.place_player(15, 11);
+        let mut game = set_up_player_on_platform();
+        let start_pos = game.player_pos;
 
         game.player_jump();
         game.tick_physics();
-        assert!(game.player_pos == p(15, 12));
+        assert!(game.player_pos.y > start_pos.y);
     }
     #[test]
     fn test_player_gravity() {
         let mut game = Game::new(30, 30);
-        game.player_acceleration_from_gravity = 1.0;
         game.place_player(15, 11);
+        game.player_acceleration_from_gravity = 1.0;
+        game.player_remaining_coyote_frames = 0;
 
-        game.tick_physics();
         game.tick_physics();
 
         assert!(game.player_pos.y < 11);
@@ -786,8 +808,7 @@ mod tests {
     }
     #[test]
     fn test_decellerate_when_already_moving_faster_than_max_speed() {
-        let mut game = Game::new(30, 30);
-        game.place_player(15, 11);
+        let mut game = set_up_player_on_platform();
         game.player_max_run_speed_bpf = 1.0;
         game.player_vel_bpf.x = 5.0;
         game.player_desired_x_direction = 1;
@@ -797,11 +818,15 @@ mod tests {
     }
     #[test]
     fn test_no_double_jump() {
-        let mut game = Game::new(30, 30);
-        game.place_player(15, 11);
+        let mut game = set_up_player_on_platform();
         game.player_jump_if_possible();
-        assert!(game.player_vel_bpf.y == 0.0);
+        game.tick_physics();
+        let vel_y_before_second_jump = game.player_vel_bpf.y;
+        game.player_jump_if_possible();
+        game.tick_physics();
+        assert!(game.player_vel_bpf.y < vel_y_before_second_jump);
     }
+
     #[test]
     fn test_respawn_button() {
         let mut game = Game::new(30, 30);
@@ -812,20 +837,14 @@ mod tests {
 
     #[test]
     fn test_wall_grab() {
-        let mut game = Game::new(30, 30);
-        game.draw_line((14, 0), (14, 20), Block::Wall);
-        game.place_player(15, 11);
-        game.player_desired_x_direction = -1;
+        let mut game = set_up_player_hanging_on_wall_on_left();
         game.tick_physics();
         assert!(game.player_vel_bpf.y == 0.0);
     }
 
     #[test]
     fn test_wall_jump() {
-        let mut game = Game::new(30, 30);
-        game.draw_line((14, 0), (14, 20), Block::Wall);
-        game.place_player(15, 11);
-        game.player_desired_x_direction = -1;
+        let mut game = set_up_player_hanging_on_wall_on_left();
         game.player_jump_if_possible();
         game.tick_physics();
         assert!(game.player_vel_bpf.y > 0.0);
@@ -834,49 +853,50 @@ mod tests {
 
     #[test]
     fn test_no_running_up_walls() {
-        let mut game = Game::new(30, 30);
-        game.draw_line((14, 0), (14, 20), Block::Wall);
-        game.place_player(15, 11);
-        game.player_desired_x_direction = -1;
-        let start_vel = v(-1.0, 1.0);
-        game.player_vel_bpf = start_vel;
+        let mut game = set_up_player_hanging_on_wall_on_left();
+        game.player_vel_bpf = v(-1.0, 1.0);
+        let start_vel_y = game.player_vel_bpf.y;
+        // currently supported by coyote frames -> no gravity acceleration this tick
         game.tick_physics();
-        assert!(game.player_vel_bpf.y < start_vel.y);
+        // no longer supported by coyote frames due to vertical movement last tick
+        game.tick_physics();
+        assert!(game.player_vel_bpf.y < start_vel_y);
     }
     #[test]
     fn test_dont_grab_wall_while_moving_up() {
-        let mut game = Game::new(30, 30);
-        game.draw_line((14, 0), (14, 20), Block::Wall);
-        game.place_player(15, 11);
-        game.player_desired_x_direction = -1;
-        game.player_vel_bpf = v(0.0, 1.0);
+        let mut game = set_up_player_hanging_on_wall_on_left();
+        game.player_vel_bpf.y = 1.0;
         assert!(!game.player_is_grabbing_wall());
     }
+
     #[test]
-    fn test_coyote_time() {
+    fn test_coyote_frames() {
         let mut game = Game::new(30, 30);
-        game.draw_line((15, 10), (20, 10), Block::Wall);
-        game.place_player(16, 11);
-        game.player_desired_x_direction = -1;
-        // one tick on solid ground to restore coyote frames
+        game.place_player(15, 11);
+        let start_pos = game.player_pos;
+        game.player_acceleration_from_gravity = 1.0;
+        game.player_max_coyote_frames = 1;
+        game.player_remaining_coyote_frames = 1;
         game.tick_physics();
-        // one more tick to run off the edge of the platform
+        assert!(game.player_pos.y == start_pos.y);
         game.tick_physics();
-        check!(game.player_pos == p(14, 11));
-        // don't want to run off screen
-        game.player_desired_x_direction = 0;
-        // run down the coyote frames
-        // The '2' here is questionable
-        for _ in 0..game.player_max_coyote_frames+2 {
-            game.tick_physics();
-        }
-        assert!(game.player_pos.y == 11);
-        game.tick_physics();
-        assert!(game.player_pos.y < 11);
+        assert!(game.player_pos.y < start_pos.y);
     }
-    
     #[test]
     fn test_coyote_frames_dont_assist_jump() {
-        
+        let mut game1 = set_up_player_on_platform();
+        let mut game2 = set_up_player_on_platform();
+
+        game1.player_remaining_coyote_frames = 0;
+        game1.player_jump_if_possible();
+        game2.player_jump_if_possible();
+        game1.tick_physics();
+        game2.tick_physics();
+
+        // Second tick after jump is where coyote physics may come into play
+        game1.tick_physics();
+        game2.tick_physics();
+
+        assert!(game1.player_vel_bpf.y == game2.player_vel_bpf.y);
     }
 }
