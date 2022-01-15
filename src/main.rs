@@ -4,7 +4,7 @@ extern crate num;
 extern crate std;
 extern crate termion;
 
-use assert2::assert;
+use assert2::{assert, check};
 use nalgebra::{point, vector, Point2, Vector2};
 use std::io::{stdin, stdout, Write};
 use std::sync::mpsc::channel;
@@ -24,6 +24,7 @@ const PLAYER_DEFAULT_MAX_SPEED_BPS: f32 = 30.0; // blocks per second
 const PLAYER_DEFAULT_MAX_SPEED_BPF: f32 = PLAYER_DEFAULT_MAX_SPEED_BPS / MAX_FPS as f32; // blocks per frame
 const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
 const DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION: f32 = 1.0;
+const DEFAULT_PLAYER_MAX_COYOTE_FRAMES: i32 = 10;
 
 // These have no positional information
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -82,6 +83,8 @@ struct Game {
     player_accumulated_pos_err: Vector2<f32>, // speed can be a float
     player_acceleration_from_gravity: f32,
     player_acceleration_from_traction: f32,
+    player_remaining_coyote_frames: i32,
+    player_max_coyote_frames: i32,
 }
 
 impl Game {
@@ -102,6 +105,8 @@ impl Game {
             player_accumulated_pos_err: Vector2::<f32>::new(0.0, 0.0),
             player_acceleration_from_gravity: DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
             player_acceleration_from_traction: DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION,
+            player_remaining_coyote_frames: 0,
+            player_max_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
         }
     }
 
@@ -407,6 +412,14 @@ impl Game {
                 self.move_player_to(target);
             }
         }
+        self.update_coyote_frames();
+    }
+    fn update_coyote_frames(&mut self) {
+        if self.player_is_standing_on_block() {
+            self.player_remaining_coyote_frames = self.player_max_coyote_frames;
+        } else if self.player_remaining_coyote_frames > 0 {
+            self.player_remaining_coyote_frames -= 1;
+        }
     }
 
     // Where the player can move to in a line
@@ -440,8 +453,20 @@ impl Game {
     }
 
     fn player_is_supported(&self) -> bool {
-        return self.player_pos.y > 0
-            && self.get_block(self.player_pos + vector![0, -1]) != Block::None;
+        let on_block = self.player_is_standing_on_block();
+        let supported_by_coyote_physics =
+            !on_block && self.player_remaining_coyote_frames > 0;
+        return on_block || supported_by_coyote_physics;
+    }
+    fn player_is_standing_on_block(&self) -> bool {
+        match self.get_block_below_player() {
+            None | Some(Block::None) => false,
+            _ => true,
+        }
+    }
+
+    fn get_block_below_player(&self) -> Option<Block> {
+        return self.get_block_relative_to_player(vector![0, -1]);
     }
 
     fn get_block_relative_to_player(&self, rel_pos: Vector2<i32>) -> Option<Block> {
@@ -826,5 +851,32 @@ mod tests {
         game.player_desired_x_direction = -1;
         game.player_vel_bpf = v(0.0, 1.0);
         assert!(!game.player_is_grabbing_wall());
+    }
+    #[test]
+    fn test_coyote_time() {
+        let mut game = Game::new(30, 30);
+        game.draw_line((15, 10), (20, 10), Block::Wall);
+        game.place_player(16, 11);
+        game.player_desired_x_direction = -1;
+        // one tick on solid ground to restore coyote frames
+        game.tick_physics();
+        // one more tick to run off the edge of the platform
+        game.tick_physics();
+        check!(game.player_pos == p(14, 11));
+        // don't want to run off screen
+        game.player_desired_x_direction = 0;
+        // run down the coyote frames
+        // The '2' here is questionable
+        for _ in 0..game.player_max_coyote_frames+2 {
+            game.tick_physics();
+        }
+        assert!(game.player_pos.y == 11);
+        game.tick_physics();
+        assert!(game.player_pos.y < 11);
+    }
+    
+    #[test]
+    fn test_coyote_frames_dont_assist_jump() {
+        
     }
 }
