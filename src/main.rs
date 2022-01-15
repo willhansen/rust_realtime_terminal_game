@@ -74,6 +74,10 @@ struct MovecastCollision {
     normal: Vector2<i32>,
 }
 
+struct Player {
+
+}
+
 struct Game {
     grid: Vec<Vec<Block>>,      // (x,y), left to right, top to bottom
     prev_grid: Vec<Vec<Block>>, // (x,y), left to right, top to bottom
@@ -83,7 +87,7 @@ struct Game {
     running: bool,         // set false to quit
     selected_block: Block, // What the mouse places
     player_alive: bool,
-    player_pos: (i32, i32),
+    player_pos: Point2,
     player_x_max_speed_bpf: f32,
     player_x_vel_bpf: f32,
     player_y_vel_bpf: f32,
@@ -104,7 +108,7 @@ impl Game {
             running: true,
             selected_block: Block::Wall,
             player_alive: false,
-            player_pos: (0, 0),
+            player_pos: point![0, 0],
             player_x_max_speed_bpf: PLAYER_DEFAULT_MAX_SPEED_BPF,
             player_x_vel_bpf: 0.0,
             player_y_vel_bpf: 0.0,
@@ -131,8 +135,12 @@ impl Game {
             (self.terminal_size.1 as i32 - world_position.1) as u16,
         )
     }
-    fn get_block(&self, pos: (i32, i32)) -> Block {
-        return self.grid[pos.0 as usize][pos.1 as usize];
+    fn get_block(&self, pos:  Point2<i32>) -> Block {
+        return self.grid[pos.x as usize][pos.y as usize];
+    }
+    
+    fn set_block(&mut self, pos: Point2<i32>, block: Block) {
+        self.grid[pos.x as usize][pos.y as usize] = block;
     }
 
     fn draw_line(&mut self, pos0: (i32, i32), pos1: (i32, i32), block: Block) {
@@ -160,14 +168,19 @@ impl Game {
         self.player_x_vel_bpf = 0.0;
         self.player_y_vel_bpf = 0.0;
         self.player_desired_x_direction = 0;
-        self.player_pos = (x, y);
+        self.player_pos = point![x, y];
         self.player_alive = true;
     }
 
     // When The player presses the jump button
     fn player_jump(&mut self) {
         self.player_y_vel_bpf = 1.0;
-        // TODO
+    }
+
+    fn player_jump_if_possible(&mut self) {
+        if self.player_is_supported() {
+            self.player_jump();
+        }
     }
 
     fn player_set_desired_x_direction(&mut self, new_x_dir: i32) {
@@ -185,7 +198,11 @@ impl Game {
                 Key::Char('2') => self.selected_block = Block::Wall,
                 Key::Char('3') => self.selected_block = Block::Brick,
                 Key::Char('c') => self.clear(),
-                Key::Char(' ') => self.player_jump(),
+                Key::Char('r') => self.place_player(
+                    self.terminal_size.0 as i32 / 2,
+                    self.terminal_size.1 as i32 / 2,
+                ),
+                Key::Char(' ') => self.player_jump_if_possible(),
                 Key::Char('a') | Key::Left => self.player_set_desired_x_direction(-1),
                 Key::Char('s') | Key::Down => self.player_set_desired_x_direction(0),
                 Key::Char('d') | Key::Right => self.player_set_desired_x_direction(1),
@@ -407,8 +424,9 @@ impl Game {
     }
 
     fn player_is_supported(&self) -> bool {
-        self.player_pos.1 > 0
-            && self.grid[self.player_pos.0 as usize][self.player_pos.1 as usize - 1] != Block::None
+        return self.player_pos.1 > 0
+            && self.grid[self.player_pos.0 as usize][self.player_pos.1 as usize - 1]
+                != Block::None;
     }
 
     fn in_world(&self, x: i32, y: i32) -> bool {
@@ -416,6 +434,23 @@ impl Game {
             && x < self.terminal_size.0 as i32
             && y >= 0
             && y < self.terminal_size.1 as i32;
+    }
+    fn init_world(&mut self) {
+        self.draw_line(
+            (
+                (self.terminal_size.0 / 5) as i32,
+                (self.terminal_size.1 / 4) as i32,
+            ),
+            (
+                (4 * self.terminal_size.0 / 5) as i32,
+                (self.terminal_size.1 / 4) as i32,
+            ),
+            Block::Wall,
+        );
+        self.place_player(
+            self.terminal_size.0 as i32 / 2,
+            self.terminal_size.1 as i32 / 2,
+        );
     }
 }
 
@@ -445,11 +480,7 @@ fn main() {
     });
 
     // time saver
-    game.draw_line(
-        ((width / 5) as i32, (height / 4) as i32),
-        ((4 * width / 5) as i32, (height / 4) as i32),
-        Block::Wall,
-    );
+    game.init_world();
 
     while game.running {
         while let Ok(evt) = rx.try_recv() {
@@ -698,5 +729,31 @@ mod tests {
         game.tick_physics();
         assert_gt!(game.player_x_vel_bpf, game.player_x_max_speed_bpf);
         assert_lt!(game.player_x_vel_bpf, 5.0);
+    }
+    #[test]
+    fn test_no_double_jump() {
+        let mut game = Game::new(30, 30);
+        game.place_player(15, 11);
+        game.player_jump_if_possible();
+        assert_eq!(game.player_y_vel_bpf, 0.0);
+    }
+    
+    #[test]
+    fn test_respawn_button() {
+        let mut game = Game::new(30, 30);
+        game.handle_input(Event::Key(Key::Char('r')));
+        assert!(game.player_alive);
+        assert_eq!(game.player_pos, (15, 15));
+    }
+
+    #[ignore]
+    #[test]
+    fn test_wall_traction() {
+        let mut game = Game::new(30, 30);
+        game.draw_line((14, 0), (14, 20), Block::Wall);
+        game.place_player(15, 11);
+        game.player_desired_x_direction = -1;
+        game.tick_physics();
+        assert_eq!(game.player_y_vel_bpf, 0.0);
     }
 }
