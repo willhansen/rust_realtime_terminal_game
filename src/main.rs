@@ -25,6 +25,7 @@ const MAX_FPS: i32 = 30; // frames per second
 const PLAYER_DEFAULT_MAX_SPEED_BPS: f32 = 30.0; // blocks per second
 const PLAYER_DEFAULT_MAX_SPEED_BPF: f32 = PLAYER_DEFAULT_MAX_SPEED_BPS / MAX_FPS as f32; // blocks per frame
 const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
+const DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION: f32 = 1.0;
 
 // These have no positional information
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -91,6 +92,7 @@ struct Game {
     player_desired_x_direction: i32,
     player_accumulated_pos_err: Vector2<f32>, // speed can be a float
     player_acceleration_from_gravity: f32,
+    player_acceleration_from_traction: f32,
 }
 
 impl Game {
@@ -110,6 +112,7 @@ impl Game {
             player_desired_x_direction: 0,
             player_accumulated_pos_err: Vector2::<f32>::new(0.0, 0.0),
             player_acceleration_from_gravity: DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
+            player_acceleration_from_traction: DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION,
         }
     }
 
@@ -298,7 +301,6 @@ impl Game {
     }
 
     fn apply_player_acceleration_from_traction(&mut self) {
-        let acceleration_from_traction = 0.3;
         let start_x_vel = self.player_vel_bpf.x;
         let desired_acceleration_direction = self.player_desired_x_direction.signum();
 
@@ -311,7 +313,7 @@ impl Game {
         } else {
             real_acceleration_direction = desired_acceleration_direction;
         }
-        let delta_vx = real_acceleration_direction.signum() as f32 * acceleration_from_traction;
+        let delta_vx = real_acceleration_direction.signum() as f32 * self.player_acceleration_from_traction;
         let mut end_x_vel = self.player_vel_bpf.x + delta_vx;
         let changed_direction = start_x_vel * end_x_vel < 0.0;
 
@@ -436,6 +438,8 @@ impl Game {
             self.terminal_size.0 as i32 / 2,
             self.terminal_size.1 as i32 / 2,
         );
+
+        self.player_acceleration_from_traction = 0.3;
     }
 }
 
@@ -744,7 +748,6 @@ mod tests {
         assert_eq!(game.player_pos, p(15, 15));
     }
 
-    #[ignore]
     #[test]
     fn test_wall_traction() {
         let mut game = Game::new(30, 30);
