@@ -247,7 +247,7 @@ impl Game {
                             termion::cursor::Goto(term_x, term_y),
                             color::Fg(color::Red).to_string(),
                             self.grid[x][y].glyph(),
-                            color::Fg(color::White).to_string(),
+                            color::Fg(color::Reset).to_string(),
                         )
                         .unwrap();
                     } else {
@@ -298,7 +298,7 @@ impl Game {
     }
 
     fn apply_player_acceleration_from_traction(&mut self) {
-        let acceleration_from_traction = 1.0;
+        let acceleration_from_traction = 0.3;
         let start_x_vel = self.player_vel_bpf.x;
         let desired_acceleration_direction = self.player_desired_x_direction.signum();
 
