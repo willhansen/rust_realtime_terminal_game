@@ -4,9 +4,7 @@ extern crate num;
 extern crate std;
 extern crate termion;
 
-#[macro_use]
-extern crate more_asserts;
-
+use assert2::assert;
 use nalgebra::{point, vector, Point2, Vector2};
 use std::io::{stdin, stdout, Write};
 use std::sync::mpsc::channel;
@@ -160,11 +158,11 @@ impl Game {
     // When The player presses the jump button
     fn player_jump(&mut self) {
         let jump_delta_v = 1.0;
-        self.player_vel_bpf.y = jump_delta_v;
         if self.player_is_grabbing_wall() {
             self.player_vel_bpf.x += jump_delta_v * -self.player_wall_grab_direction() as f32;
             self.player_desired_x_direction *= -1;
         }
+        self.player_vel_bpf.y = jump_delta_v;
     }
     fn player_jump_if_possible(&mut self) {
         if self.player_is_supported() || self.player_is_grabbing_wall() {
@@ -295,10 +293,9 @@ impl Game {
     }
 
     fn player_is_grabbing_wall(&self) -> bool {
-        assert!(self.player_desired_x_direction.abs() <= 1);
-        if self.player_desired_x_direction != 0  && self.player_vel_bpf.y <= 0.0{
-            if let Some(block) =
-                self.get_block_relative_to_player(vector![self.player_desired_x_direction, 0])
+        if self.player_desired_x_direction != 0 && self.player_vel_bpf.y <= 0.0 {
+            if let Some(block) = self
+                .get_block_relative_to_player(vector![self.player_desired_x_direction.signum(), 0])
             {
                 return block.wall_grabbable();
             }
@@ -306,12 +303,9 @@ impl Game {
         return false;
     }
     fn player_wall_grab_direction(&self) -> i32 {
-        //TODO: is this good?
-        assert!(self.player_desired_x_direction.abs() <= 1);
-
         // TODO: is this good?
         if self.player_is_grabbing_wall() {
-            return self.player_desired_x_direction;
+            return self.player_desired_x_direction.signum();
         } else {
             return 0;
         }
@@ -535,6 +529,7 @@ fn fract(vec: Vector2<f32>) -> Vector2<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert2::assert;
     fn p(x: i32, y: i32) -> Point2<i32> {
         return point![x, y];
     }
@@ -548,15 +543,15 @@ mod tests {
         game.draw_point((10, 10), Block::Wall);
         game.draw_point((20, 10), Block::Brick);
 
-        assert_eq!(game.grid[10][10], Block::Wall);
-        assert_eq!(game.grid[20][10], Block::Brick);
+        assert!(game.grid[10][10] == Block::Wall);
+        assert!(game.grid[20][10] == Block::Brick);
         game.tick_physics();
 
-        assert_eq!(game.grid[10][10], Block::Wall);
-        assert_eq!(game.grid[20][10], Block::None);
+        assert!(game.grid[10][10] == Block::Wall);
+        assert!(game.grid[20][10] == Block::None);
 
-        assert_eq!(game.grid[10][9], Block::None);
-        assert_eq!(game.grid[20][9], Block::Brick);
+        assert!(game.grid[10][9] == Block::None);
+        assert!(game.grid[20][9] == Block::Brick);
     }
 
     #[test]
@@ -564,18 +559,18 @@ mod tests {
         let mut game = Game::new(30, 30);
         // TODO: should these be variables?  Or should I just hardcode them?
         let (x1, y1, x2, y2) = (15, 11, 12, 5);
-        assert_eq!(game.player_alive, false);
+        assert!(game.player_alive == false);
         game.place_player(x1, y1);
 
-        assert_eq!(game.grid[x1 as usize][y1 as usize], Block::Player);
-        assert_eq!(game.player_pos, p(x1, y1));
-        assert_eq!(game.player_alive, true);
+        assert!(game.grid[x1 as usize][y1 as usize] == Block::Player);
+        assert!(game.player_pos == p(x1, y1));
+        assert!(game.player_alive == true);
 
         game.place_player(x2, y2);
-        assert_eq!(game.grid[x1 as usize][y1 as usize], Block::None);
-        assert_eq!(game.grid[x2 as usize][y2 as usize], Block::Player);
-        assert_eq!(game.player_pos, p(x2, y2));
-        assert_eq!(game.player_alive, true);
+        assert!(game.grid[x1 as usize][y1 as usize] == Block::None);
+        assert!(game.grid[x2 as usize][y2 as usize] == Block::Player);
+        assert!(game.player_pos == p(x2, y2));
+        assert!(game.player_alive == true);
     }
 
     #[test]
@@ -584,7 +579,7 @@ mod tests {
         game.place_player(15, 1);
         game.player_acceleration_from_gravity = 10.0;
         game.tick_physics();
-        assert_eq!(game.player_alive, false);
+        assert!(game.player_alive == false);
     }
 
     #[test]
@@ -592,37 +587,37 @@ mod tests {
         let mut game = Game::new(30, 30);
         game.draw_line((10, 10), (20, 10), Block::Wall);
 
-        assert_eq!(
-            game.movecast(p(15, 9), p(15, 11)),
-            Some(MovecastCollision {
-                pos: point![15, 9],
-                normal: vector![0, -1]
-            })
+        assert!(
+            game.movecast(p(15, 9), p(15, 11))
+                == Some(MovecastCollision {
+                    pos: point![15, 9],
+                    normal: vector![0, -1]
+                })
         );
-        assert_eq!(
-            game.movecast(p(15, 10), p(15, 11)),
-            Some(MovecastCollision {
-                pos: point![15, 10],
-                normal: vector![0, 0]
-            })
+        assert!(
+            game.movecast(p(15, 10), p(15, 11))
+                == Some(MovecastCollision {
+                    pos: point![15, 10],
+                    normal: vector![0, 0]
+                })
         );
-        assert_eq!(
-            game.movecast(p(15, 9), p(17, 11)),
-            Some(MovecastCollision {
-                pos: point![15, 9],
-                normal: vector![0, -1]
-            })
+        assert!(
+            game.movecast(p(15, 9), p(17, 11))
+                == Some(MovecastCollision {
+                    pos: point![15, 9],
+                    normal: vector![0, -1]
+                })
         );
-        assert_eq!(
-            game.movecast(p(15, 9), p(17, 110)),
-            Some(MovecastCollision {
-                pos: point![15, 9],
-                normal: vector![0, -1]
-            })
+        assert!(
+            game.movecast(p(15, 9), p(17, 110))
+                == Some(MovecastCollision {
+                    pos: point![15, 9],
+                    normal: vector![0, -1]
+                })
         );
-        assert_eq!(game.movecast(p(150, 9), p(17, 11)), None);
-        assert_eq!(game.movecast(p(1, 9), p(-17, 9)), None);
-        assert_eq!(game.movecast(p(15, 9), p(17, -11)), None);
+        assert!(game.movecast(p(150, 9), p(17, 11)) == None);
+        assert!(game.movecast(p(1, 9), p(-17, 9)) == None);
+        assert!(game.movecast(p(15, 9), p(17, -11)) == None);
     }
 
     #[test]
@@ -631,7 +626,7 @@ mod tests {
         game.draw_line((10, 10), (20, 10), Block::Wall);
         game.place_player(15, 11);
 
-        assert_eq!(game.movecast(p(15, 11), p(15, 13)), None);
+        assert!(game.movecast(p(15, 11), p(15, 13)) == None);
     }
     #[test]
     fn test_in_world_check() {
@@ -653,20 +648,20 @@ mod tests {
 
         game.tick_physics();
 
-        assert_eq!(game.player_pos, p(16, 11));
-        assert_eq!(game.grid[15][11], Block::None);
-        assert_eq!(game.grid[16][11], Block::Player);
+        assert!(game.player_pos == p(16, 11));
+        assert!(game.grid[15][11] == Block::None);
+        assert!(game.grid[16][11] == Block::Player);
 
         game.place_player(15, 11);
-        assert_eq!(game.player_desired_x_direction, 0);
+        assert!(game.player_desired_x_direction == 0);
         game.player_desired_x_direction = -1;
 
         game.tick_physics();
         game.tick_physics();
 
-        assert_eq!(game.grid[15][11], Block::None);
-        assert_eq!(game.grid[13][11], Block::Player);
-        assert_eq!(game.player_pos, p(13, 11));
+        assert!(game.grid[15][11] == Block::None);
+        assert!(game.grid[13][11] == Block::Player);
+        assert!(game.player_pos == p(13, 11));
     }
     #[test]
     fn test_stop_on_collision() {
@@ -679,10 +674,10 @@ mod tests {
 
         game.tick_physics();
 
-        assert_eq!(game.player_pos, p(15, 11));
-        assert_eq!(game.grid[16][11], Block::Wall);
-        assert_eq!(game.grid[15][11], Block::Player);
-        assert_eq!(game.player_vel_bpf.x, 0.0);
+        assert!(game.player_pos == p(15, 11));
+        assert!(game.grid[16][11] == Block::Wall);
+        assert!(game.grid[15][11] == Block::Player);
+        assert!(game.player_vel_bpf.x == 0.0);
     }
 
     #[test]
@@ -695,11 +690,11 @@ mod tests {
 
         game.tick_physics();
 
-        assert_eq!(game.player_pos, p(15, 11));
+        assert!(game.player_pos == p(15, 11));
 
         game.tick_physics();
 
-        assert_eq!(game.player_pos, p(16, 11));
+        assert!(game.player_pos == p(16, 11));
     }
     #[test]
     fn test_move_player_quickly() {
@@ -711,9 +706,9 @@ mod tests {
 
         game.tick_physics();
         game.tick_physics();
-        assert_gt!(game.player_pos.x, 17);
+        assert!(game.player_pos.x > 17);
         game.tick_physics();
-        assert_gt!(game.player_pos.x, 19);
+        assert!(game.player_pos.x > 19);
     }
     #[test]
     fn test_fast_player_collision_between_frames() {
@@ -726,8 +721,8 @@ mod tests {
         game.player_desired_x_direction = 1;
 
         game.tick_physics();
-        assert_eq!(game.player_pos, p(15, 11));
-        assert_eq!(game.player_vel_bpf.x, 0.0);
+        assert!(game.player_pos == p(15, 11));
+        assert!(game.player_vel_bpf.x == 0.0);
     }
     #[test]
     fn test_can_jump() {
@@ -738,7 +733,7 @@ mod tests {
 
         game.player_jump();
         game.tick_physics();
-        assert_eq!(game.player_pos, p(15, 12));
+        assert!(game.player_pos == p(15, 12));
     }
     #[test]
     fn test_player_gravity() {
@@ -749,7 +744,7 @@ mod tests {
         game.tick_physics();
         game.tick_physics();
 
-        assert_lt!(game.player_pos.y, 11);
+        assert!(game.player_pos.y < 11);
     }
 
     #[test]
@@ -761,8 +756,8 @@ mod tests {
         game.place_player(15, 11);
         game.player_vel_bpf = v(-2.0, 2.0);
         game.tick_physics();
-        assert_eq!(game.player_vel_bpf.x, 0.0);
-        assert_gt!(game.player_vel_bpf.y, 0.0);
+        assert!(game.player_vel_bpf.x == 0.0);
+        assert!(game.player_vel_bpf.y > 0.0);
     }
     #[test]
     fn test_decellerate_when_already_moving_faster_than_max_speed() {
@@ -772,22 +767,22 @@ mod tests {
         game.player_vel_bpf.x = 5.0;
         game.player_desired_x_direction = 1;
         game.tick_physics();
-        assert_gt!(game.player_vel_bpf.x, game.player_max_run_speed_bpf);
-        assert_lt!(game.player_vel_bpf.x, 5.0);
+        assert!(game.player_vel_bpf.x > game.player_max_run_speed_bpf);
+        assert!(game.player_vel_bpf.x < 5.0);
     }
     #[test]
     fn test_no_double_jump() {
         let mut game = Game::new(30, 30);
         game.place_player(15, 11);
         game.player_jump_if_possible();
-        assert_eq!(game.player_vel_bpf.y, 0.0);
+        assert!(game.player_vel_bpf.y == 0.0);
     }
     #[test]
     fn test_respawn_button() {
         let mut game = Game::new(30, 30);
         game.handle_input(Event::Key(Key::Char('r')));
         assert!(game.player_alive);
-        assert_eq!(game.player_pos, p(15, 15));
+        assert!(game.player_pos == p(15, 15));
     }
 
     #[test]
@@ -797,7 +792,7 @@ mod tests {
         game.place_player(15, 11);
         game.player_desired_x_direction = -1;
         game.tick_physics();
-        assert_eq!(game.player_vel_bpf.y, 0.0);
+        assert!(game.player_vel_bpf.y == 0.0);
     }
 
     #[test]
@@ -808,8 +803,8 @@ mod tests {
         game.player_desired_x_direction = -1;
         game.player_jump_if_possible();
         game.tick_physics();
-        assert_gt!(game.player_vel_bpf.y, 0.0);
-        assert_gt!(game.player_vel_bpf.x, 0.0);
+        assert!(game.player_vel_bpf.y > 0.0);
+        assert!(game.player_vel_bpf.x > 0.0);
     }
 
     #[test]
@@ -821,9 +816,8 @@ mod tests {
         let start_vel = v(-1.0, 1.0);
         game.player_vel_bpf = start_vel;
         game.tick_physics();
-        assert_lt!(game.player_vel_bpf.y, start_vel.y);
+        assert!(game.player_vel_bpf.y < start_vel.y);
     }
-    
     #[test]
     fn test_dont_grab_wall_while_moving_up() {
         let mut game = Game::new(30, 30);
