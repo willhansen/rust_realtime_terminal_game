@@ -27,7 +27,7 @@ const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
 const DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION: f32 = 1.0;
 const DEFAULT_PLAYER_COYOTE_TIME_DURATION_S: f32 = 0.2;
 const DEFAULT_PLAYER_MAX_COYOTE_FRAMES: i32 =
-    ((DEFAULT_PLAYER_COYOTE_TIME_DURATION_S / MAX_FPS as f32) + 1.0) as i32;
+    ((DEFAULT_PLAYER_COYOTE_TIME_DURATION_S * MAX_FPS as f32) + 1.0) as i32;
 
 // "heighth", "reighth"
 const EIGHTH_BLOCKS_FROM_LEFT: &[char] = &[' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
@@ -188,6 +188,7 @@ impl Game {
         self.player_desired_x_direction = 0;
         self.player_pos = point![x, y];
         self.player_alive = true;
+        self.player_remaining_coyote_frames = 0;
     }
     // When The player presses the jump button
     fn player_jump(&mut self) {
@@ -283,33 +284,24 @@ impl Game {
         // Now update the graphics where applicable
         for x in 0..width {
             for y in 0..height {
-                if self.grid[x][y] != self.grid_at_last_draw[x][y] {
+                if self.output_buffer[x][y] != self.output_on_screen[x][y] {
                     let (term_x, term_y) = self.world_to_screen(&(x as i32, y as i32));
-                    if self.grid[x][y] == Block::Player {
-                        write!(
-                            stdout,
-                            "{}{}{}{}",
-                            termion::cursor::Goto(term_x, term_y),
-                            color::Fg(color::Red).to_string(),
-                            self.grid[x][y].glyph(),
-                            color::Fg(color::Reset).to_string(),
-                        )
-                        .unwrap();
-                    } else {
-                        write!(
-                            stdout,
-                            "{}{}",
-                            termion::cursor::Goto(term_x, term_y),
-                            self.grid[x][y].glyph(),
-                        )
-                        .unwrap();
+                    let is_player_square =
+                        self.player_alive && point![x as i32, y as i32] == self.player_pos;
+                    write!(stdout, "{}", termion::cursor::Goto(term_x, term_y),).unwrap();
+                    if is_player_square {
+                        write!(stdout, "{}", color::Fg(color::Red).to_string(),).unwrap();
+                    }
+                    write!(stdout, "{}", self.grid[x][y].glyph(),).unwrap();
+                    if is_player_square {
+                        write!(stdout, "{}", color::Fg(color::Reset).to_string(),).unwrap();
                     }
                 }
             }
         }
         write!(stdout, "{}", termion::cursor::Goto(1, 1),).unwrap();
         stdout.flush().unwrap();
-        self.grid_at_last_draw = self.grid.clone();
+        self.output_on_screen = self.output_buffer.clone();
     }
 
     fn apply_gravity_to_blocks(&mut self) {
@@ -592,6 +584,7 @@ fn main() {
             game.handle_input(evt);
         }
         game.tick_physics();
+        game.update_output_buffer();
         game.update_screen(&mut stdout);
         let tick_duration_so_far_ms = start_time.elapsed().as_millis();
         if tick_duration_so_far_ms < IDEAL_FRAME_DURATION_MS {
@@ -983,4 +976,19 @@ mod tests {
         assert!(game.get_buffered_glyph(game.player_pos) == EIGHTH_BLOCKS_FROM_LEFT[8]);
         assert!(game.get_buffered_glyph(game.player_pos + v(0, -1)) == Block::Wall.glyph());
     }
+
+    #[test]
+    fn test_horizontal_sub_glyph_positioning_on_right() {
+        let mut game = set_up_player_on_platform();
+        game.player_accumulated_pos_err.x = 0.5;
+        game.update_output_buffer();
+        assert!(game.get_buffered_glyph(game.player_pos) == EIGHTH_BLOCKS_FROM_LEFT[4]);
+        assert!(game.get_buffered_glyph(game.player_pos + v(1, 0)) == EIGHTH_BLOCKS_FROM_LEFT[4]);
+    }
+
+    #[test]
+    fn test_sub_glyph_positioning_on_vertical() {}
+
+    #[test]
+    fn test_slowly_slide_down_when_grabbing_wall() {}
 }
