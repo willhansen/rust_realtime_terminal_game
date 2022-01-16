@@ -9,7 +9,7 @@ use nalgebra::{point, vector, Point2, Vector2};
 use std::io::{stdin, stdout, Write};
 use std::sync::mpsc::channel;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use termion::color;
 use termion::event::{Event, Key, MouseButton, MouseEvent};
 use termion::input::{MouseTerminal, TermRead};
@@ -17,14 +17,17 @@ use termion::raw::IntoRawMode;
 
 // const player_jump_height: i32 = 3;
 // const player_jump_hang_frames: i32 = 4;
-const MAX_FPS: i32 = 30; // frames per second
+const MAX_FPS: i32 = 60; // frames per second
+const IDEAL_FRAME_DURATION_MS: u128 = (1000.0 / MAX_FPS as f32) as u128;
 
 // a block every two ticks
 const PLAYER_DEFAULT_MAX_SPEED_BPS: f32 = 30.0; // blocks per second
 const PLAYER_DEFAULT_MAX_SPEED_BPF: f32 = PLAYER_DEFAULT_MAX_SPEED_BPS / MAX_FPS as f32; // blocks per frame
 const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
 const DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION: f32 = 1.0;
-const DEFAULT_PLAYER_MAX_COYOTE_FRAMES: i32 = 10;
+const DEFAULT_PLAYER_COYOTE_TIME_DURATION_S: f32 = 0.2;
+const DEFAULT_PLAYER_MAX_COYOTE_FRAMES: i32 =
+    ((DEFAULT_PLAYER_COYOTE_TIME_DURATION_S / MAX_FPS as f32) + 1.0) as i32;
 
 // These have no positional information
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -509,6 +512,7 @@ impl Game {
         );
 
         self.player_acceleration_from_traction = 0.3;
+        self.player_max_run_speed_bpf = 0.5
     }
 }
 
@@ -541,13 +545,18 @@ fn main() {
     game.init_world();
 
     while game.running {
+        let start_time = Instant::now();
         while let Ok(evt) = rx.try_recv() {
             game.handle_input(evt);
         }
         game.tick_physics();
         game.update_screen(&mut stdout);
-        // TODO: make better
-        thread::sleep(Duration::from_millis(16));
+        let tick_duration_so_far_ms = start_time.elapsed().as_millis();
+        if tick_duration_so_far_ms < IDEAL_FRAME_DURATION_MS {
+            thread::sleep(Duration::from_millis(
+                (IDEAL_FRAME_DURATION_MS - tick_duration_so_far_ms) as u64,
+            ));
+        }
     }
 }
 
@@ -908,16 +917,11 @@ mod tests {
         game.player_jump_if_possible();
         assert!(game.player_vel_bpf.x > 0.0);
     }
-    
     #[ignore]
     #[test]
-    fn test_allow_early_jump() {
-        
-    }
+    fn test_allow_early_jump() {}
 
     #[ignore]
     #[test]
-    fn test_wall_jump_adds_velocity() {
-        
-    }
+    fn test_wall_jump_adds_velocity() {}
 }
