@@ -4,7 +4,7 @@ extern crate num;
 extern crate std;
 extern crate termion;
 
-use assert2::{assert, check};
+// use assert2::{assert, check};
 use nalgebra::{point, vector, Point2, Vector2};
 use std::io::{stdin, stdout, Write};
 use std::sync::mpsc::channel;
@@ -29,6 +29,9 @@ const DEFAULT_PLAYER_COYOTE_TIME_DURATION_S: f32 = 0.2;
 const DEFAULT_PLAYER_MAX_COYOTE_FRAMES: i32 =
     ((DEFAULT_PLAYER_COYOTE_TIME_DURATION_S / MAX_FPS as f32) + 1.0) as i32;
 
+const EIGTH_BLOCKS_FROM_LEFT: &[char] = &[' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
+const EIGHT_BLOCKS_FROM_BOTTOM: &[char] = &[' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
 // These have no positional information
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum Block {
@@ -48,7 +51,7 @@ impl Block {
         }
     }
 
-    fn subject_to_normal_gravity(&self) -> bool {
+    fn subject_to_block_gravity(&self) -> bool {
         match self {
             Block::None | Block::Wall | Block::Player => false,
             _ => true,
@@ -70,11 +73,32 @@ struct MovecastCollision {
 
 struct Player {}
 
+struct ColoredGlyph {
+    glyph: char,
+    fg_color: String,
+    bg_color: String,
+}
+
+impl ColoredGlyph {
+    fn to_string(&self) -> String {
+        return format!(
+            "{}{}{}{}{}",
+            self.fg_color,
+            self.bg_color,
+            self.glyph,
+            color::Fg(color::Reset).to_string(),
+            color::Bg(color::Reset).to_string()
+        );
+    }
+}
+
 struct Game {
-    grid: Vec<Vec<Block>>,      // (x,y), left to right, top to bottom
-    prev_grid: Vec<Vec<Block>>, // (x,y), left to right, top to bottom
-    terminal_size: (u16, u16),  // (width, height)
-    prev_mouse_pos: (i32, i32), // where mouse was last frame (if pressed)
+    grid: Vec<Vec<Block>>,              // (x,y), left to right, top to bottom
+    grid_at_last_draw: Vec<Vec<Block>>, // (x,y), left to right, top to bottom
+    output_buffer: Vec<Vec<char>>,      // (x,y), left to right, top to bottom
+    output_buffer_at_last_draw: Vec<Vec<char>>, // (x,y), left to right, top to bottom
+    terminal_size: (u16, u16),          // (width, height)
+    prev_mouse_pos: (i32, i32),         // where mouse was last frame (if pressed)
     // last_pressed_key: Option<termion::event::Key>,
     running: bool,         // set false to quit
     selected_block: Block, // What the mouse places
@@ -94,7 +118,9 @@ impl Game {
     fn new(width: u16, height: u16) -> Game {
         Game {
             grid: vec![vec![Block::None; height as usize]; width as usize],
-            prev_grid: vec![vec![Block::None; height as usize]; width as usize],
+            grid_at_last_draw: vec![vec![Block::None; height as usize]; width as usize],
+            output_buffer: vec![vec![' '; height as usize]; width as usize],
+            output_buffer_at_last_draw: vec![vec![' '; height as usize]; width as usize],
             terminal_size: (width, height),
             prev_mouse_pos: (1, 1),
             // last_pressed_key: None,
@@ -212,7 +238,6 @@ impl Game {
                 MouseEvent::Press(MouseButton::Right, term_x, term_y) => {
                     let (x, y) = self.screen_to_world(&(term_x, term_y));
                     self.place_player(x, y);
-                    self.draw_point((x, y), Block::Player);
                 }
                 MouseEvent::Hold(term_x, term_y) => {
                     let (x, y) = self.screen_to_world(&(term_x, term_y));
@@ -231,6 +256,7 @@ impl Game {
             self.apply_player_motion();
         }
     }
+    fn update_output_buffer(&mut self) {}
 
     fn update_screen(
         &mut self,
@@ -241,7 +267,7 @@ impl Game {
         // Now update the graphics where applicable
         for x in 0..width {
             for y in 0..height {
-                if self.grid[x][y] != self.prev_grid[x][y] {
+                if self.grid[x][y] != self.grid_at_last_draw[x][y] {
                     let (term_x, term_y) = self.world_to_screen(&(x as i32, y as i32));
                     if self.grid[x][y] == Block::Player {
                         write!(
@@ -267,7 +293,7 @@ impl Game {
         }
         write!(stdout, "{}", termion::cursor::Goto(1, 1),).unwrap();
         stdout.flush().unwrap();
-        self.prev_grid = self.grid.clone();
+        self.grid_at_last_draw = self.grid.clone();
     }
 
     fn apply_gravity_to_blocks(&mut self) {
@@ -275,7 +301,7 @@ impl Game {
         for x in 0..self.terminal_size.0 as usize {
             for y in 0..self.terminal_size.1 as usize {
                 let block = self.grid[x][y];
-                if block.subject_to_normal_gravity() {
+                if block.subject_to_block_gravity() {
                     let is_bottom_row = y == 0;
                     let has_direct_support = !is_bottom_row && self.grid[x][y - 1] != Block::None;
                     if is_bottom_row {
@@ -804,7 +830,7 @@ mod tests {
     }
 
     #[test]
-    fn test_slide_on_collision() {
+    fn test_slide_on_angled_collision() {
         let mut game = Game::new(30, 30);
         game.draw_line((10, 10), (20, 10), Block::Wall);
         game.draw_line((14, 10), (14, 20), Block::Wall);
@@ -909,6 +935,7 @@ mod tests {
 
         assert!(game1.player_vel_bpf.y == game2.player_vel_bpf.y);
     }
+    #[ignore]
     #[test]
     fn test_wall_jump_while_sliding_up_wall() {
         let mut game = set_up_player_hanging_on_wall_on_left();
@@ -923,5 +950,15 @@ mod tests {
 
     #[ignore]
     #[test]
-    fn test_wall_jump_adds_velocity() {}
+    fn test_allow_late_jump() {}
+
+    #[ignore]
+    #[test]
+    fn test_wall_jump_adds_velocity_instead_of_sets_it() {}
+    #[test]
+    fn test_draw_to_output_buffer() {
+        let mut game = set_up_player_on_platform();
+        game.update_output_buffer();
+        // assert!(game.get_buffered_glyph(game.player_pos) == EIGTH_BLOCKS_FROM_LEFT[8])
+    }
 }
