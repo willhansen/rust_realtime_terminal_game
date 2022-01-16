@@ -29,8 +29,9 @@ const DEFAULT_PLAYER_COYOTE_TIME_DURATION_S: f32 = 0.2;
 const DEFAULT_PLAYER_MAX_COYOTE_FRAMES: i32 =
     ((DEFAULT_PLAYER_COYOTE_TIME_DURATION_S / MAX_FPS as f32) + 1.0) as i32;
 
-const EIGTH_BLOCKS_FROM_LEFT: &[char] = &[' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
-const EIGHT_BLOCKS_FROM_BOTTOM: &[char] = &[' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+// "heighth", "reighth"
+const EIGHTH_BLOCKS_FROM_LEFT: &[char] = &[' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
+const EIGHTH_BLOCKS_FROM_BOTTOM: &[char] = &[' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
 // These have no positional information
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -47,7 +48,7 @@ impl Block {
             Block::None => ' ',
             Block::Wall => '█',
             Block::Brick => '▪',
-            Block::Player => '█',
+            Block::Player => EIGHTH_BLOCKS_FROM_LEFT[8],
         }
     }
 
@@ -73,30 +74,30 @@ struct MovecastCollision {
 
 struct Player {}
 
-struct ColoredGlyph {
-    glyph: char,
-    fg_color: String,
-    bg_color: String,
-}
+// struct ColoredGlyph {
+//     glyph: char,
+//     fg_color: Option<String>,
+//     bg_color: Option<String>,
+// }
 
-impl ColoredGlyph {
-    fn to_string(&self) -> String {
-        return format!(
-            "{}{}{}{}{}",
-            self.fg_color,
-            self.bg_color,
-            self.glyph,
-            color::Fg(color::Reset).to_string(),
-            color::Bg(color::Reset).to_string()
-        );
-    }
-}
+// impl ColoredGlyph {
+//     fn to_string(&self) -> String {
+//         return format!(
+//             "{}{}{}{}{}",
+//             self.fg_color.unwrap(),
+//             self.bg_color.unwrap(),
+//             self.glyph,
+//             color::Fg(color::Reset).to_string(),
+//             color::Bg(color::Reset).to_string()
+//         );
+//     }
+// }
 
 struct Game {
     grid: Vec<Vec<Block>>,              // (x,y), left to right, top to bottom
     grid_at_last_draw: Vec<Vec<Block>>, // (x,y), left to right, top to bottom
     output_buffer: Vec<Vec<char>>,      // (x,y), left to right, top to bottom
-    output_buffer_at_last_draw: Vec<Vec<char>>, // (x,y), left to right, top to bottom
+    output_on_screen: Vec<Vec<char>>,   // (x,y), left to right, top to bottom
     terminal_size: (u16, u16),          // (width, height)
     prev_mouse_pos: (i32, i32),         // where mouse was last frame (if pressed)
     // last_pressed_key: Option<termion::event::Key>,
@@ -120,10 +121,9 @@ impl Game {
             grid: vec![vec![Block::None; height as usize]; width as usize],
             grid_at_last_draw: vec![vec![Block::None; height as usize]; width as usize],
             output_buffer: vec![vec![' '; height as usize]; width as usize],
-            output_buffer_at_last_draw: vec![vec![' '; height as usize]; width as usize],
+            output_on_screen: vec![vec![' '; height as usize]; width as usize],
             terminal_size: (width, height),
             prev_mouse_pos: (1, 1),
-            // last_pressed_key: None,
             running: true,
             selected_block: Block::Wall,
             player_alive: false,
@@ -256,7 +256,23 @@ impl Game {
             self.apply_player_motion();
         }
     }
-    fn update_output_buffer(&mut self) {}
+
+    fn update_output_buffer(&mut self) {
+        let width = self.grid.len();
+        let height = self.grid[0].len();
+        for x in 0..width {
+            for y in 0..height {
+                self.output_buffer[x][y] = self.grid[x][y].glyph();
+            }
+        }
+    }
+
+    fn get_buffered_glyph(&self, pos: Point2<i32>) -> char {
+        return self.output_buffer[pos.x as usize][pos.y as usize];
+    }
+    fn get_glyph_on_screen(&self, pos: Point2<i32>) -> char {
+        return self.output_on_screen[pos.x as usize][pos.y as usize];
+    }
 
     fn update_screen(
         &mut self,
@@ -944,21 +960,27 @@ mod tests {
         game.player_jump_if_possible();
         assert!(game.player_vel_bpf.x > 0.0);
     }
+
     #[ignore]
     #[test]
+    // The general case of this is pressing jump any time before landing causing an instant jump when possible
     fn test_allow_early_jump() {}
 
     #[ignore]
     #[test]
+    // The general case of this is allowing a single jump anytime while falling after walking (not jumping!) off a platform
     fn test_allow_late_jump() {}
 
     #[ignore]
     #[test]
+    // This should allow high skill to lead to really fast wall climbing (like in N+)
     fn test_wall_jump_adds_velocity_instead_of_sets_it() {}
+
     #[test]
     fn test_draw_to_output_buffer() {
         let mut game = set_up_player_on_platform();
         game.update_output_buffer();
-        // assert!(game.get_buffered_glyph(game.player_pos) == EIGTH_BLOCKS_FROM_LEFT[8])
+        assert!(game.get_buffered_glyph(game.player_pos) == EIGHTH_BLOCKS_FROM_LEFT[8]);
+        assert!(game.get_buffered_glyph(game.player_pos + v(0, -1)) == Block::Wall.glyph());
     }
 }
