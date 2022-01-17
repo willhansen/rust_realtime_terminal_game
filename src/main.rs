@@ -17,7 +17,7 @@ use termion::raw::IntoRawMode;
 
 // const player_jump_height: i32 = 3;
 // const player_jump_hang_frames: i32 = 4;
-const MAX_FPS: i32 = 60; // frames per second
+const MAX_FPS: i32 = 15; // frames per second
 const IDEAL_FRAME_DURATION_MS: u128 = (1000.0 / MAX_FPS as f32) as u128;
 
 // a block every two ticks
@@ -74,32 +74,95 @@ struct MovecastCollision {
 
 struct Player {}
 
-struct ColoredGlyph {
-    glyph: char,
+enum ColorName {
+    Red,
+    Black,
+    White,
+    Reset,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct Glyph {
+    character: char,
     fg_color: Option<String>,
     bg_color: Option<String>,
 }
 
-impl ColoredGlyph {
+impl Glyph {
     fn to_string(&self) -> String {
-        return format!(
-            "{}{}{}{}{}",
-            self.fg_color.clone().unwrap(),
-            self.bg_color.clone().unwrap(),
-            self.glyph,
-            color::Fg(color::Reset).to_string(),
-            color::Bg(color::Reset).to_string()
-        );
+        let mut output = self.character.to_string();
+        if let Some(fg_color_string) = self.fg_color.clone() {
+            output = format!(
+                "{}{}{}",
+                fg_color_string,
+                output,
+                Glyph::fg_color_from_name(ColorName::Reset),
+            );
+        }
+        if let Some(bg_color_string) = self.bg_color.clone() {
+            output = format!(
+                "{}{}{}",
+                bg_color_string,
+                output,
+                color::Bg(color::Reset).to_string(),
+            );
+        }
+        return output;
+    }
+
+    fn from_char(character: char) -> Glyph {
+        return Glyph {
+            character: character,
+            fg_color: None,
+            bg_color: None,
+        };
+    }
+
+    fn fg_color_from_name(color_name: ColorName) -> String {
+        match color_name {
+            ColorName::Red => color::Fg(color::Red).to_string(),
+            ColorName::White => color::Fg(color::White).to_string(),
+            ColorName::Black => color::Fg(color::Black).to_string(),
+            ColorName::Reset => color::Fg(color::Reset).to_string(),
+        }
+    }
+
+    fn bg_color_from_name(color_name: ColorName) -> String {
+        match color_name {
+            ColorName::Red => color::Bg(color::Red).to_string(),
+            ColorName::White => color::Bg(color::White).to_string(),
+            ColorName::Black => color::Bg(color::Black).to_string(),
+            ColorName::Reset => color::Bg(color::Reset).to_string(),
+        }
+    }
+    fn red_square_with_offset(fraction_of_square_offset: f32) -> Glyph {
+        let offset_in_eighths_rounded_towards_inf =
+            (fraction_of_square_offset * 8.0).ceil() as i32;
+        assert!(offset_in_eighths_rounded_towards_inf.abs() <= 8);
+        if offset_in_eighths_rounded_towards_inf <= 0 {
+            return Glyph {
+                character: EIGHTH_BLOCKS_FROM_LEFT
+                    [(8+offset_in_eighths_rounded_towards_inf) as usize],
+                fg_color: Some(Glyph::fg_color_from_name(ColorName::Red)),
+                bg_color: Some(Glyph::bg_color_from_name(ColorName::Black)),
+            };
+        } else {
+            return Glyph {
+                character: EIGHTH_BLOCKS_FROM_LEFT
+                    [offset_in_eighths_rounded_towards_inf as usize],
+                fg_color: Some(Glyph::fg_color_from_name(ColorName::Black)),
+                bg_color: Some(Glyph::bg_color_from_name(ColorName::Red)),
+            };
+        }
     }
 }
 
 struct Game {
-    grid: Vec<Vec<Block>>,              // (x,y), left to right, top to bottom
-    grid_at_last_draw: Vec<Vec<Block>>, // (x,y), left to right, top to bottom
-    output_buffer: Vec<Vec<char>>,      // (x,y), left to right, top to bottom
-    output_on_screen: Vec<Vec<char>>,   // (x,y), left to right, top to bottom
-    terminal_size: (u16, u16),          // (width, height)
-    prev_mouse_pos: (i32, i32),         // where mouse was last frame (if pressed)
+    grid: Vec<Vec<Block>>,             // (x,y), left to right, top to bottom
+    output_buffer: Vec<Vec<Glyph>>,    // (x,y), left to right, top to bottom
+    output_on_screen: Vec<Vec<Glyph>>, // (x,y), left to right, top to bottom
+    terminal_size: (u16, u16),         // (width, height)
+    prev_mouse_pos: (i32, i32),        // where mouse was last frame (if pressed)
     // last_pressed_key: Option<termion::event::Key>,
     running: bool,         // set false to quit
     selected_block: Block, // What the mouse places
@@ -119,9 +182,8 @@ impl Game {
     fn new(width: u16, height: u16) -> Game {
         Game {
             grid: vec![vec![Block::None; height as usize]; width as usize],
-            grid_at_last_draw: vec![vec![Block::None; height as usize]; width as usize],
-            output_buffer: vec![vec![' '; height as usize]; width as usize],
-            output_on_screen: vec![vec![' '; height as usize]; width as usize],
+            output_buffer: vec![vec![Glyph::from_char(' '); height as usize]; width as usize],
+            output_on_screen: vec![vec![Glyph::from_char(' '); height as usize]; width as usize],
             terminal_size: (width, height),
             prev_mouse_pos: (1, 1),
             running: true,
@@ -263,7 +325,7 @@ impl Game {
         let height = self.grid[0].len();
         for x in 0..width {
             for y in 0..height {
-                self.output_buffer[x][y] = self.grid[x][y].glyph();
+                self.output_buffer[x][y] = Glyph::from_char(self.grid[x][y].glyph());
             }
         }
 
@@ -279,32 +341,30 @@ impl Game {
             let x = self.player_pos.x + i as i32 + x_offset;
             let y = self.player_pos.y;
             if self.in_world(point![x, y]) {
-                self.output_buffer[x as usize][y as usize] = player_glyphs[i];
+                self.output_buffer[x as usize][y as usize] = player_glyphs[i].clone();
             }
         }
     }
-    fn get_player_glyphs(&self) -> Vec<char> {
-        let subsquare_position_in_eighths =
-            (self.player_accumulated_pos_err.x * 8.0).trunc() as i32;
-        assert!(subsquare_position_in_eighths.abs() <= 8);
-        if subsquare_position_in_eighths < 0 {
+    fn get_player_glyphs(&self) -> Vec<Glyph> {
+        let offset = self.player_accumulated_pos_err.x;
+        if offset < 0.0 {
             return vec![
-                EIGHTH_BLOCKS_FROM_LEFT[(8 - subsquare_position_in_eighths.abs()) as usize],
-                EIGHTH_BLOCKS_FROM_LEFT[subsquare_position_in_eighths.abs() as usize],
+                Glyph::red_square_with_offset(offset+1.0),
+                Glyph::red_square_with_offset(offset),
             ];
         } else {
             return vec![
-                EIGHTH_BLOCKS_FROM_LEFT[(8 - subsquare_position_in_eighths) as usize],
-                EIGHTH_BLOCKS_FROM_LEFT[subsquare_position_in_eighths as usize],
+                Glyph::red_square_with_offset(offset),
+                Glyph::red_square_with_offset(offset-1.0),
             ];
         }
     }
 
-    fn get_buffered_glyph(&self, pos: Point2<i32>) -> char {
-        return self.output_buffer[pos.x as usize][pos.y as usize];
+    fn get_buffered_glyph(&self, pos: Point2<i32>) -> &Glyph {
+        return &self.output_buffer[pos.x as usize][pos.y as usize];
     }
-    fn get_glyph_on_screen(&self, pos: Point2<i32>) -> char {
-        return self.output_on_screen[pos.x as usize][pos.y as usize];
+    fn get_glyph_on_screen(&self, pos: Point2<i32>) -> &Glyph {
+        return &self.output_on_screen[pos.x as usize][pos.y as usize];
     }
 
     fn update_screen(
@@ -318,16 +378,8 @@ impl Game {
             for y in 0..height {
                 if self.output_buffer[x][y] != self.output_on_screen[x][y] {
                     let (term_x, term_y) = self.world_to_screen(&(x as i32, y as i32));
-                    let is_player_square =
-                        self.player_alive && point![x as i32, y as i32] == self.player_pos;
                     write!(stdout, "{}", termion::cursor::Goto(term_x, term_y)).unwrap();
-                    if is_player_square {
-                        write!(stdout, "{}", color::Fg(color::Red).to_string()).unwrap();
-                    }
-                    write!(stdout, "{}", self.output_buffer[x][y]).unwrap();
-                    if is_player_square {
-                        write!(stdout, "{}", color::Fg(color::Reset).to_string()).unwrap();
-                    }
+                    write!(stdout, "{}", self.output_buffer[x][y].to_string()).unwrap();
                 }
             }
         }
@@ -1005,8 +1057,12 @@ mod tests {
     fn test_draw_to_output_buffer() {
         let mut game = set_up_player_on_platform();
         game.update_output_buffer();
-        assert!(game.get_buffered_glyph(game.player_pos) == EIGHTH_BLOCKS_FROM_LEFT[8]);
-        assert!(game.get_buffered_glyph(game.player_pos + v(0, -1)) == Block::Wall.glyph());
+        assert!(game.get_buffered_glyph(game.player_pos).character == EIGHTH_BLOCKS_FROM_LEFT[8]);
+        assert!(
+            game.get_buffered_glyph(game.player_pos + v(0, -1))
+                .character
+                == Block::Wall.glyph()
+        );
     }
 
     #[test]
@@ -1014,16 +1070,29 @@ mod tests {
         let mut game = set_up_player_on_platform();
         game.player_accumulated_pos_err.x = 0.5;
         game.update_output_buffer();
-        assert!(game.get_buffered_glyph(game.player_pos) == EIGHTH_BLOCKS_FROM_LEFT[4]);
-        assert!(game.get_buffered_glyph(game.player_pos + v(1, 0)) == EIGHTH_BLOCKS_FROM_LEFT[4]);
+        let left_glyph = game.get_buffered_glyph(game.player_pos);
+        let right_glyph = game.get_buffered_glyph(game.player_pos + v(1, 0));
+        assert!(left_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
+        assert!(left_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Black)));
+        assert!(left_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Red)));
+        assert!(right_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
+        assert!(right_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Red)));
+        assert!(right_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Black)));
     }
     #[test]
     fn test_horizontal_sub_glyph_positioning_on_left() {
         let mut game = set_up_player_on_platform();
         game.player_accumulated_pos_err.x = -0.2;
         game.update_output_buffer();
-        assert!(game.get_buffered_glyph(game.player_pos + v(-1, 0)) == EIGHTH_BLOCKS_FROM_LEFT[7]);
-        assert!(game.get_buffered_glyph(game.player_pos) == EIGHTH_BLOCKS_FROM_LEFT[1]);
+
+        let left_glyph = game.get_buffered_glyph(game.player_pos + v(-1, 0));
+        let right_glyph = game.get_buffered_glyph(game.player_pos);
+        assert!(left_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[7]);
+        assert!(left_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Black)));
+        assert!(left_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Red)));
+        assert!(right_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[7]);
+        assert!(right_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Red)));
+        assert!(right_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Black)));
     }
 
     #[ignore]
