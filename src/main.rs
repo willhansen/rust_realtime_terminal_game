@@ -74,24 +74,24 @@ struct MovecastCollision {
 
 struct Player {}
 
-// struct ColoredGlyph {
-//     glyph: char,
-//     fg_color: Option<String>,
-//     bg_color: Option<String>,
-// }
+struct ColoredGlyph {
+    glyph: char,
+    fg_color: Option<String>,
+    bg_color: Option<String>,
+}
 
-// impl ColoredGlyph {
-//     fn to_string(&self) -> String {
-//         return format!(
-//             "{}{}{}{}{}",
-//             self.fg_color.unwrap(),
-//             self.bg_color.unwrap(),
-//             self.glyph,
-//             color::Fg(color::Reset).to_string(),
-//             color::Bg(color::Reset).to_string()
-//         );
-//     }
-// }
+impl ColoredGlyph {
+    fn to_string(&self) -> String {
+        return format!(
+            "{}{}{}{}{}",
+            self.fg_color.clone().unwrap(),
+            self.bg_color.clone().unwrap(),
+            self.glyph,
+            color::Fg(color::Reset).to_string(),
+            color::Bg(color::Reset).to_string()
+        );
+    }
+}
 
 struct Game {
     grid: Vec<Vec<Block>>,              // (x,y), left to right, top to bottom
@@ -266,6 +266,38 @@ impl Game {
                 self.output_buffer[x][y] = self.grid[x][y].glyph();
             }
         }
+
+        let player_glyphs = self.get_player_glyphs();
+        let x_offset;
+        if self.player_accumulated_pos_err.x < 0.0 {
+            x_offset = -1;
+        } else {
+            x_offset = 0;
+        }
+
+        for i in 0..player_glyphs.len() {
+            let x = self.player_pos.x + i as i32 + x_offset;
+            let y = self.player_pos.y;
+            if self.in_world(point![x, y]) {
+                self.output_buffer[x as usize][y as usize] = player_glyphs[i];
+            }
+        }
+    }
+    fn get_player_glyphs(&self) -> Vec<char> {
+        let subsquare_position_in_eighths =
+            (self.player_accumulated_pos_err.x * 8.0).trunc() as i32;
+        assert!(subsquare_position_in_eighths.abs() <= 8);
+        if subsquare_position_in_eighths < 0 {
+            return vec![
+                EIGHTH_BLOCKS_FROM_LEFT[(8 - subsquare_position_in_eighths.abs()) as usize],
+                EIGHTH_BLOCKS_FROM_LEFT[subsquare_position_in_eighths.abs() as usize],
+            ];
+        } else {
+            return vec![
+                EIGHTH_BLOCKS_FROM_LEFT[(8 - subsquare_position_in_eighths) as usize],
+                EIGHTH_BLOCKS_FROM_LEFT[subsquare_position_in_eighths as usize],
+            ];
+        }
     }
 
     fn get_buffered_glyph(&self, pos: Point2<i32>) -> char {
@@ -288,13 +320,13 @@ impl Game {
                     let (term_x, term_y) = self.world_to_screen(&(x as i32, y as i32));
                     let is_player_square =
                         self.player_alive && point![x as i32, y as i32] == self.player_pos;
-                    write!(stdout, "{}", termion::cursor::Goto(term_x, term_y),).unwrap();
+                    write!(stdout, "{}", termion::cursor::Goto(term_x, term_y)).unwrap();
                     if is_player_square {
-                        write!(stdout, "{}", color::Fg(color::Red).to_string(),).unwrap();
+                        write!(stdout, "{}", color::Fg(color::Red).to_string()).unwrap();
                     }
-                    write!(stdout, "{}", self.grid[x][y].glyph(),).unwrap();
+                    write!(stdout, "{}", self.output_buffer[x][y]).unwrap();
                     if is_player_square {
-                        write!(stdout, "{}", color::Fg(color::Reset).to_string(),).unwrap();
+                        write!(stdout, "{}", color::Fg(color::Reset).to_string()).unwrap();
                     }
                 }
             }
@@ -985,10 +1017,22 @@ mod tests {
         assert!(game.get_buffered_glyph(game.player_pos) == EIGHTH_BLOCKS_FROM_LEFT[4]);
         assert!(game.get_buffered_glyph(game.player_pos + v(1, 0)) == EIGHTH_BLOCKS_FROM_LEFT[4]);
     }
-
     #[test]
+    fn test_horizontal_sub_glyph_positioning_on_left() {
+        let mut game = set_up_player_on_platform();
+        game.player_accumulated_pos_err.x = -0.2;
+        game.update_output_buffer();
+        assert!(game.get_buffered_glyph(game.player_pos + v(-1, 0)) == EIGHTH_BLOCKS_FROM_LEFT[7]);
+        assert!(game.get_buffered_glyph(game.player_pos) == EIGHTH_BLOCKS_FROM_LEFT[1]);
+    }
+
+    #[ignore]
+    #[test]
+    // At least when grabbing a wall, vertical subgrid positioning becomes a good idea
     fn test_sub_glyph_positioning_on_vertical() {}
 
+    #[ignore]
     #[test]
+    // Once we have vertical subsquare positioning up and running, a slow slide down will look cool.
     fn test_slowly_slide_down_when_grabbing_wall() {}
 }
