@@ -33,6 +33,20 @@ const DEFAULT_PLAYER_MAX_COYOTE_FRAMES: i32 =
 // "heighth", "reighth"
 const EIGHTH_BLOCKS_FROM_LEFT: &[char] = &[' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
 const EIGHTH_BLOCKS_FROM_BOTTOM: &[char] = &[' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+fn quarter_block_by_offset(half_steps: (i32, i32)) -> char {
+    match half_steps {
+        (0, 0) => '█',
+        (1, 0) => '▐',
+        (1, 1) => '▝',
+        (0, 1) => '▀',
+        (-1, 1) => '▖',
+        (-1, 0) => '▌',
+        (-1, -1) => '▖',
+        (0, -1) => '▄',
+        (1, -1) => '▗',
+        _ => ' ',
+    }
+}
 
 // These have no positional information
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -171,6 +185,14 @@ impl Glyph {
             };
         }
     }
+    fn red_square_with_half_step_offset(offset: Vector2<f32>) -> Glyph {
+        let step = trunc(offset * 2.0);
+        Glyph {
+            character: quarter_block_by_offset((step.x, step.y)),
+            fg_color: Some(Glyph::fg_color_from_name(ColorName::Red)),
+            bg_color: Some(Glyph::bg_color_from_name(ColorName::Black)),
+        }
+    }
 }
 
 struct Game {
@@ -252,14 +274,12 @@ impl Game {
         self.grid[pos.0 as usize][pos.1 as usize] = block;
     }
 
-    // todo update
     fn clear(&mut self) {
         let (width, height) = termion::terminal_size().unwrap();
         self.grid = vec![vec![Block::None; height as usize]; width as usize];
     }
 
     fn place_player(&mut self, x: i32, y: i32) {
-        // Need to kill existing player if still alive
         if self.player_alive {
             self.kill_player();
         }
@@ -270,7 +290,6 @@ impl Game {
         self.player_alive = true;
         self.player_remaining_coyote_frames = 0;
     }
-    // When The player presses the jump button
     fn player_jump(&mut self) {
         if self.player_is_grabbing_wall() {
             self.player_vel_bpf.x +=
@@ -365,24 +384,38 @@ impl Game {
         let width = 3;
         let mut output = vec![vec![None; width]; width];
 
-        let c = width/2 as usize;
+        let c = width / 2 as usize;
 
         let x_offset = self.player_accumulated_pos_err.x;
         let y_offset = self.player_accumulated_pos_err.y;
-        if x_offset < 0.0 {
-            output[c-1][c] = Some(Glyph::red_square_with_horizontal_offset(x_offset + 1.0));
-            output[c][c] = Some(Glyph::red_square_with_horizontal_offset(x_offset));
-        } else if x_offset > 0.0 {
-            output[c][c] = Some(Glyph::red_square_with_horizontal_offset(x_offset));
-            output[c+1][c] = Some(Glyph::red_square_with_horizontal_offset(x_offset - 1.0));
-        } else if y_offset > 0.0 {
-            output[c][c+1] = Some(Glyph::red_square_with_vertical_offset(y_offset - 1.0));
-            output[c][c] = Some(Glyph::red_square_with_vertical_offset(y_offset));
-        } else if y_offset < 0.0 {
-            output[c][c] = Some(Glyph::red_square_with_vertical_offset(y_offset));
-            output[c][c-1] = Some(Glyph::red_square_with_vertical_offset(y_offset + 1.0));
+        let offset_dir = signum(self.player_accumulated_pos_err);
+        if y_offset == 0.0 {
+            for i in 0..3 {
+                let x = i as i32 - 1;
+                if !(-offset_dir.x == x) {
+                    output[i][c] = Some(Glyph::red_square_with_horizontal_offset(x_offset - x as f32));
+                }
+            }
+        } else if x_offset == 0.0 {
+            for j in 0..3 {
+                let y = j as i32 - 1;
+                if !(-offset_dir.y == y) {
+                    output[c][j] = Some(Glyph::red_square_with_vertical_offset(y_offset - y as f32));
+                }
+            }
         } else {
-            output[c][c] = Some(Glyph::red_square_with_horizontal_offset(0.0));
+            for i in 0..3 {
+                for j in 0..3 {
+                    let x = i as i32 - 1;
+                    let y = j as i32 - 1;
+                    let square = vector![x as f32, y as f32];
+                    if !(-offset_dir.x == x) && !(-offset_dir.y == y) {
+                        output[i][j] = Some(Glyph::red_square_with_half_step_offset(
+                            self.player_accumulated_pos_err - 2.0*square,
+                        ));
+                    }
+                }
+            }
         }
         return output;
     }
@@ -716,6 +749,10 @@ fn fract(vec: Vector2<f32>) -> Vector2<f32> {
     return Vector2::<f32>::new(vec.x.fract(), vec.y.fract());
 }
 
+fn signum(vec: Vector2<f32>) -> Vector2<i32> {
+    return Vector2::<i32>::new(vec.x.signum() as i32, vec.y.signum() as i32);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -727,17 +764,21 @@ mod tests {
         return vector![x, y];
     }
 
-    fn set_up_player_on_platform() -> Game {
+    fn set_up_just_player() -> Game {
         let mut game = Game::new(30, 30);
-        game.draw_line((10, 10), (20, 10), Block::Wall);
         game.place_player(15, 11);
         return game;
     }
 
+    fn set_up_player_on_platform() -> Game {
+        let mut game = set_up_just_player();
+        game.draw_line((10, 10), (20, 10), Block::Wall);
+        return game;
+    }
+
     fn set_up_player_hanging_on_wall_on_left() -> Game {
-        let mut game = Game::new(30, 30);
+        let mut game = set_up_just_player();
         game.draw_line((14, 0), (14, 20), Block::Wall);
-        game.place_player(15, 11);
         game.player_desired_x_direction = -1;
         return game;
     }
@@ -1009,14 +1050,10 @@ mod tests {
     }
 
     #[test]
-    fn test_no_running_up_walls() {
+    fn test_no_running_up_walls_immediately_after_spawn() {
         let mut game = set_up_player_hanging_on_wall_on_left();
         game.player_vel_bpf = v(-1.0, 1.0);
         let start_vel_y = game.player_vel_bpf.y;
-        // currently supported by coyote frames -> no gravity acceleration this tick
-        // TODO: Should this happen?  Or should the player immediately start slowing down?
-        game.tick_physics();
-        // no longer supported by coyote frames due to vertical movement last tick
         game.tick_physics();
         assert!(game.player_vel_bpf.y < start_vel_y);
     }
@@ -1066,21 +1103,6 @@ mod tests {
         game.player_jump_if_possible();
         assert!(game.player_vel_bpf.x > 0.0);
     }
-
-    #[ignore]
-    #[test]
-    // The general case of this is pressing jump any time before landing causing an instant jump when possible
-    fn test_allow_early_jump() {}
-
-    #[ignore]
-    #[test]
-    // The general case of this is allowing a single jump anytime while falling after walking (not jumping!) off a platform
-    fn test_allow_late_jump() {}
-
-    #[ignore]
-    #[test]
-    // This should allow high skill to lead to really fast wall climbing (like in N+)
-    fn test_wall_jump_adds_velocity_instead_of_sets_it() {}
 
     #[test]
     fn test_draw_to_output_buffer() {
@@ -1153,6 +1175,76 @@ mod tests {
         assert!(bottom_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Black)));
         assert!(bottom_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Red)));
     }
+    #[test]
+    fn test_red_square_with_half_step_offsets() {
+        assert!(
+            Glyph::red_square_with_half_step_offset(v(0.0, 0.0)).character
+                == quarter_block_by_offset((0, 0))
+        );
+        assert!(
+            Glyph::red_square_with_half_step_offset(v(0.4, 0.0)).character
+                == quarter_block_by_offset((0, 0))
+        );
+        assert!(
+            Glyph::red_square_with_half_step_offset(v(0.4, 0.9)).character
+                == quarter_block_by_offset((0, 1))
+        );
+        assert!(
+            Glyph::red_square_with_half_step_offset(v(-0.999, 0.9)).character
+                == quarter_block_by_offset((-1, 1))
+        );
+    }
+    #[test]
+    // When jumping at an angle, can't use the high precision sub-square glyphs, so fall back to the half-grid precision ones
+    fn test_off_alignment_coarse_player_rendering_given_slight_offset() {
+        let mut game = set_up_player_on_platform();
+
+        game.player_accumulated_pos_err = v(0.1, 0.6);
+        game.update_output_buffer();
+        let top_glyph = game.get_buffered_glyph(game.player_pos + v(0, 1));
+        let bottom_glyph = game.get_buffered_glyph(game.player_pos);
+        assert!(top_glyph.character == quarter_block_by_offset((0, -1)));
+        assert!(top_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Red)));
+        assert!(top_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Black)));
+        assert!(bottom_glyph.character == quarter_block_by_offset((0, 1)));
+        assert!(bottom_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Red)));
+        assert!(bottom_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Black)));
+    }
+    #[test]
+    fn test_off_alignment_coarse_player_rendering_given_diagonal_offset() {
+        let mut game = set_up_just_player();
+
+        game.player_accumulated_pos_err = v(0.8, -0.6);
+        game.update_output_buffer();
+        let top_left_glyph = game.get_buffered_glyph(game.player_pos);
+        let top_right_glyph = game.get_buffered_glyph(game.player_pos + v(1, 0));
+        let bottom_left_glyph = game.get_buffered_glyph(game.player_pos + v(0, -1));
+        let bottom_right_glyph = game.get_buffered_glyph(game.player_pos + v(1, -1));
+
+        assert!(top_left_glyph.character == quarter_block_by_offset((1, -1)));
+        assert!(top_right_glyph.character == quarter_block_by_offset((-1, -1)));
+        assert!(bottom_left_glyph.character == quarter_block_by_offset((1, 1)));
+        assert!(bottom_right_glyph.character == quarter_block_by_offset((-1, 1)));
+    }
+
+    #[ignore]
+    #[test]
+    // The timing of when to slide to a stop should give the player precision positioning
+    fn test_dont_snap_to_grid_when_sliding_to_a_halt() {}
+    #[ignore]
+    #[test]
+    // The general case of this is pressing jump any time before landing causing an instant jump when possible
+    fn test_allow_early_jump() {}
+
+    #[ignore]
+    #[test]
+    // The general case of this is allowing a single jump anytime while falling after walking (not jumping!) off a platform
+    fn test_allow_late_jump() {}
+
+    #[ignore]
+    #[test]
+    // This should allow high skill to lead to really fast wall climbing (like in N+)
+    fn test_wall_jump_adds_velocity_instead_of_sets_it() {}
 
     #[ignore]
     #[test]
