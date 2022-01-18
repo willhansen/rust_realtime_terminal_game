@@ -164,7 +164,8 @@ impl Glyph {
             };
         } else {
             return Glyph {
-                character: EIGHTH_BLOCKS_FROM_BOTTOM[(offset_in_eighths_rounded_towards_inf) as usize],
+                character: EIGHTH_BLOCKS_FROM_BOTTOM
+                    [(offset_in_eighths_rounded_towards_inf) as usize],
                 fg_color: Some(Glyph::fg_color_from_name(ColorName::Black)),
                 bg_color: Some(Glyph::bg_color_from_name(ColorName::Red)),
             };
@@ -272,7 +273,8 @@ impl Game {
     // When The player presses the jump button
     fn player_jump(&mut self) {
         if self.player_is_grabbing_wall() {
-            self.player_vel_bpf.x += self.player_jump_delta_v * -self.player_wall_grab_direction() as f32;
+            self.player_vel_bpf.x +=
+                self.player_jump_delta_v * -self.player_wall_grab_direction() as f32;
             self.player_desired_x_direction *= -1;
         }
         self.player_vel_bpf.y = self.player_jump_delta_v;
@@ -346,55 +348,43 @@ impl Game {
         }
 
         let player_glyphs = self.get_player_glyphs();
-        let x_offset;
-        if self.player_accumulated_pos_err.x < 0.0 {
-            x_offset = -1;
-        } else {
-            x_offset = 0;
-        }
-        let y_offset;
-        if self.player_accumulated_pos_err.y < 0.0 {
-            y_offset = -1;
-        } else {
-            y_offset = 0;
-        }
 
         for i in 0..player_glyphs.len() {
             for j in 0..player_glyphs[i].len() {
-                let x = self.player_pos.x + i as i32 + x_offset;
-                let y = self.player_pos.y + j as i32 + y_offset;
-                if self.in_world(point![x, y]) {
-                    self.output_buffer[x as usize][y as usize] = player_glyphs[i][j].clone();
+                if let Some(glyph) = player_glyphs[i][j].clone() {
+                    let x = self.player_pos.x + i as i32 - 1;
+                    let y = self.player_pos.y + j as i32 - 1;
+                    if self.in_world(point![x, y]) {
+                        self.output_buffer[x as usize][y as usize] = glyph;
+                    }
                 }
             }
         }
     }
-    fn get_player_glyphs(&self) -> Vec<Vec<Glyph>> {
+    fn get_player_glyphs(&self) -> Vec<Vec<Option<Glyph>>> {
+        let width = 3;
+        let mut output = vec![vec![None; width]; width];
+
+        let c = width/2 as usize;
+
         let x_offset = self.player_accumulated_pos_err.x;
         let y_offset = self.player_accumulated_pos_err.y;
         if x_offset < 0.0 {
-            return vec![
-                vec![Glyph::red_square_with_horizontal_offset(x_offset + 1.0)],
-                vec![Glyph::red_square_with_horizontal_offset(x_offset)],
-            ];
+            output[c-1][c] = Some(Glyph::red_square_with_horizontal_offset(x_offset + 1.0));
+            output[c][c] = Some(Glyph::red_square_with_horizontal_offset(x_offset));
         } else if x_offset > 0.0 {
-            return vec![
-                vec![Glyph::red_square_with_horizontal_offset(x_offset)],
-                vec![Glyph::red_square_with_horizontal_offset(x_offset - 1.0)],
-            ];
+            output[c][c] = Some(Glyph::red_square_with_horizontal_offset(x_offset));
+            output[c+1][c] = Some(Glyph::red_square_with_horizontal_offset(x_offset - 1.0));
         } else if y_offset > 0.0 {
-            return vec![vec![
-                Glyph::red_square_with_vertical_offset(y_offset),
-                Glyph::red_square_with_vertical_offset(y_offset - 1.0),
-            ]];
+            output[c][c+1] = Some(Glyph::red_square_with_vertical_offset(y_offset - 1.0));
+            output[c][c] = Some(Glyph::red_square_with_vertical_offset(y_offset));
         } else if y_offset < 0.0 {
-            return vec![vec![
-                Glyph::red_square_with_vertical_offset(y_offset + 1.0),
-                Glyph::red_square_with_vertical_offset(y_offset),
-            ]];
+            output[c][c] = Some(Glyph::red_square_with_vertical_offset(y_offset));
+            output[c][c-1] = Some(Glyph::red_square_with_vertical_offset(y_offset + 1.0));
         } else {
-            return vec![vec![Glyph::red_square_with_horizontal_offset(0.0)]];
+            output[c][c] = Some(Glyph::red_square_with_horizontal_offset(0.0));
         }
+        return output;
     }
 
     fn get_buffered_glyph(&self, pos: Point2<i32>) -> &Glyph {
