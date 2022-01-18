@@ -17,12 +17,13 @@ use termion::raw::IntoRawMode;
 
 // const player_jump_height: i32 = 3;
 // const player_jump_hang_frames: i32 = 4;
-const MAX_FPS: i32 = 15; // frames per second
+const MAX_FPS: i32 = 60; // frames per second
 const IDEAL_FRAME_DURATION_MS: u128 = (1000.0 / MAX_FPS as f32) as u128;
 
 // a block every two ticks
 const PLAYER_DEFAULT_MAX_SPEED_BPS: f32 = 30.0; // blocks per second
 const PLAYER_DEFAULT_MAX_SPEED_BPF: f32 = PLAYER_DEFAULT_MAX_SPEED_BPS / MAX_FPS as f32; // blocks per frame
+const DEFAULT_PLAYER_JUMP_DELTA_V: f32 = 1.0;
 const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
 const DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION: f32 = 1.0;
 const DEFAULT_PLAYER_COYOTE_TIME_DURATION_S: f32 = 0.2;
@@ -72,12 +73,10 @@ struct MovecastCollision {
     normal: Vector2<i32>,
 }
 
-struct Player {}
-
 enum ColorName {
     Red,
     Black,
-    White,
+    // White,
     Reset,
 }
 
@@ -121,7 +120,7 @@ impl Glyph {
     fn fg_color_from_name(color_name: ColorName) -> String {
         match color_name {
             ColorName::Red => color::Fg(color::Red).to_string(),
-            ColorName::White => color::Fg(color::White).to_string(),
+            // ColorName::White => color::Fg(color::White).to_string(),
             ColorName::Black => color::Fg(color::Black).to_string(),
             ColorName::Reset => color::Fg(color::Reset).to_string(),
         }
@@ -130,26 +129,42 @@ impl Glyph {
     fn bg_color_from_name(color_name: ColorName) -> String {
         match color_name {
             ColorName::Red => color::Bg(color::Red).to_string(),
-            ColorName::White => color::Bg(color::White).to_string(),
+            // ColorName::White => color::Bg(color::White).to_string(),
             ColorName::Black => color::Bg(color::Black).to_string(),
             ColorName::Reset => color::Bg(color::Reset).to_string(),
         }
     }
-    fn red_square_with_offset(fraction_of_square_offset: f32) -> Glyph {
-        let offset_in_eighths_rounded_towards_inf =
-            (fraction_of_square_offset * 8.0).ceil() as i32;
+    fn red_square_with_horizontal_offset(fraction_of_square_offset: f32) -> Glyph {
+        let offset_in_eighths_rounded_towards_inf = (fraction_of_square_offset * 8.0).ceil() as i32;
         assert!(offset_in_eighths_rounded_towards_inf.abs() <= 8);
         if offset_in_eighths_rounded_towards_inf <= 0 {
             return Glyph {
                 character: EIGHTH_BLOCKS_FROM_LEFT
-                    [(8+offset_in_eighths_rounded_towards_inf) as usize],
+                    [(8 + offset_in_eighths_rounded_towards_inf) as usize],
                 fg_color: Some(Glyph::fg_color_from_name(ColorName::Red)),
                 bg_color: Some(Glyph::bg_color_from_name(ColorName::Black)),
             };
         } else {
             return Glyph {
-                character: EIGHTH_BLOCKS_FROM_LEFT
-                    [offset_in_eighths_rounded_towards_inf as usize],
+                character: EIGHTH_BLOCKS_FROM_LEFT[offset_in_eighths_rounded_towards_inf as usize],
+                fg_color: Some(Glyph::fg_color_from_name(ColorName::Black)),
+                bg_color: Some(Glyph::bg_color_from_name(ColorName::Red)),
+            };
+        }
+    }
+    fn red_square_with_vertical_offset(fraction_of_square_offset: f32) -> Glyph {
+        let offset_in_eighths_rounded_towards_inf = (fraction_of_square_offset * 8.0).ceil() as i32;
+        assert!(offset_in_eighths_rounded_towards_inf.abs() <= 8);
+        if offset_in_eighths_rounded_towards_inf <= 0 {
+            return Glyph {
+                character: EIGHTH_BLOCKS_FROM_BOTTOM
+                    [(8 + offset_in_eighths_rounded_towards_inf) as usize],
+                fg_color: Some(Glyph::fg_color_from_name(ColorName::Red)),
+                bg_color: Some(Glyph::bg_color_from_name(ColorName::Black)),
+            };
+        } else {
+            return Glyph {
+                character: EIGHTH_BLOCKS_FROM_BOTTOM[(offset_in_eighths_rounded_towards_inf) as usize],
                 fg_color: Some(Glyph::fg_color_from_name(ColorName::Black)),
                 bg_color: Some(Glyph::bg_color_from_name(ColorName::Red)),
             };
@@ -172,6 +187,7 @@ struct Game {
     player_vel_bpf: Vector2<f32>,
     player_desired_x_direction: i32,
     player_accumulated_pos_err: Vector2<f32>, // speed can be a float
+    player_jump_delta_v: f32,
     player_acceleration_from_gravity: f32,
     player_acceleration_from_traction: f32,
     player_remaining_coyote_frames: i32,
@@ -194,6 +210,7 @@ impl Game {
             player_vel_bpf: Vector2::<f32>::new(0.0, 0.0),
             player_desired_x_direction: 0,
             player_accumulated_pos_err: Vector2::<f32>::new(0.0, 0.0),
+            player_jump_delta_v: DEFAULT_PLAYER_JUMP_DELTA_V,
             player_acceleration_from_gravity: DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
             player_acceleration_from_traction: DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION,
             player_remaining_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
@@ -254,12 +271,11 @@ impl Game {
     }
     // When The player presses the jump button
     fn player_jump(&mut self) {
-        let jump_delta_v = 1.0;
         if self.player_is_grabbing_wall() {
-            self.player_vel_bpf.x += jump_delta_v * -self.player_wall_grab_direction() as f32;
+            self.player_vel_bpf.x += self.player_jump_delta_v * -self.player_wall_grab_direction() as f32;
             self.player_desired_x_direction *= -1;
         }
-        self.player_vel_bpf.y = jump_delta_v;
+        self.player_vel_bpf.y = self.player_jump_delta_v;
     }
     fn player_jump_if_possible(&mut self) {
         if self.player_is_supported() || self.player_is_grabbing_wall() {
@@ -336,27 +352,48 @@ impl Game {
         } else {
             x_offset = 0;
         }
+        let y_offset;
+        if self.player_accumulated_pos_err.y < 0.0 {
+            y_offset = -1;
+        } else {
+            y_offset = 0;
+        }
 
         for i in 0..player_glyphs.len() {
-            let x = self.player_pos.x + i as i32 + x_offset;
-            let y = self.player_pos.y;
-            if self.in_world(point![x, y]) {
-                self.output_buffer[x as usize][y as usize] = player_glyphs[i].clone();
+            for j in 0..player_glyphs[i].len() {
+                let x = self.player_pos.x + i as i32 + x_offset;
+                let y = self.player_pos.y + j as i32 + y_offset;
+                if self.in_world(point![x, y]) {
+                    self.output_buffer[x as usize][y as usize] = player_glyphs[i][j].clone();
+                }
             }
         }
     }
-    fn get_player_glyphs(&self) -> Vec<Glyph> {
-        let offset = self.player_accumulated_pos_err.x;
-        if offset < 0.0 {
+    fn get_player_glyphs(&self) -> Vec<Vec<Glyph>> {
+        let x_offset = self.player_accumulated_pos_err.x;
+        let y_offset = self.player_accumulated_pos_err.y;
+        if x_offset < 0.0 {
             return vec![
-                Glyph::red_square_with_offset(offset+1.0),
-                Glyph::red_square_with_offset(offset),
+                vec![Glyph::red_square_with_horizontal_offset(x_offset + 1.0)],
+                vec![Glyph::red_square_with_horizontal_offset(x_offset)],
             ];
+        } else if x_offset > 0.0 {
+            return vec![
+                vec![Glyph::red_square_with_horizontal_offset(x_offset)],
+                vec![Glyph::red_square_with_horizontal_offset(x_offset - 1.0)],
+            ];
+        } else if y_offset > 0.0 {
+            return vec![vec![
+                Glyph::red_square_with_vertical_offset(y_offset),
+                Glyph::red_square_with_vertical_offset(y_offset - 1.0),
+            ]];
+        } else if y_offset < 0.0 {
+            return vec![vec![
+                Glyph::red_square_with_vertical_offset(y_offset + 1.0),
+                Glyph::red_square_with_vertical_offset(y_offset),
+            ]];
         } else {
-            return vec![
-                Glyph::red_square_with_offset(offset),
-                Glyph::red_square_with_offset(offset-1.0),
-            ];
+            return vec![vec![Glyph::red_square_with_horizontal_offset(0.0)]];
         }
     }
 
@@ -610,6 +647,11 @@ impl Game {
             && pos.y < self.terminal_size.1 as i32;
     }
     fn init_world(&mut self) {
+        self.player_jump_delta_v = 0.5;
+        self.player_acceleration_from_gravity = 0.01;
+        self.player_acceleration_from_traction = 0.1;
+        self.player_max_run_speed_bpf = 0.3;
+
         let bottom_left = (
             (self.terminal_size.0 / 5) as i32,
             (self.terminal_size.1 / 4) as i32,
@@ -628,9 +670,6 @@ impl Game {
             self.terminal_size.0 as i32 / 2,
             self.terminal_size.1 as i32 / 2,
         );
-
-        self.player_acceleration_from_traction = 0.3;
-        self.player_max_run_speed_bpf = 0.5
     }
 }
 
@@ -1094,11 +1133,36 @@ mod tests {
         assert!(right_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Red)));
         assert!(right_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Black)));
     }
-
-    #[ignore]
     #[test]
-    // At least when grabbing a wall, vertical subgrid positioning becomes a good idea
-    fn test_sub_glyph_positioning_on_vertical() {}
+    fn test_vertical_sub_glyph_positioning_upwards() {
+        let mut game = set_up_player_on_platform();
+        game.player_accumulated_pos_err.y = 0.5;
+        game.update_output_buffer();
+
+        let top_glyph = game.get_buffered_glyph(game.player_pos + v(0, 1));
+        let bottom_glyph = game.get_buffered_glyph(game.player_pos);
+        assert!(top_glyph.character == EIGHTH_BLOCKS_FROM_BOTTOM[4]);
+        assert!(top_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Red)));
+        assert!(top_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Black)));
+        assert!(bottom_glyph.character == EIGHTH_BLOCKS_FROM_BOTTOM[4]);
+        assert!(bottom_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Black)));
+        assert!(bottom_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Red)));
+    }
+    #[test]
+    fn test_vertical_sub_glyph_positioning_downwards() {
+        let mut game = set_up_player_on_platform();
+        game.player_accumulated_pos_err.y = -0.2;
+        game.update_output_buffer();
+
+        let top_glyph = game.get_buffered_glyph(game.player_pos);
+        let bottom_glyph = game.get_buffered_glyph(game.player_pos + v(0, -1));
+        assert!(top_glyph.character == EIGHTH_BLOCKS_FROM_BOTTOM[7]);
+        assert!(top_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Red)));
+        assert!(top_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Black)));
+        assert!(bottom_glyph.character == EIGHTH_BLOCKS_FROM_BOTTOM[7]);
+        assert!(bottom_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Black)));
+        assert!(bottom_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Red)));
+    }
 
     #[ignore]
     #[test]
