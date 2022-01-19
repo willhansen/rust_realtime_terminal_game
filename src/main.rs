@@ -205,11 +205,10 @@ struct Game {
     running: bool,         // set false to quit
     selected_block: Block, // What the mouse places
     player_alive: bool,
-    player_pos: Point2<i32>,
+    player_pos: Point2<f32>,
     player_max_run_speed_bpf: f32,
     player_vel_bpf: Vector2<f32>,
     player_desired_x_direction: i32,
-    player_accumulated_pos_err: Vector2<f32>, // speed can be a float
     player_jump_delta_v: f32,
     player_acceleration_from_gravity: f32,
     player_acceleration_from_traction: f32,
@@ -228,11 +227,10 @@ impl Game {
             running: true,
             selected_block: Block::Wall,
             player_alive: false,
-            player_pos: point![0, 0],
+            player_pos: point![0.0, 0.0],
             player_max_run_speed_bpf: PLAYER_DEFAULT_MAX_SPEED_BPF,
             player_vel_bpf: Vector2::<f32>::new(0.0, 0.0),
             player_desired_x_direction: 0,
-            player_accumulated_pos_err: Vector2::<f32>::new(0.0, 0.0),
             player_jump_delta_v: DEFAULT_PLAYER_JUMP_DELTA_V,
             player_acceleration_from_gravity: DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
             player_acceleration_from_traction: DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION,
@@ -257,6 +255,12 @@ impl Game {
             (self.terminal_size.1 as i32 - world_position.1) as u16,
         )
     }
+    fn snap_to_grid(&self, world_pos: Point2<f32>) -> Point2<i32> {
+        return point![world_pos.x.round() as i32, world_pos.y.round() as i32];
+    }
+    fn offset_from_grid(&self, world_pos: Point2<f32>) -> Vector2<f32> {
+        return world_pos - floatify_point(self.snap_to_grid(world_pos));
+    }
     fn get_block(&self, pos: Point2<i32>) -> Block {
         return self.grid[pos.x as usize][pos.y as usize];
     }
@@ -279,11 +283,12 @@ impl Game {
         self.grid = vec![vec![Block::Air; height as usize]; width as usize];
     }
 
-    fn place_player(&mut self, x: i32, y: i32) {
+    fn place_player(&mut self, x: f32, y: f32) {
         if self.player_alive {
             self.kill_player();
         }
-        self.grid[x as usize][y as usize] = Block::Player;
+        let grid_point = self.snap_to_grid(point![x, y]);
+        self.grid[grid_point.x as usize][grid_point.y as usize] = Block::Player;
         self.player_vel_bpf = vector![0.0, 0.0];
         self.player_desired_x_direction = 0;
         self.player_pos = point![x, y];
@@ -307,7 +312,6 @@ impl Game {
     fn player_set_desired_x_direction(&mut self, new_x_dir: i32) {
         if new_x_dir != self.player_desired_x_direction {
             self.player_desired_x_direction = new_x_dir.signum();
-            self.player_accumulated_pos_err.x = 0.0;
         }
     }
 
@@ -320,8 +324,8 @@ impl Game {
                 Key::Char('3') => self.selected_block = Block::Brick,
                 Key::Char('c') => self.clear(),
                 Key::Char('r') => self.place_player(
-                    self.terminal_size.0 as i32 / 2,
-                    self.terminal_size.1 as i32 / 2,
+                    self.terminal_size.0 as f32 / 2.0,
+                    self.terminal_size.1 as f32 / 2.0,
                 ),
                 Key::Char(' ') => self.player_jump_if_possible(),
                 Key::Char('a') | Key::Left => self.player_set_desired_x_direction(-1),
@@ -337,7 +341,7 @@ impl Game {
                 }
                 MouseEvent::Press(MouseButton::Right, term_x, term_y) => {
                     let (x, y) = self.screen_to_world(&(term_x, term_y));
-                    self.place_player(x, y);
+                    self.place_player(x as f32, y as f32);
                 }
                 MouseEvent::Hold(term_x, term_y) => {
                     let (x, y) = self.screen_to_world(&(term_x, term_y));
@@ -367,12 +371,13 @@ impl Game {
         }
 
         let player_glyphs = self.get_player_glyphs();
+        let grid_pos = self.snap_to_grid(self.player_pos);
 
         for i in 0..player_glyphs.len() {
             for j in 0..player_glyphs[i].len() {
                 if let Some(glyph) = player_glyphs[i][j].clone() {
-                    let x = self.player_pos.x - 1 + i as i32;
-                    let y = self.player_pos.y - 1 + j as i32;
+                    let x = grid_pos.x - 1 + i as i32;
+                    let y = grid_pos.y - 1 + j as i32;
                     if self.in_world(point![x, y]) {
                         self.output_buffer[x as usize][y as usize] = glyph;
                     }
@@ -386,9 +391,10 @@ impl Game {
 
         let c = width / 2 as usize;
 
-        let x_offset = self.player_accumulated_pos_err.x;
-        let y_offset = self.player_accumulated_pos_err.y;
-        let offset_dir = signum(self.player_accumulated_pos_err);
+        let grid_offset = self.offset_from_grid(self.player_pos);
+        let x_offset = grid_offset.x;
+        let y_offset = grid_offset.y;
+        let offset_dir = signum(grid_offset);
         if y_offset == 0.0 {
             for i in 0..3 {
                 let x = i as i32 - 1;
@@ -414,7 +420,7 @@ impl Game {
                     let square = vector![x as f32, y as f32];
                     if !(-offset_dir.x == x) && !(-offset_dir.y == y) {
                         let glyph = Glyph::red_square_with_half_step_offset(
-                            self.player_accumulated_pos_err - square,
+                            self.offset_from_grid(self.player_pos) - square,
                         );
                         if glyph.character != ' ' {
                             output[i][j] = Some(glyph);
@@ -473,14 +479,14 @@ impl Game {
         }
     }
 
-    fn move_player_to(&mut self, pos: Point2<i32>) {
-        self.set_block(self.player_pos, Block::Air);
-        self.set_block(pos, Block::Player);
+    fn move_player_to(&mut self, pos: Point2<f32>) {
+        self.set_block(self.snap_to_grid(self.player_pos), Block::Air);
+        self.set_block(self.snap_to_grid(pos), Block::Player);
         self.player_pos = pos;
     }
 
     fn kill_player(&mut self) {
-        self.set_block(self.player_pos, Block::Air);
+        self.set_block(self.snap_to_grid(self.player_pos), Block::Air);
         self.player_alive = false;
     }
 
@@ -547,7 +553,7 @@ impl Game {
         }
 
         if end_x_vel == 0.0 {
-            self.player_accumulated_pos_err.x = 0.0; // TODO: double check this
+            self.player_pos.x = self.snap_to_grid(self.player_pos).x as f32; // TODO: double check this
         }
         self.player_vel_bpf.x = end_x_vel;
     }
@@ -563,24 +569,25 @@ impl Game {
         // instant acceleration
         // self.player_x_vel_bpf = self.player_max_run_speed_bpf * x_dir as f32;
 
-        let ideal_step: Vector2<f32> = self.player_vel_bpf + self.player_accumulated_pos_err;
+        let ideal_new_pos = self.player_pos + self.player_vel_bpf;
+        let ideal_step: Vector2<f32> = self.player_vel_bpf;
         let attempted_step: Vector2<i32> = round(ideal_step);
-        self.player_accumulated_pos_err = fract(ideal_step);
+        let start_square = self.snap_to_grid(self.player_pos);
 
-        let target = self.player_pos + attempted_step;
+        let target = self.snap_to_grid(self.player_pos) + attempted_step;
 
         let step_taken: Vector2<i32>;
         // need to check intermediate blocks for being clear
-        if let Some(collision) = self.movecast(self.player_pos, target) {
-            step_taken = collision.pos - self.player_pos;
-            self.move_player_to(collision.pos);
+        if let Some(collision) = self.movecast(start_square, target) {
+            step_taken = collision.pos - start_square;
+            self.move_player_to(floatify_point(collision.pos));
             if collision.normal.x != 0 {
                 // hit an obstacle and lose velocity
-                self.player_accumulated_pos_err.x = 0.0;
+                self.player_pos.x = self.snap_to_grid(self.player_pos).x as f32;
                 self.player_vel_bpf.x = 0.0;
             }
             if collision.normal.y != 0 {
-                self.player_accumulated_pos_err.y = 0.0;
+                self.player_pos.y = self.snap_to_grid(self.player_pos).y as f32;
                 self.player_vel_bpf.y = 0.0;
             }
         } else {
@@ -590,8 +597,8 @@ impl Game {
                 return;
             } else {
                 // no collision, and in world
-                step_taken = target - self.player_pos;
-                self.move_player_to(target);
+                step_taken = target - start_square;
+                self.move_player_to(floatify_point(target));
             }
         }
 
@@ -662,7 +669,7 @@ impl Game {
     }
 
     fn get_block_relative_to_player(&self, rel_pos: Vector2<i32>) -> Option<Block> {
-        let target_pos = self.player_pos + rel_pos;
+        let target_pos = self.snap_to_grid(self.player_pos) + rel_pos;
         if self.player_alive && self.in_world(target_pos) {
             return Some(self.get_block(target_pos));
         }
@@ -696,8 +703,8 @@ impl Game {
             Block::Wall,
         );
         self.place_player(
-            self.terminal_size.0 as i32 / 2,
-            self.terminal_size.1 as i32 / 2,
+            self.terminal_size.0 as f32 / 2.0,
+            self.terminal_size.1 as f32 / 2.0,
         );
     }
 }
@@ -759,6 +766,13 @@ fn round(vec: Vector2<f32>) -> Vector2<i32> {
     return Vector2::<i32>::new(vec.x.round() as i32, vec.y.round() as i32);
 }
 
+fn floatify_vector(vec: Vector2<i32>) -> Vector2<f32> {
+    return Vector2::<f32>::new(vec.x as f32, vec.y as f32);
+}
+fn floatify_point(vec: Point2<i32>) -> Point2<f32> {
+    return Point2::<f32>::new(vec.x as f32, vec.y as f32);
+}
+
 fn fract(vec: Vector2<f32>) -> Vector2<f32> {
     return Vector2::<f32>::new(vec.x.fract(), vec.y.fract());
 }
@@ -778,8 +792,11 @@ where
 mod tests {
     use super::*;
     use assert2::assert;
-    fn p(x: i32, y: i32) -> Point2<i32> {
-        return point![x, y];
+    fn p<T: 'static>(x: T, y: T) -> Point2<T>
+    where
+        T: Clone + std::cmp::PartialEq + std::fmt::Debug,
+    {
+        return Point2::<T>::new(x, y);
     }
     fn v<T>(x: T, y: T) -> Vector2<T> {
         return vector![x, y];
@@ -787,7 +804,7 @@ mod tests {
 
     fn set_up_just_player() -> Game {
         let mut game = Game::new(30, 30);
-        game.place_player(15, 11);
+        game.place_player(15.0, 11.0);
         return game;
     }
 
@@ -825,7 +842,7 @@ mod tests {
     fn test_place_player() {
         let mut game = Game::new(30, 30);
         // TODO: should these be variables?  Or should I just hardcode them?
-        let (x1, y1, x2, y2) = (15, 11, 12, 5);
+        let (x1, y1, x2, y2) = (15.0, 11.0, 12.0, 5.0);
         assert!(game.player_alive == false);
         game.place_player(x1, y1);
 
@@ -843,7 +860,7 @@ mod tests {
     #[test]
     fn test_player_dies_when_falling_off_screen() {
         let mut game = Game::new(30, 30);
-        game.place_player(15, 0);
+        game.place_player(15.0, 0.0);
         game.player_acceleration_from_gravity = 1.0;
         game.player_remaining_coyote_frames = 0;
         game.tick_physics();
@@ -890,9 +907,7 @@ mod tests {
 
     #[test]
     fn test_movecast_ignore_player() {
-        let mut game = Game::new(30, 30);
-        game.draw_line((10, 10), (20, 10), Block::Wall);
-        game.place_player(15, 11);
+        let mut game = set_up_player_on_platform();
 
         assert!(game.movecast(p(15, 11), p(15, 13)) == None);
     }
@@ -908,19 +923,17 @@ mod tests {
 
     #[test]
     fn test_move_player() {
-        let mut game = Game::new(30, 30);
-        game.draw_line((10, 10), (20, 10), Block::Wall);
-        game.place_player(15, 11);
+        let mut game = set_up_player_on_platform();
         game.player_max_run_speed_bpf = 1.0;
         game.player_desired_x_direction = 1;
 
         game.tick_physics();
 
-        assert!(game.player_pos == p(16, 11));
+        assert!(game.player_pos == p(16.0, 11.0));
         assert!(game.grid[15][11] == Block::Air);
         assert!(game.grid[16][11] == Block::Player);
 
-        game.place_player(15, 11);
+        game.place_player(15.0, 11.0);
         assert!(game.player_desired_x_direction == 0);
         game.player_desired_x_direction = -1;
 
@@ -929,20 +942,18 @@ mod tests {
 
         assert!(game.grid[15][11] == Block::Air);
         assert!(game.grid[13][11] == Block::Player);
-        assert!(game.player_pos == p(13, 11));
+        assert!(game.player_pos == p(13.0, 11.0));
     }
     #[test]
     fn test_stop_on_collision() {
-        let mut game = Game::new(30, 30);
-        game.draw_line((10, 10), (20, 10), Block::Wall);
+        let mut game = set_up_player_on_platform();
         game.draw_point((16, 11), Block::Wall);
-        game.place_player(15, 11);
         game.player_max_run_speed_bpf = 1.0;
         game.player_desired_x_direction = 1;
 
         game.tick_physics();
 
-        assert!(game.player_pos == p(15, 11));
+        assert!(game.player_pos == p(15.0, 11.0));
         assert!(game.grid[16][11] == Block::Wall);
         assert!(game.grid[15][11] == Block::Player);
         assert!(game.player_vel_bpf.x == 0.0);
@@ -950,46 +961,40 @@ mod tests {
 
     #[test]
     fn test_move_player_slowly() {
-        let mut game = Game::new(30, 30);
-        game.draw_line((10, 10), (20, 10), Block::Wall);
-        game.place_player(15, 11);
+        let mut game = set_up_player_on_platform();
         game.player_max_run_speed_bpf = 0.49;
         game.player_desired_x_direction = 1;
 
         game.tick_physics();
 
-        assert!(game.player_pos == p(15, 11));
+        assert!(game.player_pos == p(15.0, 11.0));
 
         game.tick_physics();
 
-        assert!(game.player_pos == p(16, 11));
+        assert!(game.player_pos == p(16.0, 11.0));
     }
     #[test]
     fn test_move_player_quickly() {
-        let mut game = Game::new(30, 30);
-        game.draw_line((10, 10), (20, 10), Block::Wall);
-        game.place_player(15, 11);
+        let mut game = set_up_player_on_platform();
         game.player_max_run_speed_bpf = 2.0;
         game.player_desired_x_direction = 1;
 
         game.tick_physics();
         game.tick_physics();
-        assert!(game.player_pos.x > 17);
+        assert!(game.player_pos.x > 17.0);
         game.tick_physics();
-        assert!(game.player_pos.x > 19);
+        assert!(game.player_pos.x > 19.0);
     }
     #[test]
     fn test_fast_player_collision_between_frames() {
-        let mut game = Game::new(30, 30);
-        game.draw_line((10, 10), (20, 10), Block::Wall);
+        let mut game = set_up_player_on_platform();
         // Player should not teleport through this block
         game.draw_point((16, 11), Block::Wall);
-        game.place_player(15, 11);
         game.player_max_run_speed_bpf = 2.0;
         game.player_desired_x_direction = 1;
 
         game.tick_physics();
-        assert!(game.player_pos == p(15, 11));
+        assert!(game.player_pos == p(15.0, 11.0));
         assert!(game.player_vel_bpf.x == 0.0);
     }
     #[test]
@@ -1004,13 +1009,24 @@ mod tests {
     #[test]
     fn test_player_gravity() {
         let mut game = Game::new(30, 30);
-        game.place_player(15, 11);
+        game.place_player(15.0, 11.0);
         game.player_acceleration_from_gravity = 1.0;
         game.player_remaining_coyote_frames = 0;
 
         game.tick_physics();
 
-        assert!(game.player_pos.y < 11);
+        assert!(game.player_pos.y < 11.0);
+    }
+    #[test]
+    fn test_land_after_jump() {
+        let mut game = set_up_player_on_platform();
+        let start_pos = game.player_pos;
+
+        game.player_jump();
+        for _ in 0..50 {
+            game.tick_physics();
+        }
+        assert!(game.player_pos.y == start_pos.y);
     }
 
     #[test]
@@ -1019,7 +1035,7 @@ mod tests {
         game.draw_line((10, 10), (20, 10), Block::Wall);
         game.draw_line((14, 10), (14, 20), Block::Wall);
 
-        game.place_player(15, 11);
+        game.place_player(15.0, 11.0);
         game.player_vel_bpf = v(-2.0, 2.0);
         game.tick_physics();
         assert!(game.player_vel_bpf.x == 0.0);
@@ -1051,7 +1067,7 @@ mod tests {
         let mut game = Game::new(30, 30);
         game.handle_input(Event::Key(Key::Char('r')));
         assert!(game.player_alive);
-        assert!(game.player_pos == p(15, 15));
+        assert!(game.player_pos == p(15.0, 15.0));
     }
 
     #[test]
@@ -1087,8 +1103,7 @@ mod tests {
 
     #[test]
     fn test_coyote_frames() {
-        let mut game = Game::new(30, 30);
-        game.place_player(15, 11);
+        let mut game = set_up_just_player();
         let start_pos = game.player_pos;
         game.player_acceleration_from_gravity = 1.0;
         game.player_max_coyote_frames = 1;
@@ -1129,9 +1144,13 @@ mod tests {
     fn test_draw_to_output_buffer() {
         let mut game = set_up_player_on_platform();
         game.update_output_buffer();
-        assert!(game.get_buffered_glyph(game.player_pos).character == EIGHTH_BLOCKS_FROM_LEFT[8]);
         assert!(
-            game.get_buffered_glyph(game.player_pos + v(0, -1))
+            game.get_buffered_glyph(game.snap_to_grid(game.player_pos))
+                .character
+                == EIGHTH_BLOCKS_FROM_LEFT[8]
+        );
+        assert!(
+            game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(0.0, -1.0)))
                 .character
                 == Block::Wall.glyph()
         );
@@ -1140,10 +1159,10 @@ mod tests {
     #[test]
     fn test_horizontal_sub_glyph_positioning_on_right_rounding_up() {
         let mut game = set_up_player_on_platform();
-        game.player_accumulated_pos_err.x = 0.5;
+        game.player_pos.x += 0.5;
         game.update_output_buffer();
-        let left_glyph = game.get_buffered_glyph(game.player_pos);
-        let right_glyph = game.get_buffered_glyph(game.player_pos + v(1, 0));
+        let left_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos));
+        let right_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(1.0, 0.0)));
         assert!(left_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
         assert!(left_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Black)));
         assert!(left_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Red)));
@@ -1155,54 +1174,54 @@ mod tests {
     #[test]
     fn test_horizontal_sub_glyph_positioning_on_right_below_rounding_point() {
         let mut game = set_up_player_on_platform();
-        game.player_accumulated_pos_err.x = 0.49;
+        game.player_pos.x += 0.49;
         game.update_output_buffer();
-        let left_glyph = game.get_buffered_glyph(game.player_pos);
-        let right_glyph = game.get_buffered_glyph(game.player_pos + v(1, 0));
+        let left_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos));
+        let right_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(1.0, 0.0)));
         assert!(left_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
         assert!(right_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
     }
     #[test]
     fn test_horizontal_sub_glyph_positioning_on_left() {
         let mut game = set_up_player_on_platform();
-        game.player_accumulated_pos_err.x = -0.2;
+        game.player_pos.x += -0.2;
         game.update_output_buffer();
 
-        let left_glyph = game.get_buffered_glyph(game.player_pos + v(-1, 0));
-        let right_glyph = game.get_buffered_glyph(game.player_pos);
+        let left_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(-1.0, 0.0)));
+        let right_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos));
         assert!(left_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[7]);
         assert!(right_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[7]);
     }
     #[test]
     fn test_horizontal_sub_glyph_positioning_on_left_above_rounding_point() {
         let mut game = set_up_player_on_platform();
-        game.player_accumulated_pos_err.x = -0.49;
+        game.player_pos.x += -0.49;
         game.update_output_buffer();
 
-        let left_glyph = game.get_buffered_glyph(game.player_pos + v(-1, 0));
-        let right_glyph = game.get_buffered_glyph(game.player_pos);
+        let left_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(-1.0, 0.0)));
+        let right_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos));
         assert!(left_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[5]);
         assert!(right_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[5]);
     }
     #[test]
     fn test_horizontal_sub_glyph_positioning_on_left_rounding_down() {
         let mut game = set_up_player_on_platform();
-        game.player_accumulated_pos_err.x = -0.5;
+        game.player_pos.x += -0.5;
         game.update_output_buffer();
 
-        let left_glyph = game.get_buffered_glyph(game.player_pos + v(-1, 0));
-        let right_glyph = game.get_buffered_glyph(game.player_pos);
+        let left_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(-1.0, 0.0)));
+        let right_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos));
         assert!(left_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
         assert!(right_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
     }
     #[test]
     fn test_vertical_sub_glyph_positioning_upwards() {
         let mut game = set_up_player_on_platform();
-        game.player_accumulated_pos_err.y = 0.5;
+        game.player_pos.y += 0.5;
         game.update_output_buffer();
 
-        let top_glyph = game.get_buffered_glyph(game.player_pos + v(0, 1));
-        let bottom_glyph = game.get_buffered_glyph(game.player_pos);
+        let top_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(0.0, 1.0)));
+        let bottom_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos));
         assert!(top_glyph.character == EIGHTH_BLOCKS_FROM_BOTTOM[4]);
         assert!(top_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Red)));
         assert!(top_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Black)));
@@ -1213,11 +1232,12 @@ mod tests {
     #[test]
     fn test_vertical_sub_glyph_positioning_downwards() {
         let mut game = set_up_player_on_platform();
-        game.player_accumulated_pos_err.y = -0.2;
+        game.player_pos.y += -0.2;
         game.update_output_buffer();
 
-        let top_glyph = game.get_buffered_glyph(game.player_pos);
-        let bottom_glyph = game.get_buffered_glyph(game.player_pos + v(0, -1));
+        let top_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos));
+        let bottom_glyph =
+            game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(0.0, -1.0)));
         assert!(top_glyph.character == EIGHTH_BLOCKS_FROM_BOTTOM[7]);
         assert!(top_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Red)));
         assert!(top_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Black)));
@@ -1261,36 +1281,51 @@ mod tests {
         );
     }
     #[test]
-    fn test_player_glyph_generation_for_dual_axis_non_alignment() {
+    fn test_player_glyph_when_rounding_to_zero_for_both_axes() {
         let mut game = set_up_just_player();
-        game.player_accumulated_pos_err = v(0.1, 0.1);
+        game.player_pos += v(0.1, 0.1);
         let glyphs = game.get_player_glyphs();
         assert!(glyphs[2][2] == None);
         assert!(glyphs[1][1].clone().unwrap().character == quarter_block_by_offset((0, 0)));
-
-        game.player_accumulated_pos_err = v(0.3, 0.1);
+    }
+    #[test]
+    fn test_player_glyphs_when_rounding_to_zero_for_x_and_half_step_for_y() {
+        let mut game = set_up_just_player();
+        game.player_pos += v(0.3, 0.1);
         let glyphs = game.get_player_glyphs();
         assert!(glyphs[2][2] == None);
         assert!(glyphs[1][1].clone().unwrap().character == quarter_block_by_offset((1, 0)));
         assert!(glyphs[1][2].clone().unwrap().character == quarter_block_by_offset((-1, 0)));
+    }
 
-        game.player_accumulated_pos_err = v(0.3, 0.4);
+    #[test]
+    fn test_player_glyphs_for_half_step_up_and_right() {
+        let mut game = set_up_just_player();
+        game.player_pos += v(0.3, 0.4);
         let glyphs = game.get_player_glyphs();
         assert!(glyphs[0][0] == None);
         assert!(glyphs[1][1].clone().unwrap().character == quarter_block_by_offset((1, 1)));
         assert!(glyphs[1][2].clone().unwrap().character == quarter_block_by_offset((-1, 1)));
         assert!(glyphs[2][1].clone().unwrap().character == quarter_block_by_offset((1, -1)));
         assert!(glyphs[2][2].clone().unwrap().character == quarter_block_by_offset((-1, -1)));
+    }
 
-        game.player_accumulated_pos_err = v(-0.26, -0.4999);
+    #[test]
+    fn test_player_glyphs_for_half_step_down_and_left() {
+        let mut game = set_up_just_player();
+        game.player_pos += v(-0.26, -0.4999);
         let glyphs = game.get_player_glyphs();
         assert!(glyphs[2][1] == None);
         assert!(glyphs[0][0].clone().unwrap().character == quarter_block_by_offset((1, 1)));
         assert!(glyphs[0][1].clone().unwrap().character == quarter_block_by_offset((-1, 1)));
         assert!(glyphs[1][0].clone().unwrap().character == quarter_block_by_offset((1, -1)));
         assert!(glyphs[1][1].clone().unwrap().character == quarter_block_by_offset((-1, -1)));
+    }
 
-        game.player_accumulated_pos_err = v(0.26, -0.499);
+    #[test]
+    fn test_player_glyphs_for_half_step_down_and_right() {
+        let mut game = set_up_just_player();
+        game.player_pos += v(0.26, -0.499);
         let glyphs = game.get_player_glyphs();
         assert!(glyphs[0][1] == None);
         assert!(glyphs[1][0].clone().unwrap().character == quarter_block_by_offset((1, 1)));
@@ -1304,11 +1339,13 @@ mod tests {
     fn test_off_alignment_player_coarse_rendering_given_slight_offset() {
         let mut game = set_up_player_on_platform();
 
-        game.player_accumulated_pos_err = v(0.1, 0.6);
+        game.player_pos += v(0.1, 0.6);
         game.update_output_buffer();
         let player_half_step = v(0, 1);
-        let top_glyph = game.get_buffered_glyph(game.player_pos + player_half_step);
-        let bottom_glyph = game.get_buffered_glyph(game.player_pos);
+        let top_glyph = game.get_buffered_glyph(
+            game.snap_to_grid(game.player_pos + floatify_vector(player_half_step)),
+        );
+        let bottom_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos));
         assert!(top_glyph.character == quarter_block_by_offset(tuple(-player_half_step)));
         assert!(top_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Red)));
         assert!(top_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Black)));
@@ -1321,12 +1358,15 @@ mod tests {
     fn test_off_alignment_player_coarse_rendering_given_diagonal_offset() {
         let mut game = set_up_just_player();
 
-        game.player_accumulated_pos_err = v(0.8, -0.6);
+        game.player_pos += v(0.8, -0.6);
         game.update_output_buffer();
-        let top_left_glyph = game.get_buffered_glyph(game.player_pos);
-        let top_right_glyph = game.get_buffered_glyph(game.player_pos + v(1, 0));
-        let bottom_left_glyph = game.get_buffered_glyph(game.player_pos + v(0, -1));
-        let bottom_right_glyph = game.get_buffered_glyph(game.player_pos + v(1, -1));
+        let top_left_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos));
+        let top_right_glyph =
+            game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(1.0, 0.0)));
+        let bottom_left_glyph =
+            game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(0.0, -1.0)));
+        let bottom_right_glyph =
+            game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(1.0, -1.0)));
 
         assert!(top_left_glyph.character == quarter_block_by_offset((1, -1)));
         assert!(top_right_glyph.character == quarter_block_by_offset((-1, -1)));
