@@ -255,11 +255,11 @@ impl Game {
             (self.terminal_size.1 as i32 - world_position.1) as u16,
         )
     }
-    fn snap_to_grid(&self, world_pos: Point2<f32>) -> Point2<i32> {
+    fn snap_to_grid(world_pos: Point2<f32>) -> Point2<i32> {
         return point![world_pos.x.round() as i32, world_pos.y.round() as i32];
     }
-    fn offset_from_grid(&self, world_pos: Point2<f32>) -> Vector2<f32> {
-        return world_pos - floatify_point(self.snap_to_grid(world_pos));
+    fn offset_from_grid(world_pos: Point2<f32>) -> Vector2<f32> {
+        return world_pos - floatify_point(Game::snap_to_grid(world_pos));
     }
     fn get_block(&self, pos: Point2<i32>) -> Block {
         return self.grid[pos.x as usize][pos.y as usize];
@@ -287,7 +287,7 @@ impl Game {
         if self.player_alive {
             self.kill_player();
         }
-        let grid_point = self.snap_to_grid(point![x, y]);
+        let grid_point = Game::snap_to_grid(point![x, y]);
         self.grid[grid_point.x as usize][grid_point.y as usize] = Block::Player;
         self.player_vel_bpf = vector![0.0, 0.0];
         self.player_desired_x_direction = 0;
@@ -311,7 +311,7 @@ impl Game {
 
     fn player_set_desired_x_direction(&mut self, new_x_dir: i32) {
         if new_x_dir != self.player_desired_x_direction {
-            self.player_desired_x_direction = new_x_dir.signum();
+            self.player_desired_x_direction = new_x_dir.sign();
         }
     }
 
@@ -371,7 +371,7 @@ impl Game {
         }
 
         let player_glyphs = self.get_player_glyphs();
-        let grid_pos = self.snap_to_grid(self.player_pos);
+        let grid_pos = Game::snap_to_grid(self.player_pos);
 
         for i in 0..player_glyphs.len() {
             for j in 0..player_glyphs[i].len() {
@@ -391,10 +391,10 @@ impl Game {
 
         let c = width / 2 as usize;
 
-        let grid_offset = self.offset_from_grid(self.player_pos);
+        let grid_offset = Game::offset_from_grid(self.player_pos);
         let x_offset = grid_offset.x;
         let y_offset = grid_offset.y;
-        let offset_dir = signum(grid_offset);
+        let offset_dir = round(sign(grid_offset));
         if y_offset == 0.0 {
             for i in 0..3 {
                 let x = i as i32 - 1;
@@ -420,7 +420,7 @@ impl Game {
                     let square = vector![x as f32, y as f32];
                     if !(-offset_dir.x == x) && !(-offset_dir.y == y) {
                         let glyph = Glyph::red_square_with_half_step_offset(
-                            self.offset_from_grid(self.player_pos) - square,
+                            Game::offset_from_grid(self.player_pos) - square,
                         );
                         if glyph.character != ' ' {
                             output[i][j] = Some(glyph);
@@ -480,20 +480,20 @@ impl Game {
     }
 
     fn move_player_to(&mut self, pos: Point2<f32>) {
-        self.set_block(self.snap_to_grid(self.player_pos), Block::Air);
-        self.set_block(self.snap_to_grid(pos), Block::Player);
+        self.set_block(Game::snap_to_grid(self.player_pos), Block::Air);
+        self.set_block(Game::snap_to_grid(pos), Block::Player);
         self.player_pos = pos;
     }
 
     fn kill_player(&mut self) {
-        self.set_block(self.snap_to_grid(self.player_pos), Block::Air);
+        self.set_block(Game::snap_to_grid(self.player_pos), Block::Air);
         self.player_alive = false;
     }
 
     fn player_is_grabbing_wall(&self) -> bool {
         if self.player_desired_x_direction != 0 && self.player_vel_bpf.y <= 0.0 {
             if let Some(block) = self
-                .get_block_relative_to_player(vector![self.player_desired_x_direction.signum(), 0])
+                .get_block_relative_to_player(vector![self.player_desired_x_direction.sign(), 0])
             {
                 return block.wall_grabbable();
             }
@@ -503,14 +503,14 @@ impl Game {
     fn player_wall_grab_direction(&self) -> i32 {
         // TODO: is this good?
         if self.player_is_grabbing_wall() {
-            return self.player_desired_x_direction.signum();
+            return self.player_desired_x_direction.sign();
         } else {
             return 0;
         }
     }
 
     fn apply_player_acceleration_from_wall_friction(&mut self) {
-        let direction_of_acceleration = -self.player_vel_bpf.y.signum();
+        let direction_of_acceleration = -self.player_vel_bpf.y.sign();
         let delta_v = direction_of_acceleration * self.player_acceleration_from_traction;
         if delta_v.abs() > self.player_vel_bpf.y.abs() {
             self.player_vel_bpf.y = 0.0;
@@ -521,19 +521,19 @@ impl Game {
 
     fn apply_player_acceleration_from_floor_traction(&mut self) {
         let start_x_vel = self.player_vel_bpf.x;
-        let desired_acceleration_direction = self.player_desired_x_direction.signum();
+        let desired_acceleration_direction = self.player_desired_x_direction.sign();
 
         let trying_to_stop = desired_acceleration_direction == 0 && start_x_vel != 0.0;
         let started_above_max_speed = start_x_vel.abs() > self.player_max_run_speed_bpf;
 
         let real_acceleration_direction;
         if trying_to_stop || started_above_max_speed {
-            real_acceleration_direction = -start_x_vel.signum() as i32;
+            real_acceleration_direction = -start_x_vel.sign() as i32;
         } else {
             real_acceleration_direction = desired_acceleration_direction;
         }
         let delta_vx =
-            real_acceleration_direction.signum() as f32 * self.player_acceleration_from_traction;
+            real_acceleration_direction.sign() as f32 * self.player_acceleration_from_traction;
         let mut end_x_vel = self.player_vel_bpf.x + delta_vx;
         let changed_direction = start_x_vel * end_x_vel < 0.0;
 
@@ -541,19 +541,18 @@ impl Game {
             end_x_vel = 0.0;
         }
 
-        let want_to_go_faster =
-            start_x_vel.signum() == desired_acceleration_direction.signum() as f32;
+        let want_to_go_faster = start_x_vel.sign() == desired_acceleration_direction.sign() as f32;
         let ended_below_max_speed = end_x_vel.abs() < self.player_max_run_speed_bpf;
         if started_above_max_speed && ended_below_max_speed && want_to_go_faster {
-            end_x_vel = end_x_vel.signum() * self.player_max_run_speed_bpf;
+            end_x_vel = end_x_vel.sign() * self.player_max_run_speed_bpf;
         }
         // if want go fast, but starting less than max speed.  Can't go past max speed.
         if !started_above_max_speed && !ended_below_max_speed {
-            end_x_vel = end_x_vel.signum() * self.player_max_run_speed_bpf;
+            end_x_vel = end_x_vel.sign() * self.player_max_run_speed_bpf;
         }
 
         if end_x_vel == 0.0 {
-            self.player_pos.x = self.snap_to_grid(self.player_pos).x as f32; // TODO: double check this
+            self.player_pos.x = Game::snap_to_grid(self.player_pos).x as f32; // TODO: double check this
         }
         self.player_vel_bpf.x = end_x_vel;
     }
@@ -565,16 +564,16 @@ impl Game {
     fn apply_player_motion(&mut self) {
         self.update_player_acceleration();
 
-        // let x_dir: i32 = signum(self.player_desired_x_direction);
+        // let x_dir: i32 = sign(self.player_desired_x_direction);
         // instant acceleration
         // self.player_x_vel_bpf = self.player_max_run_speed_bpf * x_dir as f32;
 
         let ideal_new_pos = self.player_pos + self.player_vel_bpf;
         let ideal_step: Vector2<f32> = self.player_vel_bpf;
         let attempted_step: Vector2<i32> = round(ideal_step);
-        let start_square = self.snap_to_grid(self.player_pos);
+        let start_square = Game::snap_to_grid(self.player_pos);
 
-        let target = self.snap_to_grid(self.player_pos) + attempted_step;
+        let target = Game::snap_to_grid(self.player_pos) + attempted_step;
 
         let step_taken: Vector2<i32>;
         // need to check intermediate blocks for being clear
@@ -583,11 +582,11 @@ impl Game {
             self.move_player_to(floatify_point(collision.pos));
             if collision.normal.x != 0 {
                 // hit an obstacle and lose velocity
-                self.player_pos.x = self.snap_to_grid(self.player_pos).x as f32;
+                self.player_pos.x = Game::snap_to_grid(self.player_pos).x as f32;
                 self.player_vel_bpf.x = 0.0;
             }
             if collision.normal.y != 0 {
-                self.player_pos.y = self.snap_to_grid(self.player_pos).y as f32;
+                self.player_pos.y = Game::snap_to_grid(self.player_pos).y as f32;
                 self.player_vel_bpf.y = 0.0;
             }
         } else {
@@ -612,6 +611,21 @@ impl Game {
             self.player_remaining_coyote_frames -= 1;
         }
     }
+
+    fn grid_squares_overlapped_by_floating_unit_square(pos: Point2<f32>) -> Vec<Point2<i32>> {
+        let mut output = Vec::<Point2<i32>>::new();
+        let offset_direction = round(sign(Game::offset_from_grid(pos)));
+        for i in 0..3 {
+            for j in 0..3 {
+                let square = vector![i as i32 - 1, j as i32 - 1];
+                if square == offset_direction {
+                    output.push(Game::snap_to_grid(pos) + square);
+                }
+            }
+        }
+        return output;
+    }
+
     fn update_player_acceleration(&mut self) {
         if self.player_is_grabbing_wall() && self.player_vel_bpf.y <= 0.0 {
             self.apply_player_acceleration_from_wall_friction();
@@ -669,7 +683,7 @@ impl Game {
     }
 
     fn get_block_relative_to_player(&self, rel_pos: Vector2<i32>) -> Option<Block> {
-        let target_pos = self.snap_to_grid(self.player_pos) + rel_pos;
+        let target_pos = Game::snap_to_grid(self.player_pos) + rel_pos;
         if self.player_alive && self.in_world(target_pos) {
             return Some(self.get_block(target_pos));
         }
@@ -759,7 +773,7 @@ fn trunc(vec: Vector2<f32>) -> Vector2<i32> {
 }
 
 fn round_big(vec: Vector2<f32>) -> Vector2<f32> {
-    return Vector2::<f32>::new(vec.x + vec.x.signum(), vec.y + vec.y.signum());
+    return Vector2::<f32>::new(vec.x + vec.x.sign(), vec.y + vec.y.sign());
 }
 
 fn round(vec: Vector2<f32>) -> Vector2<i32> {
@@ -777,8 +791,28 @@ fn fract(vec: Vector2<f32>) -> Vector2<f32> {
     return Vector2::<f32>::new(vec.x.fract(), vec.y.fract());
 }
 
-fn signum(vec: Vector2<f32>) -> Vector2<i32> {
-    return Vector2::<i32>::new(vec.x.signum() as i32, vec.y.signum() as i32);
+fn sign<T>(vec: Vector2<T>) -> Vector2<T>
+where
+    T: SignedExt + Copy,
+{
+    return Vector2::<T>::new(vec[0].sign(), vec[1].sign());
+}
+
+trait SignedExt: num::Signed {
+    fn sign(&self) -> Self;
+}
+
+impl<T: num::Signed> SignedExt for T {
+    // I am so angry this is not built-in
+    fn sign(&self) -> T {
+        if *self == T::zero() {
+            return T::zero();
+        } else if self.is_negative() {
+            return -T::one();
+        } else {
+            return T::one();
+        }
+    }
 }
 
 fn tuple<T>(vec: Vector2<T>) -> (T, T)
@@ -963,15 +997,18 @@ mod tests {
     fn test_move_player_slowly() {
         let mut game = set_up_player_on_platform();
         game.player_max_run_speed_bpf = 0.49;
+        game.player_acceleration_from_traction = 999.9; // rilly fast
         game.player_desired_x_direction = 1;
 
         game.tick_physics();
 
-        assert!(game.player_pos == p(15.0, 11.0));
+        assert!(game.player_pos.x > 15.0);
+        assert!(game.player_pos.x < 15.5);
 
         game.tick_physics();
 
-        assert!(game.player_pos == p(16.0, 11.0));
+        assert!(game.player_pos.x > 15.5);
+        assert!(game.player_pos.x < 16.0);
     }
     #[test]
     fn test_move_player_quickly() {
@@ -1145,12 +1182,12 @@ mod tests {
         let mut game = set_up_player_on_platform();
         game.update_output_buffer();
         assert!(
-            game.get_buffered_glyph(game.snap_to_grid(game.player_pos))
+            game.get_buffered_glyph(Game::snap_to_grid(game.player_pos))
                 .character
                 == EIGHTH_BLOCKS_FROM_LEFT[8]
         );
         assert!(
-            game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(0.0, -1.0)))
+            game.get_buffered_glyph(Game::snap_to_grid(game.player_pos + v(0.0, -1.0)))
                 .character
                 == Block::Wall.glyph()
         );
@@ -1161,8 +1198,9 @@ mod tests {
         let mut game = set_up_player_on_platform();
         game.player_pos.x += 0.5;
         game.update_output_buffer();
-        let left_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos));
-        let right_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(1.0, 0.0)));
+        let left_glyph = game.get_buffered_glyph(Game::snap_to_grid(game.player_pos));
+        let right_glyph =
+            game.get_buffered_glyph(Game::snap_to_grid(game.player_pos + v(1.0, 0.0)));
         assert!(left_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
         assert!(left_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Black)));
         assert!(left_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Red)));
@@ -1176,8 +1214,9 @@ mod tests {
         let mut game = set_up_player_on_platform();
         game.player_pos.x += 0.49;
         game.update_output_buffer();
-        let left_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos));
-        let right_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(1.0, 0.0)));
+        let left_glyph = game.get_buffered_glyph(Game::snap_to_grid(game.player_pos));
+        let right_glyph =
+            game.get_buffered_glyph(Game::snap_to_grid(game.player_pos + v(1.0, 0.0)));
         assert!(left_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
         assert!(right_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
     }
@@ -1187,8 +1226,9 @@ mod tests {
         game.player_pos.x += -0.2;
         game.update_output_buffer();
 
-        let left_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(-1.0, 0.0)));
-        let right_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos));
+        let left_glyph =
+            game.get_buffered_glyph(Game::snap_to_grid(game.player_pos + v(-1.0, 0.0)));
+        let right_glyph = game.get_buffered_glyph(Game::snap_to_grid(game.player_pos));
         assert!(left_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[7]);
         assert!(right_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[7]);
     }
@@ -1198,8 +1238,9 @@ mod tests {
         game.player_pos.x += -0.49;
         game.update_output_buffer();
 
-        let left_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(-1.0, 0.0)));
-        let right_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos));
+        let left_glyph =
+            game.get_buffered_glyph(Game::snap_to_grid(game.player_pos + v(-1.0, 0.0)));
+        let right_glyph = game.get_buffered_glyph(Game::snap_to_grid(game.player_pos));
         assert!(left_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[5]);
         assert!(right_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[5]);
     }
@@ -1209,8 +1250,9 @@ mod tests {
         game.player_pos.x += -0.5;
         game.update_output_buffer();
 
-        let left_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(-1.0, 0.0)));
-        let right_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos));
+        let left_glyph =
+            game.get_buffered_glyph(Game::snap_to_grid(game.player_pos + v(-1.0, 0.0)));
+        let right_glyph = game.get_buffered_glyph(Game::snap_to_grid(game.player_pos));
         assert!(left_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
         assert!(right_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
     }
@@ -1220,8 +1262,8 @@ mod tests {
         game.player_pos.y += 0.5;
         game.update_output_buffer();
 
-        let top_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(0.0, 1.0)));
-        let bottom_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos));
+        let top_glyph = game.get_buffered_glyph(Game::snap_to_grid(game.player_pos + v(0.0, 1.0)));
+        let bottom_glyph = game.get_buffered_glyph(Game::snap_to_grid(game.player_pos));
         assert!(top_glyph.character == EIGHTH_BLOCKS_FROM_BOTTOM[4]);
         assert!(top_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Red)));
         assert!(top_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Black)));
@@ -1235,9 +1277,9 @@ mod tests {
         game.player_pos.y += -0.2;
         game.update_output_buffer();
 
-        let top_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos));
+        let top_glyph = game.get_buffered_glyph(Game::snap_to_grid(game.player_pos));
         let bottom_glyph =
-            game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(0.0, -1.0)));
+            game.get_buffered_glyph(Game::snap_to_grid(game.player_pos + v(0.0, -1.0)));
         assert!(top_glyph.character == EIGHTH_BLOCKS_FROM_BOTTOM[7]);
         assert!(top_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Red)));
         assert!(top_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Black)));
@@ -1342,10 +1384,10 @@ mod tests {
         game.player_pos += v(0.1, 0.6);
         game.update_output_buffer();
         let player_half_step = v(0, 1);
-        let top_glyph = game.get_buffered_glyph(
-            game.snap_to_grid(game.player_pos + floatify_vector(player_half_step)),
-        );
-        let bottom_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos));
+        let top_glyph = game.get_buffered_glyph(Game::snap_to_grid(
+            game.player_pos + floatify_vector(player_half_step),
+        ));
+        let bottom_glyph = game.get_buffered_glyph(Game::snap_to_grid(game.player_pos));
         assert!(top_glyph.character == quarter_block_by_offset(tuple(-player_half_step)));
         assert!(top_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Red)));
         assert!(top_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Black)));
@@ -1360,18 +1402,75 @@ mod tests {
 
         game.player_pos += v(0.8, -0.6);
         game.update_output_buffer();
-        let top_left_glyph = game.get_buffered_glyph(game.snap_to_grid(game.player_pos));
+        let top_left_glyph = game.get_buffered_glyph(Game::snap_to_grid(game.player_pos));
         let top_right_glyph =
-            game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(1.0, 0.0)));
+            game.get_buffered_glyph(Game::snap_to_grid(game.player_pos + v(1.0, 0.0)));
         let bottom_left_glyph =
-            game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(0.0, -1.0)));
+            game.get_buffered_glyph(Game::snap_to_grid(game.player_pos + v(0.0, -1.0)));
         let bottom_right_glyph =
-            game.get_buffered_glyph(game.snap_to_grid(game.player_pos + v(1.0, -1.0)));
+            game.get_buffered_glyph(Game::snap_to_grid(game.player_pos + v(1.0, -1.0)));
 
         assert!(top_left_glyph.character == quarter_block_by_offset((1, -1)));
         assert!(top_right_glyph.character == quarter_block_by_offset((-1, -1)));
         assert!(bottom_left_glyph.character == quarter_block_by_offset((1, 1)));
         assert!(bottom_right_glyph.character == quarter_block_by_offset((-1, 1)));
+    }
+    #[test]
+    fn overlap_detection_rounds_down() {
+        let point = p(57.0, -90.0);
+        let squares = Game::grid_squares_overlapped_by_floating_unit_square(point);
+        assert!(squares.len() == 1);
+        assert!(squares[0] == Game::snap_to_grid(point));
+    }
+
+    #[test]
+    fn test_offset_from_grid_rounds_to_zero() {
+        assert!(Game::offset_from_grid(p(9.0, -9.0)) == v(0.0, 0.0));
+    }
+    #[test]
+    fn test_sign() {
+        assert!(9.0.sign() == 1.0);
+        assert!(0.1.sign() == 1.0);
+        assert!(0.0.sign() == 0.0);
+        assert!(-0.1.sign() == -1.0);
+        assert!(-100.0.sign() == -1.0);
+
+        assert!(9.sign() == 1);
+        assert!(1.sign() == 1);
+        assert!(0.sign() == 0);
+        assert!(-1.sign() == -1);
+        assert!(-100.sign() == -1);
+    }
+
+    #[test]
+    fn test_vector_sign() {
+        assert!(sign(v(9.0, -9.0)) == v(1.0, -1.0));
+        assert!(sign(v(0.0, 0.0)) == v(0.0, 0.0));
+        assert!(sign(v(-0.1, 0.1)) == v(-1.0, 1.0));
+    }
+
+    #[test]
+    fn test_sign_of_offset_from_grid_rounds_to_zero() {
+        assert!(sign(Game::offset_from_grid(p(9.0, -9.0))) == v(0.0, 0.0));
+    }
+    #[test]
+    fn test_snap_to_grid_at_zero() {
+        assert!(Game::snap_to_grid(p(0.0, 0.0)) == p(0, 0));
+    }
+
+    #[test]
+    fn test_snap_to_grid_rounding_down_from_positive_x() {
+        assert!(Game::snap_to_grid(p(0.4, 0.0)) == p(0, 0));
+    }
+
+    #[test]
+    fn test_snap_to_grid_rounding_up_diagonally() {
+        assert!(Game::snap_to_grid(p(0.9, 59.51)) == p(1, 60));
+    }
+
+    #[test]
+    fn test_snap_to_grid_rounding_up_diagonally_in_the_negazone() {
+        assert!(Game::snap_to_grid(p(-0.9, -59.51)) == p(-1, -60));
     }
 
     #[ignore]
