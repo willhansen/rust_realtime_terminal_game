@@ -5,6 +5,7 @@ extern crate std;
 extern crate termion;
 
 // use assert2::{assert, check};
+use crate::num::traits::Pow;
 use nalgebra::{point, vector, Point2, Vector2};
 use std::io::{stdin, stdout, Write};
 use std::sync::mpsc::channel;
@@ -560,49 +561,63 @@ impl Game {
     fn apply_player_acceleration_from_gravity(&mut self) {
         self.player_vel_bpf.y -= self.player_acceleration_from_gravity;
     }
-    // including_gravity
+
     fn apply_player_motion(&mut self) {
         self.update_player_acceleration();
 
-        // let x_dir: i32 = sign(self.player_desired_x_direction);
-        // instant acceleration
-        // self.player_x_vel_bpf = self.player_max_run_speed_bpf * x_dir as f32;
 
-        let ideal_new_pos = self.player_pos + self.player_vel_bpf;
         let ideal_step: Vector2<f32> = self.player_vel_bpf;
-        let attempted_step: Vector2<i32> = round(ideal_step);
+        let ideal_new_pos = self.player_pos + ideal_step;
         let start_square = Game::snap_to_grid(self.player_pos);
 
-        let target = Game::snap_to_grid(self.player_pos) + attempted_step;
+        let collision_checks_per_block_travelled = 8.0;
+        let num_points_to_check =
+            (magnitude(ideal_step) * collision_checks_per_block_travelled).floor() as i32;
+        let mut prev_point_to_check = self.player_pos.clone();
+        let mut early_stop_point: Option<Point2<f32>>  = None;
+        'outer: for i in 0..num_points_to_check {
+            let point_to_check = self.player_pos
+                + i as f32 / collision_checks_per_block_travelled * direction(ideal_step);
 
-        let step_taken: Vector2<i32>;
-        // need to check intermediate blocks for being clear
-        if let Some(collision) = self.movecast(start_square, target) {
-            step_taken = collision.pos - start_square;
-            self.move_player_to(floatify_point(collision.pos));
-            if collision.normal.x != 0 {
-                // hit an obstacle and lose velocity
-                self.player_pos.x = Game::snap_to_grid(self.player_pos).x as f32;
-                self.player_vel_bpf.x = 0.0;
+            for touching_grid_point in
+                Game::grid_squares_overlapped_by_floating_unit_square(point_to_check)
+            {
+                if self.in_world(touching_grid_point) && self.get_block(touching_grid_point) == Block::Wall {
+                    // snap player to just before collision
+                    early_stop_point = Some(prev_point_to_check);
+                    
+                    break 'outer;
+
+                }
+                
             }
-            if collision.normal.y != 0 {
-                self.player_pos.y = Game::snap_to_grid(self.player_pos).y as f32;
-                self.player_vel_bpf.y = 0.0;
-            }
-        } else {
-            if !self.in_world(target) {
-                // Player went out of bounds and died
-                self.kill_player();
-                return;
-            } else {
-                // no collision, and in world
-                step_taken = target - start_square;
-                self.move_player_to(floatify_point(target));
-            }
+            prev_point_to_check = point_to_check;
+        }
+        let actual_endpoint: Point2<f32>;
+        if let Some(p) = early_stop_point {
+            actual_endpoint = p;
+            self.player_vel_bpf = vector![0.0, 0.0];
+            // TODO: kill velocity along only the one axis
+        }
+        else {
+            actual_endpoint = ideal_new_pos;
         }
 
+        let step_taken: Vector2<f32>;
+
+        if !self.in_world(Game::snap_to_grid(actual_endpoint)) {
+            // Player went out of bounds and died
+            self.kill_player();
+            return;
+        } else {
+            // no collision, and in world
+            step_taken = actual_endpoint - self.player_pos;
+            self.move_player_to(actual_endpoint);
+        }
+
+        
         // moved vertically => instant empty charge
-        if step_taken.y != 0 {
+        if step_taken.y != 0.0 {
             self.player_remaining_coyote_frames = 0;
         }
         if self.player_is_standing_on_block() {
@@ -778,6 +793,17 @@ fn round_big(vec: Vector2<f32>) -> Vector2<f32> {
 
 fn round(vec: Vector2<f32>) -> Vector2<i32> {
     return Vector2::<i32>::new(vec.x.round() as i32, vec.y.round() as i32);
+}
+
+fn magnitude(vec: Vector2<f32>) -> f32 {
+    return (vec.x.pow(2.0) + vec.y.pow(2.0)).sqrt();
+}
+fn direction(vec: Vector2<f32>) -> Vector2<f32> {
+    return vec / magnitude(vec);
+}
+
+fn distance(p1: Point2<f32>, p2: Point2<f32>) -> f32 {
+    return magnitude(p1 - p2);
 }
 
 fn floatify_vector(vec: Vector2<i32>) -> Vector2<f32> {
