@@ -6,7 +6,8 @@ extern crate termion;
 
 // use assert2::{assert, check};
 use crate::num::traits::Pow;
-use nalgebra::{point, vector, Point2, Vector2};
+use nalgebra::{point, vector, Point2, Vector2, Scalar};
+use std::fmt::Debug;
 use std::io::{stdin, stdout, Write};
 use std::sync::mpsc::channel;
 use std::thread;
@@ -565,7 +566,6 @@ impl Game {
     fn apply_player_motion(&mut self) {
         self.update_player_acceleration();
 
-
         let ideal_step: Vector2<f32> = self.player_vel_bpf;
         let ideal_new_pos = self.player_pos + ideal_step;
         let start_square = Game::snap_to_grid(self.player_pos);
@@ -574,7 +574,7 @@ impl Game {
         let num_points_to_check =
             (magnitude(ideal_step) * collision_checks_per_block_travelled).floor() as i32;
         let mut prev_point_to_check = self.player_pos.clone();
-        let mut early_stop_point: Option<Point2<f32>>  = None;
+        let mut early_stop_point: Option<Point2<f32>> = None;
         'outer: for i in 0..num_points_to_check {
             let point_to_check = self.player_pos
                 + i as f32 / collision_checks_per_block_travelled * direction(ideal_step);
@@ -582,14 +582,14 @@ impl Game {
             for touching_grid_point in
                 Game::grid_squares_overlapped_by_floating_unit_square(point_to_check)
             {
-                if self.in_world(touching_grid_point) && self.get_block(touching_grid_point) == Block::Wall {
+                if self.in_world(touching_grid_point)
+                    && self.get_block(touching_grid_point) == Block::Wall
+                {
                     // snap player to just before collision
                     early_stop_point = Some(prev_point_to_check);
-                    
-                    break 'outer;
 
+                    break 'outer;
                 }
-                
             }
             prev_point_to_check = point_to_check;
         }
@@ -598,8 +598,7 @@ impl Game {
             actual_endpoint = p;
             self.player_vel_bpf = vector![0.0, 0.0];
             // TODO: kill velocity along only the one axis
-        }
-        else {
+        } else {
             actual_endpoint = ideal_new_pos;
         }
 
@@ -615,7 +614,6 @@ impl Game {
             self.move_player_to(actual_endpoint);
         }
 
-        
         // moved vertically => instant empty charge
         if step_taken.y != 0.0 {
             self.player_remaining_coyote_frames = 0;
@@ -781,6 +779,29 @@ fn main() {
             ));
         }
     }
+}
+
+fn pos_before_collision_between_unit_squares<T>(
+    start_point: Point2<f32>,
+    move_direction: Vector2<f32>,
+    non_moving_square_center: Point2<T>,
+) -> Point2<f32> where
+    T: Clone + PartialEq + Debug + Scalar,
+{
+    // four intersections with extended walls of stationary square 
+        
+    return point![2.0, 0.0];
+}
+
+fn e<T: SignedExt + num::cast::ToPrimitive + std::fmt::Display>(dir_num: T) -> Vector2::<T> {
+    let dir_num_int = dir_num.to_i32().unwrap() % 4;
+    match dir_num_int {
+        0 => vector![T::one(), T::zero()],
+        1 => vector![T::zero(), T::one()],
+        2 => vector![-T::one(), T::zero()],
+        3 => vector![T::zero(), -T::one()],
+        _ => panic!("bad direction number: {}", dir_num)
+   } 
 }
 
 fn trunc(vec: Vector2<f32>) -> Vector2<i32> {
@@ -1522,4 +1543,50 @@ mod tests {
     #[test]
     // Once we have vertical subsquare positioning up and running, a slow slide down will look cool.
     fn test_slowly_slide_down_when_grabbing_wall() {}
+    #[test]
+    fn test_collision_point_head_on_horizontal() {
+        let start_point = p(0.0, 0.0);
+        let approach_vector = v(1.0, 0.0);
+        let block_center = p(3, 0);
+        assert!(
+            pos_before_collision_between_unit_squares(start_point, approach_vector, block_center)
+                == p(2.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn test_collision_point_head_slightly_offset_from_vertical() {
+        let start_point = p(0.3, 0.0);
+        let approach_vector = v(0.0, 1.0);
+        let block_center = p(0, 5);
+        assert!(
+            pos_before_collision_between_unit_squares(start_point, approach_vector, block_center)
+                == p(start_point.x, 4.0)
+        );
+    }
+
+    #[test]
+    fn test_collision_point_slightly_diagonalish() {
+        let start_point = p(5.0, 0.0);
+        let approach_vector = v(1.0, 1.0);
+        let block_center = p(7, 1);
+        assert!(
+            pos_before_collision_between_unit_squares(start_point, approach_vector, block_center)
+                == p(6.0, 1.0)
+        );
+    }
+
+    #[test]
+    fn test_orthogonal_direction_generation() {
+        assert!(e(0.0) == v(1.0, 0.0));
+        assert!(e(0) == v(1, 0));
+        assert!(e(1.0) == v(0.0, 1.0));
+        assert!(e(1) == v(0, 1));
+        assert!(e(2.0) == v(-1.0, 0.0));
+        assert!(e(2) == v(-1, 0));
+        assert!(e(3.0) == v(0.0, -1.0));
+        assert!(e(3) == v(0, -1));
+        assert!(e(4.0) == v(1.0, 0.0));
+        assert!(e(4) == v(1, 0));
+    }
 }
