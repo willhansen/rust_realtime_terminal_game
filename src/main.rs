@@ -92,9 +92,9 @@ impl Block {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 struct MovecastCollision {
-    pos: Point<i32>,
+    pos: Point<f32>,
     normal: Point<i32>,
 }
 
@@ -581,16 +581,19 @@ impl Game {
 
         let ideal_step: Point<f32> = self.player_vel_bpf;
         let ideal_new_pos = self.player_pos + ideal_step;
-        let start_square = Game::snap_to_grid(self.player_pos);
 
         let collision_checks_per_block_travelled = 8.0;
         let num_points_to_check =
             (magnitude(ideal_step) * collision_checks_per_block_travelled).floor() as i32;
-        let mut prev_point_to_check = self.player_pos.clone();
         let mut early_stop_point: Option<Point<f32>> = None;
-        'outer: for i in 0..num_points_to_check {
-            let point_to_check = self.player_pos
-                + direction(ideal_step) * (i as f32 / collision_checks_per_block_travelled);
+        let mut points_to_check = Vec::<Point<f32>>::new();
+        for i in 0..num_points_to_check {
+            points_to_check.push(self.player_pos
+                + direction(ideal_step) * (i as f32 / collision_checks_per_block_travelled));
+        }
+        // needed for very small steps
+        points_to_check.push(ideal_new_pos);
+        'outer: for point_to_check in points_to_check {
 
             for touching_grid_point in
                 Game::grid_squares_overlapped_by_floating_unit_square(point_to_check)
@@ -599,12 +602,11 @@ impl Game {
                     && self.get_block(touching_grid_point) == Block::Wall
                 {
                     // snap player to just before collision
-                    early_stop_point = Some(prev_point_to_check);
+                    early_stop_point = Some(backup_point_from_unit_square_collision(self.player_pos, ideal_step, touching_grid_point));
 
                     break 'outer;
                 }
             }
-            prev_point_to_check = point_to_check;
         }
         let actual_endpoint: Point<f32>;
         if let Some(point) = early_stop_point {
@@ -667,7 +669,7 @@ impl Game {
     // tries to draw a line in air
     // returns None if out of bounds
     // returns the start position if start is not Block::Air
-    fn movecast(&self, start: Point<i32>, end: Point<i32>) -> Option<MovecastCollision> {
+    fn movecast(&self, start: Point<f32>, end: Point<f32>) -> Option<MovecastCollision> {
         let mut prev_pos = start;
         for (x, y) in line_drawing::WalkGrid::new((start.x(), start.y()), (end.x(), end.y())) {
             let pos = p(x, y);
@@ -828,8 +830,8 @@ where
 
     // four intersections with extended walls of stationary square
     candidate_edge_intersections.sort_by(|a, b| start_point.euclidean_distance(a).partial_cmp(&start_point.euclidean_distance(b)).unwrap());
-    if candidate_edge_intersections.len() < 1 {
-        panic!("Failed to find intersection");
+if candidate_edge_intersections.len() < 1 {
+        panic!("Failed to find intersection. {:?}, {:?}, {:?}", start_point, step_taken, grid_square_center);
     }
     return candidate_edge_intersections[0];
 
@@ -915,7 +917,7 @@ mod tests {
 
     fn set_up_player_on_platform() -> Game {
         let mut game = set_up_just_player();
-        game.draw_line((10, 10), (20, 10), Block::Wall);
+        game.draw_line((10, 10), (20, 10),Block::Wall);
         return game;
     }
 
@@ -1069,9 +1071,8 @@ mod tests {
         let mut game = set_up_player_on_platform();
         game.draw_point(round(game.player_pos) + p(2, 0), Block::Wall);
         game.player_pos.add_assign(p(0.999, 0.0));
-        game.player_max_run_speed_bpf = 1.0;
-        game.player_acceleration_from_traction = 999.0;
         game.player_desired_x_direction = 1;
+        game.player_vel_bpf.set_x(5.0);
 
         game.tick_physics();
 
