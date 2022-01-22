@@ -6,6 +6,8 @@ extern crate termion;
 
 // use assert2::{assert, check};
 use crate::num::traits::Pow;
+use geo::algorithm::euclidean_distance::EuclideanDistance;
+use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Point};
 use std::fmt::Debug;
 use std::io::{stdin, stdout, Write};
@@ -265,10 +267,10 @@ impl Game {
         )
     }
     fn snap_to_grid(world_pos: Point<f32>) -> Point<i32> {
-        return p(world_pos.x().round() as i32, world_pos.y().round() as i32);
+        return round(world_pos);
     }
     fn offset_from_grid(world_pos: Point<f32>) -> Point<f32> {
-        return world_pos - floatify_point(Game::snap_to_grid(world_pos));
+        return world_pos - floatify(Game::snap_to_grid(world_pos));
     }
     fn get_block(&self, pos: Point<i32>) -> Block {
         return self.grid[pos.x() as usize][pos.y() as usize];
@@ -283,8 +285,8 @@ impl Game {
         }
     }
 
-    fn draw_point(&mut self, pos: (i32, i32), block: Block) {
-        self.grid[pos.0 as usize][pos.1 as usize] = block;
+    fn draw_point(&mut self, pos: Point<i32>, block: Block) {
+        self.grid[pos.x() as usize][pos.y() as usize] = block;
     }
 
     fn clear(&mut self) {
@@ -306,7 +308,10 @@ impl Game {
     }
     fn player_jump(&mut self) {
         if self.player_is_grabbing_wall() {
-            self.player_vel_bpf.add_assign(p( self.player_jump_delta_v * -self.player_wall_grab_direction() as f32, 0.0));
+            self.player_vel_bpf.add_assign(p(
+                self.player_jump_delta_v * -self.player_wall_grab_direction() as f32,
+                0.0,
+            ));
             self.player_desired_x_direction *= -1;
         }
         self.player_vel_bpf.set_y(self.player_jump_delta_v);
@@ -344,7 +349,7 @@ impl Game {
             Event::Mouse(me) => match me {
                 MouseEvent::Press(MouseButton::Left, term_x, term_y) => {
                     let (x, y) = self.screen_to_world(&(term_x, term_y));
-                    self.draw_point((x, y), self.selected_block);
+                    self.draw_point(p(x, y), self.selected_block);
                     self.prev_mouse_pos = (x, y);
                 }
                 MouseEvent::Press(MouseButton::Right, term_x, term_y) => {
@@ -523,7 +528,7 @@ impl Game {
         if delta_v.abs() > self.player_vel_bpf.y().abs() {
             self.player_vel_bpf.set_y(0.0);
         } else {
-            self.player_vel_bpf.add_assign( p(0.0,delta_v));
+            self.player_vel_bpf.add_assign(p(0.0, delta_v));
         }
     }
 
@@ -560,13 +565,15 @@ impl Game {
         }
 
         if end_x_vel == 0.0 {
-            self.player_pos.set_x(Game::snap_to_grid(self.player_pos).x() as f32); // TODO: double check this
+            self.player_pos
+                .set_x(Game::snap_to_grid(self.player_pos).x() as f32); // TODO: double check this
         }
         self.player_vel_bpf.set_x(end_x_vel);
     }
 
     fn apply_player_acceleration_from_gravity(&mut self) {
-        self.player_vel_bpf.add_assign(p(0.0,-self.player_acceleration_from_gravity));
+        self.player_vel_bpf
+            .add_assign(p(0.0, -self.player_acceleration_from_gravity));
     }
 
     fn apply_player_motion(&mut self) {
@@ -787,16 +794,45 @@ fn main() {
     }
 }
 
-fn pos_before_collision_between_unit_squares<T>(
+fn backup_point_from_unit_square_collision(
     start_point: Point<f32>,
-    move_direction: Point<f32>,
-    non_moving_square_center: Point<i32>,
+    step_taken: Point<f32>,
+    grid_square_center: Point<i32>,
 ) -> Point<f32>
 where
-    T: Clone + PartialEq + Debug,
 {
+    // formulates the problem as a point crossing the boundary of an r=1 square
+    let movement_line = geo::Line::new(start_point, start_point + step_taken);
+    let expanded_corner_offsets = vec![p(1.0, 1.0), p(-1.0, 1.0), p(-1.0, -1.0), p(1.0, -1.0)];
+    let expanded_square_corners: Vec<Point<f32>> = expanded_corner_offsets
+        .iter()
+        .map(|&rel_p| floatify(grid_square_center) + rel_p)
+        .collect();
+    let expanded_square_edges = vec![
+        geo::Line::new(expanded_square_corners[0], expanded_square_corners[1]),
+        geo::Line::new(expanded_square_corners[1], expanded_square_corners[2]),
+        geo::Line::new(expanded_square_corners[2], expanded_square_corners[3]),
+        geo::Line::new(expanded_square_corners[3], expanded_square_corners[0]),
+    ];
+    let mut candidate_edge_intersections = Vec::<Point<f32>>::new();
+    for edge in expanded_square_edges {
+        if let Some(LineIntersection::SinglePoint {
+            intersection: coord,
+            is_proper: _,
+        }) = line_intersection(movement_line, edge)
+        {
+            candidate_edge_intersections.push(coord.into());
+        }
+    }
+    
+
     // four intersections with extended walls of stationary square
-    return p(2.0, 0.0);
+    candidate_edge_intersections.sort_by(|a, b| start_point.euclidean_distance(a).partial_cmp(&start_point.euclidean_distance(b)).unwrap());
+    if candidate_edge_intersections.len() < 1 {
+        panic!("Failed to find intersection");
+    }
+    return candidate_edge_intersections[0];
+
 }
 
 fn e<T: CoordNum + num::Signed + std::fmt::Display>(dir_num: T) -> Point<T> {
@@ -814,12 +850,11 @@ fn trunc(vec: Point<f32>) -> Point<i32> {
     return Point::<i32>::new(vec.x().trunc() as i32, vec.y().trunc() as i32);
 }
 
-fn round_big(vec: Point<f32>) -> Point<f32> {
-    return Point::<f32>::new(vec.x() + vec.x().sign(), vec.y() + vec.y().sign());
-}
-
 fn round(vec: Point<f32>) -> Point<i32> {
     return Point::<i32>::new(vec.x().round() as i32, vec.y().round() as i32);
+}
+fn floatify(vec: Point<i32>) -> Point<f32> {
+    return Point::<f32>::new(vec.x() as f32, vec.y() as f32);
 }
 
 fn magnitude(vec: Point<f32>) -> f32 {
@@ -827,17 +862,6 @@ fn magnitude(vec: Point<f32>) -> f32 {
 }
 fn direction(vec: Point<f32>) -> Point<f32> {
     return vec / magnitude(vec);
-}
-
-fn distance(p1: Point<f32>, p2: Point<f32>) -> f32 {
-    return magnitude(p1 - p2);
-}
-
-fn floatify_vector(vec: Point<i32>) -> Point<f32> {
-    return Point::<f32>::new(vec.x() as f32, vec.y() as f32);
-}
-fn floatify_point(vec: Point<i32>) -> Point<f32> {
-    return Point::<f32>::new(vec.x() as f32, vec.y() as f32);
 }
 
 fn fract(vec: Point<f32>) -> Point<f32> {
@@ -873,8 +897,7 @@ trait PointExt {
 }
 
 impl<T: CoordNum> PointExt for Point<T> {
-    fn add_assign(&mut self, rhs: Self)
-    {
+    fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
@@ -906,8 +929,8 @@ mod tests {
     #[test]
     fn test_placement_and_gravity() {
         let mut game = Game::new(30, 30);
-        game.draw_point((10, 10), Block::Wall);
-        game.draw_point((20, 10), Block::Brick);
+        game.draw_point(p(10, 10), Block::Wall);
+        game.draw_point(p(20, 10), Block::Brick);
 
         assert!(game.grid[10][10] == Block::Wall);
         assert!(game.grid[20][10] == Block::Brick);
@@ -1029,7 +1052,7 @@ mod tests {
     #[test]
     fn test_stop_on_collision() {
         let mut game = set_up_player_on_platform();
-        game.draw_point((16, 11), Block::Wall);
+        game.draw_point(round(game.player_pos) + p(1, 0), Block::Wall);
         game.player_max_run_speed_bpf = 1.0;
         game.player_desired_x_direction = 1;
 
@@ -1039,6 +1062,21 @@ mod tests {
         assert!(game.grid[16][11] == Block::Wall);
         assert!(game.grid[15][11] == Block::Player);
         assert!(game.player_vel_bpf.x() == 0.0);
+    }
+
+    #[test]
+    fn test_snap_to_object_on_collision() {
+        let mut game = set_up_player_on_platform();
+        game.draw_point(round(game.player_pos) + p(2, 0), Block::Wall);
+        game.player_pos.add_assign(p(0.999, 0.0));
+        game.player_max_run_speed_bpf = 1.0;
+        game.player_acceleration_from_traction = 999.0;
+        game.player_desired_x_direction = 1;
+
+        game.tick_physics();
+
+        assert!(game.player_pos == p(16.0, 11.0));
+        assert!(game.grid[17][11] == Block::Wall);
     }
 
     #[test]
@@ -1074,7 +1112,7 @@ mod tests {
     fn test_fast_player_collision_between_frames() {
         let mut game = set_up_player_on_platform();
         // Player should not teleport through this block
-        game.draw_point((16, 11), Block::Wall);
+        game.draw_point(p(16, 11), Block::Wall);
         game.player_max_run_speed_bpf = 2.0;
         game.player_desired_x_direction = 1;
 
@@ -1260,7 +1298,7 @@ mod tests {
     #[test]
     fn test_horizontal_sub_glyph_positioning_on_right_below_rounding_point() {
         let mut game = set_up_player_on_platform();
-        game.player_pos.add_assign(p(0.49, 0.0)) ;
+        game.player_pos.add_assign(p(0.49, 0.0));
         game.update_output_buffer();
         let left_glyph = game.get_buffered_glyph(Game::snap_to_grid(game.player_pos));
         let right_glyph =
@@ -1271,7 +1309,7 @@ mod tests {
     #[test]
     fn test_horizontal_sub_glyph_positioning_on_left() {
         let mut game = set_up_player_on_platform();
-        game.player_pos.add_assign(p(-0.2, 0.0)) ;
+        game.player_pos.add_assign(p(-0.2, 0.0));
         game.update_output_buffer();
 
         let left_glyph =
@@ -1322,7 +1360,7 @@ mod tests {
     #[test]
     fn test_vertical_sub_glyph_positioning_downwards() {
         let mut game = set_up_player_on_platform();
-        game.player_pos.add_assign(p(0.0,-0.2));
+        game.player_pos.add_assign(p(0.0, -0.2));
         game.update_output_buffer();
 
         let top_glyph = game.get_buffered_glyph(Game::snap_to_grid(game.player_pos));
@@ -1433,7 +1471,7 @@ mod tests {
         game.update_output_buffer();
         let player_half_step = p(0, 1);
         let top_glyph = game.get_buffered_glyph(Game::snap_to_grid(
-            game.player_pos + floatify_vector(player_half_step),
+            game.player_pos + floatify(player_half_step),
         ));
         let bottom_glyph = game.get_buffered_glyph(Game::snap_to_grid(game.player_pos));
         assert!(top_glyph.character == quarter_block_by_offset((-player_half_step).x_y()));
@@ -1547,10 +1585,10 @@ mod tests {
     #[test]
     fn test_collision_point_head_on_horizontal() {
         let start_point = p(0.0, 0.0);
-        let approach_vector = p(1.0, 0.0);
+        let step = p(3.0, 0.0);
         let block_center = p(3, 0);
         assert!(
-            pos_before_collision_between_unit_squares(start_point, approach_vector, block_center)
+            backup_point_from_unit_square_collision(start_point, step, block_center)
                 == p(2.0, 0.0)
         );
     }
@@ -1558,10 +1596,10 @@ mod tests {
     #[test]
     fn test_collision_point_head_slightly_offset_from_vertical() {
         let start_point = p(0.3, 0.0);
-        let approach_vector = p(0.0, 1.0);
+        let step = p(0.0, 5.0);
         let block_center = p(0, 5);
         assert!(
-            pos_before_collision_between_unit_squares(start_point, approach_vector, block_center)
+            backup_point_from_unit_square_collision(start_point, step, block_center)
                 == p(start_point.x(), 4.0)
         );
     }
@@ -1569,10 +1607,10 @@ mod tests {
     #[test]
     fn test_collision_point_slightly_diagonalish() {
         let start_point = p(5.0, 0.0);
-        let approach_vector = p(1.0, 1.0);
+        let step = p(3.0, 3.0);
         let block_center = p(7, 1);
         assert!(
-            pos_before_collision_between_unit_squares(start_point, approach_vector, block_center)
+            backup_point_from_unit_square_collision(start_point, step, block_center)
                 == p(6.0, 1.0)
         );
     }
