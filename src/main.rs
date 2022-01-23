@@ -197,7 +197,7 @@ impl Glyph {
         }
     }
     fn red_square_with_half_step_offset(offset: Point<f32>) -> Glyph {
-        let step = trunc(offset * 4.0);
+        let step = Game::snap_to_grid(offset * 2.0);
         Glyph {
             character: quarter_block_by_offset((step.x(), step.y())),
             fg_color: Some(Glyph::fg_color_from_name(ColorName::Red)),
@@ -411,7 +411,7 @@ impl Game {
         if y_offset == 0.0 {
             for i in 0..3 {
                 let x = i as i32 - 1;
-                if !(-offset_dir.x() == x) {
+                if offset_dir.x() == x || x == 0 {
                     output[i][c] = Some(Glyph::red_square_with_horizontal_offset(
                         x_offset - x as f32,
                     ));
@@ -420,7 +420,7 @@ impl Game {
         } else if x_offset == 0.0 {
             for j in 0..3 {
                 let y = j as i32 - 1;
-                if !(-offset_dir.y() == y) {
+                if offset_dir.y() == y || y == 0 {
                     output[c][j] =
                         Some(Glyph::red_square_with_vertical_offset(y_offset - y as f32));
                 }
@@ -431,7 +431,7 @@ impl Game {
                     let x = i as i32 - 1;
                     let y = j as i32 - 1;
                     let square = p(x as f32, y as f32);
-                    if !(-offset_dir.x() == x) && !(-offset_dir.y() == y) {
+                    if (offset_dir.x() == x || x == 0) && (offset_dir.y() == y || y == 0) {
                         let glyph = Glyph::red_square_with_half_step_offset(
                             Game::offset_from_grid(self.player_pos) - square,
                         );
@@ -555,12 +555,12 @@ impl Game {
         }
 
         let want_to_go_faster = start_x_vel.sign() == desired_acceleration_direction.sign() as f32;
-        let ended_below_max_speed = end_x_vel.abs() < self.player_max_run_speed_bpf;
-        if started_above_max_speed && ended_below_max_speed && want_to_go_faster {
-            end_x_vel = end_x_vel.sign() * self.player_max_run_speed_bpf;
+        let ended_above_max_speed = end_x_vel.abs() >= self.player_max_run_speed_bpf;
+        if started_above_max_speed && !ended_above_max_speed && want_to_go_faster {
+            end_x_vel = start_x_vel.sign() * self.player_max_run_speed_bpf;
         }
         // if want go fast, but starting less than max speed.  Can't go past max speed.
-        if !started_above_max_speed && !ended_below_max_speed {
+        if !started_above_max_speed && ended_above_max_speed {
             end_x_vel = end_x_vel.sign() * self.player_max_run_speed_bpf;
         }
 
@@ -579,19 +579,31 @@ impl Game {
     fn apply_player_motion(&mut self) {
         self.update_player_acceleration();
 
-        let ideal_step: Point<f32> = self.player_vel_bpf;
-        let ideal_new_pos = self.player_pos + ideal_step;
+        // TODO: sliding within one tick.  Iterate until distance to travel is gone.  Use vector projections
+        let start_point = self.player_pos;
+        let mut remaining_step: Point<f32> = self.player_vel_bpf;
+        let mut current_start_point = start_point.clone();
         let actual_endpoint: Point<f32>;
-        if let Some(collision) = self.movecast(self.player_pos, ideal_new_pos) {
-            actual_endpoint = collision.pos;
-            if collision.normal.x() != 0 {
-                self.player_vel_bpf.set_x(0.0);
+        let mut current_target = start_point + remaining_step;
+        loop {
+            if let Some(collision) = self.movecast(current_start_point, current_target) {
+                remaining_step.add_assign(-(collision.pos - current_start_point));
+
+                if collision.normal.x() != 0 {
+                    self.player_vel_bpf.set_x(0.0);
+                    remaining_step = project(remaining_step, p(0.0, 1.0));
+                }
+                if collision.normal.y() != 0 {
+                    self.player_vel_bpf.set_y(0.0);
+                    remaining_step = project(remaining_step, p(1.0, 0.0));
+                }
+                current_start_point = collision.pos;
+                current_target = current_start_point + remaining_step;
+            } else {
+                // should exit loop after this else
+                actual_endpoint = current_target;
+                break;
             }
-            if collision.normal.y() != 0 {
-                self.player_vel_bpf.set_y(0.0);
-            }
-        } else {
-            actual_endpoint = ideal_new_pos;
         }
 
         let step_taken: Point<f32>;
@@ -642,24 +654,25 @@ impl Game {
         let mut points_to_check = Vec::<Point<f32>>::new();
         for i in 0..num_points_to_check {
             points_to_check.push(
-                self.player_pos
+                start_pos
                     + direction(ideal_step) * (i as f32 / collision_checks_per_block_travelled),
             );
         }
         // needed for very small steps
         points_to_check.push(end_pos);
         'outer: for point_to_check in points_to_check {
+            //println!("point to check: {:?}", point_to_check);
             for touching_grid_point in
                 grid_squares_overlapped_by_floating_unit_square(point_to_check)
             {
+                //println!("grid square: {:?}", touching_grid_point);
                 if self.in_world(touching_grid_point)
                     && self.get_block(touching_grid_point) == Block::Wall
                 {
-                    collision = single_block_movecast(
-                        self.player_pos,
-                        point_to_check,
-                        touching_grid_point,
-                    );
+                    //println!("hit grid square: {:?}", touching_grid_point);
+
+                    collision =
+                        single_block_movecast(start_pos, point_to_check, touching_grid_point);
                     if collision == None {
                         panic!(
                             "Failed to find intersection. start:{:?}, end:{:?}, grid_square:{:?}",
@@ -703,10 +716,10 @@ impl Game {
             && pos.y() < self.terminal_size.1 as i32;
     }
     fn init_world(&mut self) {
-        self.player_jump_delta_v = 0.5;
-        self.player_acceleration_from_gravity = 0.01;
-        self.player_acceleration_from_traction = 0.1;
-        self.player_max_run_speed_bpf = 0.3;
+        self.player_jump_delta_v = 1.0;
+        self.player_acceleration_from_gravity = 0.05;
+        self.player_acceleration_from_traction = 0.5;
+        self.player_max_run_speed_bpf = 0.5;
 
         let bottom_left = (
             (self.terminal_size.0 / 5) as i32,
@@ -783,6 +796,7 @@ where
 {
     // formulates the problem as a point crossing the boundary of an r=1 square
     let movement_line = geo::Line::new(start_point, end_point);
+    //println!("movement_line: {:?}", movement_line);
     let expanded_corner_offsets = vec![p(1.0, 1.0), p(-1.0, 1.0), p(-1.0, -1.0), p(1.0, -1.0)];
     let expanded_square_corners: Vec<Point<f32>> = expanded_corner_offsets
         .iter()
@@ -794,6 +808,7 @@ where
         geo::Line::new(expanded_square_corners[2], expanded_square_corners[3]),
         geo::Line::new(expanded_square_corners[3], expanded_square_corners[0]),
     ];
+    //println!("expanded_edges: {:?}", expanded_square_edges);
     let mut candidate_edge_intersections = Vec::<Point<f32>>::new();
     for edge in expanded_square_edges {
         if let Some(LineIntersection::SinglePoint {
@@ -815,7 +830,10 @@ where
             .partial_cmp(&start_point.euclidean_distance(b))
             .unwrap()
     });
+    //println!("intersections: {:?}", candidate_edge_intersections);
     let collision_point = candidate_edge_intersections[0];
+    //println!("collision_point: {:?}", collision_point);
+    //println!("rounded_dir_number: {:?}", round_to_direction_number( collision_point - floatify(grid_square_center)));
     let collision_normal = e(round_to_direction_number(
         collision_point - floatify(grid_square_center),
     ));
@@ -848,7 +866,7 @@ fn round_to_direction_number(point: Point<f32>) -> i32 {
         if y > 0.0 {
             return 1;
         } else {
-            return 4;
+            return 3;
         }
     }
 }
@@ -915,6 +933,10 @@ impl<T: num::Signed> SignedExt for T {
             return T::one();
         }
     }
+}
+
+fn project(v1: Point<f32>, v2: Point<f32>) -> Point<f32> {
+    return direction(v2) * v1.dot(v2) / magnitude(v2);
 }
 
 trait PointExt {
@@ -1000,7 +1022,7 @@ mod tests {
     #[test]
     fn test_single_block_movecast_no_move() {
         let point = p(0.0, 0.0);
-        let p_wall = p(5,5);
+        let p_wall = p(5, 5);
 
         assert!(single_block_movecast(point, point, p_wall) == None);
     }
@@ -1009,13 +1031,12 @@ mod tests {
     fn test_single_block_movecast_horizontal_hit() {
         let start = p(0.0, 0.0);
         let end = p(5.0, 0.0);
-        let wall = p(2,0);
-        
+        let wall = p(2, 0);
         let result = single_block_movecast(start, end, wall);
 
-        assert!( result != None);
-        assert!( result.unwrap().pos == floatify(wall - p(1, 0)));
-        assert!( result.unwrap().normal == p(-1, 0));
+        assert!(result != None);
+        assert!(result.unwrap().pos == floatify(wall - p(1, 0)));
+        assert!(result.unwrap().normal == p(-1, 0));
     }
 
     #[test]
@@ -1026,16 +1047,14 @@ mod tests {
         assert!(game.movecast(point, point) == None);
     }
 
-
     #[test]
     fn test_movecast_horizontal_hit() {
         let mut game = Game::new(30, 30);
         let p_wall = p(5, 0);
-        game.draw_point(p(5, 0), Block::Wall);
+        game.draw_point(p_wall, Block::Wall);
 
         let p1 = floatify(p_wall) + p(-2.0, 0.0);
         let p2 = floatify(p_wall) + p(2.0, 0.0);
-        
         let result = game.movecast(p1, p2);
 
         assert!(result != None);
@@ -1043,26 +1062,41 @@ mod tests {
         assert!(result.unwrap().normal == p(-1, 0));
     }
 
-    #[ignore]
+    #[test]
+    fn test_movecast_vertical_hit() {
+        let mut game = Game::new(30, 30);
+        let p_wall = p(15, 10);
+        game.draw_point(p_wall, Block::Wall);
+
+        let p1 = floatify(p_wall) + p(0.0, -1.1);
+        let p2 = floatify(p_wall);
+        let result = game.movecast(p1, p2);
+
+        assert!(result != None);
+        assert!(result.unwrap().pos == floatify(p_wall) + p(0.0, -1.0));
+        assert!(result.unwrap().normal == p(0, -1));
+    }
+
+    #[test]
+    fn test_movecast_end_slightly_overlapping_a_block() {
+        let mut game = Game::new(30, 30);
+        let p_wall = p(15, 10);
+        game.draw_point(p_wall, Block::Wall);
+
+        let p1 = floatify(p_wall) + p(0.0, 1.5);
+        let p2 = floatify(p_wall) + p(0.0, 0.999999);
+        let result = game.movecast(p1, p2);
+
+        assert!(result != None);
+        assert!(result.unwrap().pos == floatify(p_wall) + p(0.0, 1.0));
+        assert!(result.unwrap().normal == p(0, 1));
+    }
+
     #[test]
     fn test_movecast() {
         let mut game = Game::new(30, 30);
         game.draw_line((10, 10), (20, 10), Block::Wall);
 
-        assert!(
-            game.movecast(p(15.0, 9.0), p(15.0, 11.0))
-                == Some(MovecastCollision {
-                    pos: p(15.0, 9.0),
-                    normal: p(0, -1)
-                })
-        );
-        assert!(
-            game.movecast(p(15.0, 10.0), p(15.0, 11.0))
-                == Some(MovecastCollision {
-                    pos: p(15.0, 10.0),
-                    normal: p(0, 0)
-                })
-        );
         assert!(
             game.movecast(p(15.0, 9.0), p(17.0, 11.0))
                 == Some(MovecastCollision {
@@ -1077,13 +1111,12 @@ mod tests {
                     normal: p(0, -1)
                 })
         );
-        assert!(game.movecast(p(150.0, 9.0), p(17.0, 11.0)) == None);
         assert!(game.movecast(p(1.0, 9.0), p(-17.0, 9.0)) == None);
         assert!(game.movecast(p(15.0, 9.0), p(17.0, -11.0)) == None);
     }
     #[test]
     fn test_movecast_ignore_player() {
-        let mut game = set_up_player_on_platform();
+        let game = set_up_player_on_platform();
 
         assert!(game.movecast(p(15.0, 11.0), p(15.0, 13.0)) == None);
     }
@@ -1270,9 +1303,8 @@ mod tests {
         assert!(game.player_vel_bpf.y() == 0.0);
     }
 
-    #[ignore]
     #[test]
-    fn test_wall_jump() {
+    fn test_simple_wall_jump() {
         let mut game = set_up_player_hanging_on_wall_on_left();
         game.player_jump_if_possible();
         game.tick_physics();
@@ -1293,6 +1325,26 @@ mod tests {
         let mut game = set_up_player_hanging_on_wall_on_left();
         game.player_vel_bpf.set_y(1.0);
         assert!(!game.player_is_grabbing_wall());
+    }
+    #[test]
+    fn test_no_friction_when_sliding_up_wall() {
+        let mut game = set_up_player_on_platform();
+        let wall_x = game.player_pos.x() as i32 - 2;
+        game.draw_line((wall_x, 0), (wall_x, 20), Block::Wall);
+        game.player_desired_x_direction = -1;
+        game.player_pos.add_assign(p(0.0, 2.0));
+        game.player_pos.set_x(wall_x as f32 + 1.0);
+        game.player_vel_bpf = p(-3.0, 3.0);
+        game.player_acceleration_from_gravity = 0.0;
+
+        let start_y_vel = game.player_vel_bpf.y();
+        let start_y_pos = game.player_pos.y();
+        game.tick_physics();
+        let end_y_vel = game.player_vel_bpf.y();
+        let end_y_pos = game.player_pos.y();
+
+        assert!(start_y_vel == end_y_vel);
+        assert!(start_y_pos != end_y_pos);
     }
 
     #[test]
@@ -1469,6 +1521,14 @@ mod tests {
                 == quarter_block_by_offset((0, 0))
         );
         assert!(
+            Glyph::red_square_with_half_step_offset(p(0.26, 0.0)).character
+                == quarter_block_by_offset((1, 0))
+        );
+        assert!(
+            Glyph::red_square_with_half_step_offset(p(0.49, 0.0)).character
+                == quarter_block_by_offset((1, 0))
+        );
+        assert!(
             Glyph::red_square_with_half_step_offset(p(0.2, 0.4)).character
                 == quarter_block_by_offset((0, 1))
         );
@@ -1477,8 +1537,12 @@ mod tests {
                 == quarter_block_by_offset((-1, 1))
         );
         assert!(
-            Glyph::red_square_with_half_step_offset(p(0.5, 0.0)).character
+            Glyph::red_square_with_half_step_offset(p(0.76, 0.0)).character
                 == quarter_block_by_offset((2, 0))
+        );
+        assert!(
+            Glyph::red_square_with_half_step_offset(p(0.3, -0.6)).character
+                == quarter_block_by_offset((1, -1))
         );
     }
     #[ignore]
@@ -1501,7 +1565,6 @@ mod tests {
         assert!(glyphs[1][2].clone().unwrap().character == quarter_block_by_offset((-1, 0)));
     }
 
-    #[ignore]
     #[test]
     fn test_player_glyphs_for_half_step_up_and_right() {
         let mut game = set_up_just_player();
@@ -1739,5 +1802,14 @@ mod tests {
         assert!(e(3) == p(0, -1));
         assert!(e(4.0) == p(1.0, 0.0));
         assert!(e(4) == p(1, 0));
+    }
+    #[test]
+    fn test_projection() {
+        assert!(project(p(1.0, 0.0), p(5.0, 0.0)) == p(1.0, 0.0));
+        assert!(project(p(1.0, 0.0), p(0.0, 5.0)) == p(0.0, 0.0));
+        assert!(project(p(1.0, 1.0), p(1.0, 0.0)) == p(1.0, 0.0));
+        assert!(project(p(6.0, 6.0), p(0.0, 1.0)) == p(0.0, 6.0));
+        assert!(project(p(2.0, 6.0), p(0.0, 1.0)) == p(0.0, 6.0));
+        assert!(project(p(-6.0, 6.0), p(0.0, 1.0)) == p(0.0, 6.0));
     }
 }
