@@ -223,7 +223,7 @@ struct Game {
     player_pos: Point<f32>,
     player_max_run_speed_bpf: f32,
     player_vel_bpf: Point<f32>,
-    player_desired_x_direction: i32,
+    player_desired_direction: Point<i32>,
     player_jump_delta_v: f32,
     player_acceleration_from_gravity: f32,
     player_acceleration_from_traction: f32,
@@ -245,7 +245,7 @@ impl Game {
             player_pos: p(0.0, 0.0),
             player_max_run_speed_bpf: PLAYER_DEFAULT_MAX_SPEED_BPF,
             player_vel_bpf: Point::<f32>::new(0.0, 0.0),
-            player_desired_x_direction: 0,
+            player_desired_direction: p(0, 0),
             player_jump_delta_v: DEFAULT_PLAYER_JUMP_DELTA_V,
             player_acceleration_from_gravity: DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
             player_acceleration_from_traction: DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION,
@@ -305,7 +305,7 @@ impl Game {
         let grid_point = Game::snap_to_grid(p(x, y));
         self.grid[grid_point.x() as usize][grid_point.y() as usize] = Block::Player;
         self.player_vel_bpf = p(0.0, 0.0);
-        self.player_desired_x_direction = 0;
+        self.player_desired_direction = p(0, 0);
         self.player_pos = p(x, y);
         self.player_alive = true;
         self.player_remaining_coyote_frames = 0;
@@ -316,7 +316,7 @@ impl Game {
                 self.player_jump_delta_v * -self.player_wall_grab_direction() as f32,
                 0.0,
             ));
-            self.player_desired_x_direction *= -1;
+            self.player_desired_direction.set_x(self.player_desired_direction.x() * -1);
         }
         self.player_vel_bpf.set_y(self.player_jump_delta_v);
     }
@@ -327,8 +327,8 @@ impl Game {
     }
 
     fn player_set_desired_x_direction(&mut self, new_x_dir: i32) {
-        if new_x_dir != self.player_desired_x_direction {
-            self.player_desired_x_direction = new_x_dir.sign();
+        if new_x_dir != self.player_desired_direction.x() {
+            self.player_desired_direction = p(new_x_dir.sign(), 0);
         }
     }
 
@@ -504,9 +504,9 @@ impl Game {
     }
 
     fn player_is_grabbing_wall(&self) -> bool {
-        if self.player_desired_x_direction != 0 && self.player_vel_bpf.y() <= 0.0 {
+        if self.player_desired_direction.x() != 0 && self.player_vel_bpf.y() <= 0.0 {
             if let Some(block) =
-                self.get_block_relative_to_player(p(self.player_desired_x_direction.sign(), 0))
+                self.get_block_relative_to_player(self.player_desired_direction)
             {
                 return block.wall_grabbable();
             }
@@ -516,7 +516,7 @@ impl Game {
     fn player_wall_grab_direction(&self) -> i32 {
         // TODO: is this good?
         if self.player_is_grabbing_wall() {
-            return self.player_desired_x_direction.sign();
+            return self.player_desired_direction.x().sign();
         } else {
             return 0;
         }
@@ -534,7 +534,7 @@ impl Game {
 
     fn apply_player_acceleration_from_floor_traction(&mut self) {
         let start_x_vel = self.player_vel_bpf.x();
-        let desired_acceleration_direction = self.player_desired_x_direction.sign();
+        let desired_acceleration_direction = self.player_desired_direction.x().sign();
 
         let trying_to_stop = desired_acceleration_direction == 0 && start_x_vel != 0.0;
         let started_above_max_speed = start_x_vel.abs() > self.player_max_run_speed_bpf;
@@ -982,7 +982,7 @@ mod tests {
     fn set_up_player_hanging_on_wall_on_left() -> Game {
         let mut game = set_up_just_player();
         game.draw_line((14, 0), (14, 20), Block::Wall);
-        game.player_desired_x_direction = -1;
+        game.player_desired_direction.set_x(-1);
         return game;
     }
 
@@ -1147,7 +1147,7 @@ mod tests {
     fn test_move_player() {
         let mut game = set_up_player_on_platform();
         game.player_max_run_speed_bpf = 1.0;
-        game.player_desired_x_direction = 1;
+        game.player_desired_direction.set_x(1);
 
         game.tick_physics();
 
@@ -1156,8 +1156,8 @@ mod tests {
         assert!(game.grid[16][11] == Block::Player);
 
         game.place_player(15.0, 11.0);
-        assert!(game.player_desired_x_direction == 0);
-        game.player_desired_x_direction = -1;
+        assert!(game.player_desired_direction.x() == 0);
+        game.player_desired_direction.set_x(-1);
 
         game.tick_physics();
         game.tick_physics();
@@ -1171,7 +1171,7 @@ mod tests {
         let mut game = set_up_player_on_platform();
         game.draw_point(round(game.player_pos) + p(1, 0), Block::Wall);
         game.player_max_run_speed_bpf = 1.0;
-        game.player_desired_x_direction = 1;
+        game.player_desired_direction.set_x(1);
 
         game.tick_physics();
 
@@ -1186,7 +1186,7 @@ mod tests {
         let mut game = set_up_player_on_platform();
         game.draw_point(round(game.player_pos) + p(2, 0), Block::Wall);
         game.player_pos.add_assign(p(0.999, 0.0));
-        game.player_desired_x_direction = 1;
+        game.player_desired_direction.set_x(1);
         game.player_vel_bpf.set_x(5.0);
 
         game.tick_physics();
@@ -1200,7 +1200,7 @@ mod tests {
         let mut game = set_up_player_on_platform();
         game.player_max_run_speed_bpf = 0.49;
         game.player_acceleration_from_traction = 999.9; // rilly fast
-        game.player_desired_x_direction = 1;
+        game.player_desired_direction.set_x(1);
 
         game.tick_physics();
 
@@ -1216,7 +1216,7 @@ mod tests {
     fn test_move_player_quickly() {
         let mut game = set_up_player_on_platform();
         game.player_max_run_speed_bpf = 2.0;
-        game.player_desired_x_direction = 1;
+        game.player_desired_direction.set_x(1);
 
         game.tick_physics();
         game.tick_physics();
@@ -1230,7 +1230,7 @@ mod tests {
         // Player should not teleport through this block
         game.draw_point(p(16, 11), Block::Wall);
         game.player_max_run_speed_bpf = 2.0;
-        game.player_desired_x_direction = 1;
+        game.player_desired_direction.set_x(1);
 
         game.tick_physics();
         assert!(game.player_pos == p(15.0, 11.0));
@@ -1285,7 +1285,7 @@ mod tests {
         let mut game = set_up_player_on_platform();
         game.player_max_run_speed_bpf = 1.0;
         game.player_vel_bpf.set_x(5.0);
-        game.player_desired_x_direction = 1;
+        game.player_desired_direction.set_x(1);
         game.tick_physics();
         assert!(game.player_vel_bpf.x() > game.player_max_run_speed_bpf);
         assert!(game.player_vel_bpf.x() < 5.0);
@@ -1344,7 +1344,7 @@ mod tests {
         let mut game = set_up_player_on_platform();
         let wall_x = game.player_pos.x() as i32 - 2;
         game.draw_line((wall_x, 0), (wall_x, 20), Block::Wall);
-        game.player_desired_x_direction = -1;
+        game.player_desired_direction.set_x(-1);
         game.player_pos.add_assign(p(0.0, 2.0));
         game.player_pos.set_x(wall_x as f32 + 1.0);
         game.player_vel_bpf = p(-3.0, 3.0);
@@ -1935,5 +1935,12 @@ mod tests {
         assert!(round_vector_with_tie_break_toward_inf(p(-0.1, -0.1)) == p(0, 0));
         assert!(round_vector_with_tie_break_toward_inf(p(0.5, 0.5)) == p(1, 1));
         assert!(round_vector_with_tie_break_toward_inf(p(-0.5, -0.5)) == p(0, 0));
+    }
+    
+    fn test_dash_right_on_ground() {
+        let mut game = set_up_player_on_platform();
+        game.dash(p(1,0));
+        assert!()
+
     }
 }
