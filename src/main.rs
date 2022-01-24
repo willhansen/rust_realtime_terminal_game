@@ -201,7 +201,7 @@ impl Glyph {
         }
     }
     fn square_with_half_step_offset(offset: Point<f32>) -> Glyph {
-        let step = Game::snap_to_grid(offset * 2.0);
+        let step = round_vector_with_tie_break_toward_inf(offset * 2.0);
         Glyph {
             character: quarter_block_by_offset((step.x(), step.y())),
             fg_color: Some(Glyph::fg_color_from_name(PLAYER_COLOR)),
@@ -395,6 +395,7 @@ impl Game {
                 if let Some(glyph) = player_glyphs[i][j].clone() {
                     let x = grid_pos.x() - 1 + i as i32;
                     let y = grid_pos.y() - 1 + j as i32;
+
                     if self.in_world(p(x, y)) {
                         self.output_buffer[x as usize][y as usize] = glyph;
                     }
@@ -416,17 +417,14 @@ impl Game {
             for i in 0..3 {
                 let x = i as i32 - 1;
                 if offset_dir.x() == x || x == 0 {
-                    output[i][c] = Some(Glyph::square_with_horizontal_offset(
-                        x_offset - x as f32,
-                    ));
+                    output[i][c] = Some(Glyph::square_with_horizontal_offset(x_offset - x as f32));
                 }
             }
         } else if x_offset == 0.0 {
             for j in 0..3 {
                 let y = j as i32 - 1;
                 if offset_dir.y() == y || y == 0 {
-                    output[c][j] =
-                        Some(Glyph::square_with_vertical_offset(y_offset - y as f32));
+                    output[c][j] = Some(Glyph::square_with_vertical_offset(y_offset - y as f32));
                 }
             }
         } else {
@@ -436,9 +434,7 @@ impl Game {
                     let y = j as i32 - 1;
                     let square = p(x as f32, y as f32);
                     if (offset_dir.x() == x || x == 0) && (offset_dir.y() == y || y == 0) {
-                        let glyph = Glyph::square_with_half_step_offset(
-                            Game::offset_from_grid(self.player_pos) - square,
-                        );
+                        let glyph = Glyph::square_with_half_step_offset(grid_offset - square);
                         if glyph.character != ' ' {
                             output[i][j] = Some(glyph);
                         }
@@ -899,6 +895,19 @@ fn trunc(vec: Point<f32>) -> Point<i32> {
 
 fn round(vec: Point<f32>) -> Point<i32> {
     return Point::<i32>::new(vec.x().round() as i32, vec.y().round() as i32);
+}
+fn round_vector_with_tie_break_toward_inf(vec: Point<f32>) -> Point<i32> {
+    return Point::<i32>::new(
+        round_with_tie_break_toward_inf(vec.x()),
+        round_with_tie_break_toward_inf(vec.y()),
+    );
+}
+fn round_with_tie_break_toward_inf(x: f32) -> i32 {
+    if (x - x.round()).abs() == 0.5 {
+        return (x + 0.1).round() as i32;
+    } else {
+        return x.round() as i32;
+    }
 }
 fn floatify(vec: Point<i32>) -> Point<f32> {
     return Point::<f32>::new(vec.x() as f32, vec.y() as f32);
@@ -1406,34 +1415,6 @@ mod tests {
         );
     }
 
-    #[ignore]
-    #[test]
-    fn test_horizontal_sub_glyph_positioning_on_right_rounding_up() {
-        let mut game = set_up_player_on_platform();
-        game.player_pos.add_assign(p(0.5, 0.0));
-        game.update_output_buffer();
-        let left_glyph = game.get_buffered_glyph(Game::snap_to_grid(game.player_pos));
-        let right_glyph =
-            game.get_buffered_glyph(Game::snap_to_grid(game.player_pos + p(1.0, 0.0)));
-        assert!(left_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
-        assert!(left_glyph.fg_color == Some(Glyph::fg_color_from_name(ColorName::Black)));
-        assert!(left_glyph.bg_color == Some(Glyph::bg_color_from_name(PLAYER_COLOR)));
-        assert!(right_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
-        assert!(right_glyph.fg_color == Some(Glyph::fg_color_from_name(PLAYER_COLOR)));
-        assert!(right_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Black)));
-    }
-
-    #[test]
-    fn test_horizontal_sub_glyph_positioning_on_right_below_rounding_point() {
-        let mut game = set_up_player_on_platform();
-        game.player_pos.add_assign(p(0.49, 0.0));
-        game.update_output_buffer();
-        let left_glyph = game.get_buffered_glyph(Game::snap_to_grid(game.player_pos));
-        let right_glyph =
-            game.get_buffered_glyph(Game::snap_to_grid(game.player_pos + p(1.0, 0.0)));
-        assert!(left_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
-        assert!(right_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
-    }
     #[test]
     fn test_horizontal_sub_glyph_positioning_on_left() {
         let mut game = set_up_player_on_platform();
@@ -1470,11 +1451,10 @@ mod tests {
         assert!(left_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
         assert!(right_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
     }
-    #[ignore]
     #[test]
     fn test_vertical_sub_glyph_positioning_upwards() {
         let mut game = set_up_player_on_platform();
-        game.player_pos.add_assign(p(0.0, 0.5));
+        game.player_pos.add_assign(p(0.0, 0.49));
         game.update_output_buffer();
 
         let top_glyph = game.get_buffered_glyph(Game::snap_to_grid(game.player_pos + p(0.0, 1.0)));
@@ -1525,8 +1505,20 @@ mod tests {
                 == quarter_block_by_offset((0, 0))
         );
         assert!(
+            Glyph::square_with_half_step_offset(p(0.25, 0.0)).character
+                == quarter_block_by_offset((1, 0))
+        );
+        assert!(
             Glyph::square_with_half_step_offset(p(0.26, 0.0)).character
                 == quarter_block_by_offset((1, 0))
+        );
+        assert!(
+            Glyph::square_with_half_step_offset(p(-0.25, 0.0)).character
+                == quarter_block_by_offset((0, 0))
+        );
+        assert!(
+            Glyph::square_with_half_step_offset(p(-0.26, 0.0)).character
+                == quarter_block_by_offset((-1, 0))
         );
         assert!(
             Glyph::square_with_half_step_offset(p(0.49, 0.0)).character
@@ -1575,7 +1567,23 @@ mod tests {
     #[test]
     fn test_player_glyphs_when_rounding_to_zero_for_x_and_half_step_up_for_y() {
         let mut game = set_up_just_player();
-        game.player_pos.add_assign(p(0.24, 0.49));
+        game.player_pos.add_assign(p(0.24, 0.26));
+        let glyphs = game.get_player_glyphs();
+        assert!(glyphs[0][0] == None);
+        assert!(glyphs[0][1] == None);
+        assert!(glyphs[0][2] == None);
+        assert!(glyphs[1][0] == None);
+        assert!(glyphs[1][1].clone().unwrap().character == quarter_block_by_offset((0, 1)));
+        assert!(glyphs[1][2].clone().unwrap().character == quarter_block_by_offset((0, -1)));
+        assert!(glyphs[2][0] == None);
+        assert!(glyphs[2][1] == None);
+        assert!(glyphs[2][2] == None);
+    }
+
+    #[test]
+    fn test_player_glyphs_when_rounding_to_zero_for_x_and_exactly_half_step_up_for_y() {
+        let mut game = set_up_just_player();
+        game.player_pos.add_assign(p(0.24, 0.25));
         let glyphs = game.get_player_glyphs();
         assert!(glyphs[0][0] == None);
         assert!(glyphs[0][1] == None);
@@ -1588,15 +1596,15 @@ mod tests {
         assert!(glyphs[2][2] == None);
     }
     #[test]
-    fn test_player_glyphs_when_rounding_to_zero_for_x_and_half_step_down_for_y() {
+    fn test_player_glyphs_when_rounding_to_zero_for_x_and_exactly_half_step_down_for_y() {
         let mut game = set_up_just_player();
-        game.player_pos.add_assign(p(0.24, -0.4));
+        game.player_pos.add_assign(p(-0.2, -0.25));
         let glyphs = game.get_player_glyphs();
         assert!(glyphs[0][0] == None);
         assert!(glyphs[0][1] == None);
         assert!(glyphs[0][2] == None);
-        assert!(glyphs[1][0].clone().unwrap().character == quarter_block_by_offset((0, 1)));
-        assert!(glyphs[1][1].clone().unwrap().character == quarter_block_by_offset((0, -1)));
+        assert!(glyphs[1][0] == None);
+        assert!(glyphs[1][1].clone().unwrap().character == quarter_block_by_offset((0, 0)));
         assert!(glyphs[1][2] == None);
         assert!(glyphs[2][0] == None);
         assert!(glyphs[2][1] == None);
@@ -1667,16 +1675,15 @@ mod tests {
         assert!(glyphs[2][2] == None);
     }
 
-    #[ignore]
     #[test]
     fn test_player_glyphs_for_half_step_down_and_left() {
         let mut game = set_up_just_player();
         game.player_pos.add_assign(p(-0.26, -0.4999));
         let glyphs = game.get_player_glyphs();
         assert!(glyphs[0][0].clone().unwrap().character == quarter_block_by_offset((1, 1)));
-        assert!(glyphs[0][1].clone().unwrap().character == quarter_block_by_offset((-1, 1)));
+        assert!(glyphs[0][1].clone().unwrap().character == quarter_block_by_offset((1, -1)));
         assert!(glyphs[0][2] == None);
-        assert!(glyphs[1][0].clone().unwrap().character == quarter_block_by_offset((1, -1)));
+        assert!(glyphs[1][0].clone().unwrap().character == quarter_block_by_offset((-1, 1)));
         assert!(glyphs[1][1].clone().unwrap().character == quarter_block_by_offset((-1, -1)));
         assert!(glyphs[1][2] == None);
         assert!(glyphs[2][0] == None);
@@ -1684,7 +1691,6 @@ mod tests {
         assert!(glyphs[2][2] == None);
     }
 
-    #[ignore]
     #[test]
     fn test_player_glyphs_for_half_step_down_and_right() {
         let mut game = set_up_just_player();
@@ -1694,19 +1700,18 @@ mod tests {
         assert!(glyphs[0][1] == None);
         assert!(glyphs[0][2] == None);
         assert!(glyphs[1][0].clone().unwrap().character == quarter_block_by_offset((1, 1)));
-        assert!(glyphs[1][1].clone().unwrap().character == quarter_block_by_offset((-1, 1)));
+        assert!(glyphs[1][1].clone().unwrap().character == quarter_block_by_offset((1, -1)));
         assert!(glyphs[1][2] == None);
-        assert!(glyphs[2][0].clone().unwrap().character == quarter_block_by_offset((1, -1)));
+        assert!(glyphs[2][0].clone().unwrap().character == quarter_block_by_offset((-1, 1)));
         assert!(glyphs[2][1].clone().unwrap().character == quarter_block_by_offset((-1, -1)));
         assert!(glyphs[2][2] == None);
     }
-    #[ignore]
     #[test]
     // When jumping at an angle, can't use the high precision sub-square glyphs, so fall back to the half-grid precision ones
     fn test_off_alignment_player_coarse_rendering_given_slight_offset() {
         let mut game = set_up_player_on_platform();
 
-        game.player_pos.add_assign(p(0.1, 0.6));
+        game.player_pos.add_assign(p(0.1, 0.3));
         game.update_output_buffer();
         let player_half_step = p(0, 1);
         let top_glyph = game.get_buffered_glyph(Game::snap_to_grid(
@@ -1720,12 +1725,11 @@ mod tests {
         assert!(bottom_glyph.fg_color == Some(Glyph::fg_color_from_name(PLAYER_COLOR)));
         assert!(bottom_glyph.bg_color == Some(Glyph::bg_color_from_name(ColorName::Black)));
     }
-    #[ignore]
     #[test]
     fn test_off_alignment_player_coarse_rendering_given_diagonal_offset() {
         let mut game = set_up_just_player();
 
-        game.player_pos.add_assign(p(0.8, -0.6));
+        game.player_pos.add_assign(p(0.4, -0.3));
         game.update_output_buffer();
         let top_left_glyph = game.get_buffered_glyph(Game::snap_to_grid(game.player_pos));
         let top_right_glyph =
@@ -1780,6 +1784,18 @@ mod tests {
     fn test_offset_from_grid_rounds_to_zero() {
         assert!(Game::offset_from_grid(p(9.0, -9.0)) == p(0.0, 0.0));
     }
+    #[test]
+    fn test_offset_from_grid_consistent_with_round_to_grid() {
+        let mut p1 = p(0.0, 0.0);
+        assert!(floatify(Game::snap_to_grid(p1)) + Game::offset_from_grid(p1) == p1);
+        p1 = p(0.5, 0.5);
+        assert!(floatify(Game::snap_to_grid(p1)) + Game::offset_from_grid(p1) == p1);
+        p1 = p(-0.5, 0.5);
+        assert!(floatify(Game::snap_to_grid(p1)) + Game::offset_from_grid(p1) == p1);
+        p1 = p(-0.5, -0.5);
+        assert!(floatify(Game::snap_to_grid(p1)) + Game::offset_from_grid(p1) == p1);
+    }
+
     #[test]
     fn test_sign() {
         assert!(9.0.sign() == 1.0);
@@ -1909,5 +1925,15 @@ mod tests {
         assert!(project(p(6.0, 6.0), p(0.0, 1.0)) == p(0.0, 6.0));
         assert!(project(p(2.0, 6.0), p(0.0, 1.0)) == p(0.0, 6.0));
         assert!(project(p(-6.0, 6.0), p(0.0, 1.0)) == p(0.0, 6.0));
+    }
+    #[test]
+    fn test_round_with_tie_break_to_inf() {
+        assert!(round_vector_with_tie_break_toward_inf(p(0.0, 0.0)) == p(0, 0));
+        assert!(round_vector_with_tie_break_toward_inf(p(1.0, 1.0)) == p(1, 1));
+        assert!(round_vector_with_tie_break_toward_inf(p(-1.0, -1.0)) == p(-1, -1));
+        assert!(round_vector_with_tie_break_toward_inf(p(0.1, 0.1)) == p(0, 0));
+        assert!(round_vector_with_tie_break_toward_inf(p(-0.1, -0.1)) == p(0, 0));
+        assert!(round_vector_with_tie_break_toward_inf(p(0.5, 0.5)) == p(1, 1));
+        assert!(round_vector_with_tie_break_toward_inf(p(-0.5, -0.5)) == p(0, 0));
     }
 }
