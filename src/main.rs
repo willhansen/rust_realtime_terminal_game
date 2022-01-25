@@ -113,6 +113,7 @@ struct MovecastCollision {
 enum ColorName {
     Red,
     Green,
+    Blue,
     Black,
     White,
     Reset,
@@ -159,6 +160,7 @@ impl Glyph {
         match color_name {
             ColorName::Red => color::Fg(color::Red).to_string(),
             ColorName::Green => color::Fg(color::Green).to_string(),
+            ColorName::Blue => color::Fg(color::Blue).to_string(),
             ColorName::White => color::Fg(color::White).to_string(),
             ColorName::Black => color::Fg(color::Black).to_string(),
             ColorName::Reset => color::Fg(color::Reset).to_string(),
@@ -169,6 +171,7 @@ impl Glyph {
         match color_name {
             ColorName::Red => color::Bg(color::Red).to_string(),
             ColorName::Green => color::Bg(color::Green).to_string(),
+            ColorName::Blue => color::Bg(color::Blue).to_string(),
             ColorName::White => color::Bg(color::White).to_string(),
             ColorName::Black => color::Bg(color::Black).to_string(),
             ColorName::Reset => color::Bg(color::Reset).to_string(),
@@ -551,17 +554,13 @@ impl Game {
         }
     }
     fn get_player_glyphs(&self) -> Vec<Vec<Option<Glyph>>> {
-        if self.player_vel_bpf.euclidean_length() > self.player_max_run_speed_bpf {
-            return Glyph::get_glyphs_for_colored_floating_square(
-                self.player_pos,
-                PLAYER_HIGH_SPEED_COLOR,
-            );
+        return if magnitude(self.player_vel_bpf)
+            > magnitude(p(self.player_max_run_speed_bpf, self.player_jump_delta_v))
+        {
+            Glyph::get_glyphs_for_colored_floating_square(self.player_pos, PLAYER_HIGH_SPEED_COLOR)
         } else {
-            return Glyph::get_glyphs_for_colored_floating_square(
-                self.player_pos,
-                self.player_color,
-            );
-        }
+            Glyph::get_glyphs_for_colored_floating_square(self.player_pos, self.player_color)
+        };
     }
 
     fn get_buffered_glyph(&self, pos: Point<i32>) -> &Glyph {
@@ -1883,25 +1882,6 @@ mod tests {
         assert!(glyphs[2][2] == None);
     }
     #[test]
-    // When jumping at an angle, can't use the high precision sub-square glyphs, so fall back to the half-grid precision ones
-    fn test_off_alignment_player_coarse_rendering_given_slight_offset() {
-        let mut game = set_up_player_on_platform();
-
-        game.player_pos.add_assign(p(0.1, 0.3));
-        game.update_output_buffer();
-        let player_half_step = p(0, 1);
-        let top_glyph = game.get_buffered_glyph(Game::snap_to_grid(
-            game.player_pos + floatify(player_half_step),
-        ));
-        let bottom_glyph = game.get_buffered_glyph(Game::snap_to_grid(game.player_pos));
-        assert!(top_glyph.character == quarter_block_by_offset((-player_half_step).x_y()));
-        assert!(top_glyph.fg_color == PLAYER_COLOR);
-        assert!(top_glyph.bg_color == ColorName::Black);
-        assert!(bottom_glyph.character == quarter_block_by_offset((player_half_step).x_y()));
-        assert!(bottom_glyph.fg_color == PLAYER_COLOR);
-        assert!(bottom_glyph.bg_color == ColorName::Black);
-    }
-    #[test]
     fn test_off_alignment_player_coarse_rendering_given_diagonal_offset() {
         let mut game = set_up_just_player();
 
@@ -2018,10 +1998,20 @@ mod tests {
         assert!(Game::snap_to_grid(p(-0.9, -59.51)) == p(-1, -60));
     }
 
-    #[ignore]
     #[test]
     // The timing of when to slide to a stop should give the player precision positioning
-    fn test_dont_snap_to_grid_when_sliding_to_a_halt() {}
+    fn test_dont_snap_to_grid_when_sliding_to_a_halt() {
+        let mut game = set_up_player_on_platform();
+        game.player_pos.add_assign(p(0.1, 0.0));
+        game.player_vel_bpf = p(0.1, 0.0);
+        game.player_acceleration_from_traction = 0.1;
+        game.player_desired_direction = p(0, 0);
+
+        game.tick_physics();
+        assert!(game.player_vel_bpf.x() == 0.0);
+        assert!(Game::offset_from_grid(game.player_pos).x() != 0.0);
+    }
+
     #[ignore]
     #[test]
     // The general case of this is pressing jump any time before landing causing an instant jump when possible
@@ -2166,5 +2156,15 @@ mod tests {
         assert!(game.player_desired_direction == p(1, 0));
         game.handle_input(Event::Key(Key::Up));
         assert!(game.player_desired_direction == p(0, 1));
+    }
+
+    #[test]
+    fn test_different_color_when_go_fast() {
+        let mut game = set_up_player_on_platform();
+        let stopped_color = game.get_player_glyphs()[1][1].clone().unwrap().fg_color;
+        game.player_vel_bpf = p(game.player_max_run_speed_bpf + 5.0, 0.0);
+        let fast_color = game.get_player_glyphs()[1][1].clone().unwrap().fg_color;
+
+        assert!(stopped_color != fast_color);
     }
 }
