@@ -7,6 +7,7 @@ extern crate termion;
 // use assert2::{assert, check};
 use crate::num::traits::Pow;
 use geo::algorithm::euclidean_distance::EuclideanDistance;
+use geo::algorithm::euclidean_length::EuclideanLength;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Point};
 use std::fmt::Debug;
@@ -25,6 +26,7 @@ use termion::raw::IntoRawMode;
 const MAX_FPS: i32 = 60; // frames per second
 const IDEAL_FRAME_DURATION_MS: u128 = (1000.0 / MAX_FPS as f32) as u128;
 const PLAYER_COLOR: ColorName = ColorName::Red;
+const PLAYER_HIGH_SPEED_COLOR: ColorName = ColorName::Blue;
 
 // a block every two ticks
 const PLAYER_DEFAULT_MAX_SPEED_BPS: f32 = 30.0; // blocks per second
@@ -127,20 +129,20 @@ impl Glyph {
     fn to_string(&self) -> String {
         let mut output = self.character.to_string();
         //if self.fg_color != ColorName::White {
-            output = format!(
-                "{}{}{}",
-                Glyph::fg_color_from_name(self.fg_color),
-                output,
-                Glyph::fg_color_from_name(ColorName::White),
-            );
+        output = format!(
+            "{}{}{}",
+            Glyph::fg_color_from_name(self.fg_color),
+            output,
+            Glyph::fg_color_from_name(ColorName::White),
+        );
         //}
         //if self.bg_color != ColorName::Black {
-            output = format!(
-                "{}{}{}",
-                Glyph::bg_color_from_name(self.bg_color),
-                output,
-                Glyph::bg_color_from_name(ColorName::Black),
-            );
+        output = format!(
+            "{}{}{}",
+            Glyph::bg_color_from_name(self.bg_color),
+            output,
+            Glyph::bg_color_from_name(ColorName::Black),
+        );
         //}
         return output;
     }
@@ -174,10 +176,16 @@ impl Glyph {
     }
 
     fn square_with_horizontal_offset(fraction_of_square_offset: f32) -> Glyph {
-        return Glyph::colored_square_with_horizontal_offset(fraction_of_square_offset, ColorName::White);
+        return Glyph::colored_square_with_horizontal_offset(
+            fraction_of_square_offset,
+            ColorName::White,
+        );
     }
 
-    fn colored_square_with_horizontal_offset(fraction_of_square_offset: f32, color_name: ColorName) -> Glyph {
+    fn colored_square_with_horizontal_offset(
+        fraction_of_square_offset: f32,
+        color_name: ColorName,
+    ) -> Glyph {
         let offset_in_eighths_rounded_towards_inf = (fraction_of_square_offset * 8.0).ceil() as i32;
         assert!(offset_in_eighths_rounded_towards_inf.abs() <= 8);
         if offset_in_eighths_rounded_towards_inf <= 0 {
@@ -196,9 +204,15 @@ impl Glyph {
         }
     }
     fn square_with_vertical_offset(fraction_of_square_offset: f32) -> Glyph {
-        return Glyph::colored_square_with_vertical_offset(fraction_of_square_offset, ColorName::White);
+        return Glyph::colored_square_with_vertical_offset(
+            fraction_of_square_offset,
+            ColorName::White,
+        );
     }
-    fn colored_square_with_vertical_offset(fraction_of_square_offset: f32, color_name: ColorName) -> Glyph {
+    fn colored_square_with_vertical_offset(
+        fraction_of_square_offset: f32,
+        color_name: ColorName,
+    ) -> Glyph {
         let offset_in_eighths_rounded_towards_inf = (fraction_of_square_offset * 8.0).ceil() as i32;
         assert!(offset_in_eighths_rounded_towards_inf.abs() <= 8);
         if offset_in_eighths_rounded_towards_inf <= 0 {
@@ -229,7 +243,10 @@ impl Glyph {
     fn get_glyphs_for_floating_square(pos: Point<f32>) -> Vec<Vec<Option<Glyph>>> {
         return Glyph::get_glyphs_for_colored_floating_square(pos, ColorName::White);
     }
-    fn get_glyphs_for_colored_floating_square(pos: Point<f32>, color: ColorName) -> Vec<Vec<Option<Glyph>>> {
+    fn get_glyphs_for_colored_floating_square(
+        pos: Point<f32>,
+        color: ColorName,
+    ) -> Vec<Vec<Option<Glyph>>> {
         let grid_offset = Game::offset_from_grid(pos);
         let x_offset = grid_offset.x();
         let y_offset = grid_offset.y();
@@ -239,12 +256,17 @@ impl Glyph {
             Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(pos, color)
         } else {
             Glyph::get_half_grid_glyphs_for_colored_floating_square(pos, color)
-        }
+        };
     }
-    fn get_smooth_horizontal_glyphs_for_floating_square(pos: Point<f32>) -> Vec<Vec<Option<Glyph>>> {
+    fn get_smooth_horizontal_glyphs_for_floating_square(
+        pos: Point<f32>,
+    ) -> Vec<Vec<Option<Glyph>>> {
         Glyph::get_smooth_horizontal_glyphs_for_colored_floating_square(pos, ColorName::White)
     }
-    fn get_smooth_horizontal_glyphs_for_colored_floating_square(pos: Point<f32>, color: ColorName) -> Vec<Vec<Option<Glyph>>> {
+    fn get_smooth_horizontal_glyphs_for_colored_floating_square(
+        pos: Point<f32>,
+        color: ColorName,
+    ) -> Vec<Vec<Option<Glyph>>> {
         let width = 3;
         let mut output = vec![vec![None; width]; width];
 
@@ -257,7 +279,10 @@ impl Glyph {
         for i in 0..3 {
             let x = i as i32 - 1;
             if offset_dir.x() == x || x == 0 {
-                output[i][c] = Some(Glyph::colored_square_with_horizontal_offset(x_offset - x as f32, color));
+                output[i][c] = Some(Glyph::colored_square_with_horizontal_offset(
+                    x_offset - x as f32,
+                    color,
+                ));
             }
         }
 
@@ -266,7 +291,10 @@ impl Glyph {
     fn get_smooth_vertical_glyphs_for_floating_square(pos: Point<f32>) -> Vec<Vec<Option<Glyph>>> {
         Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(pos, ColorName::White)
     }
-    fn get_smooth_vertical_glyphs_for_colored_floating_square(pos: Point<f32>, color: ColorName) -> Vec<Vec<Option<Glyph>>> {
+    fn get_smooth_vertical_glyphs_for_colored_floating_square(
+        pos: Point<f32>,
+        color: ColorName,
+    ) -> Vec<Vec<Option<Glyph>>> {
         let width = 3;
         let mut output = vec![vec![None; width]; width];
 
@@ -278,7 +306,10 @@ impl Glyph {
         for j in 0..3 {
             let y = j as i32 - 1;
             if offset_dir.y() == y || y == 0 {
-                output[c][j] = Some(Glyph::colored_square_with_vertical_offset(y_offset - y as f32, color));
+                output[c][j] = Some(Glyph::colored_square_with_vertical_offset(
+                    y_offset - y as f32,
+                    color,
+                ));
             }
         }
         return output;
@@ -288,8 +319,10 @@ impl Glyph {
         Glyph::get_half_grid_glyphs_for_colored_floating_square(pos, ColorName::White)
     }
 
-    fn get_half_grid_glyphs_for_colored_floating_square(pos: Point<f32>, color: ColorName) -> Vec<Vec<Option<Glyph>>> {
-
+    fn get_half_grid_glyphs_for_colored_floating_square(
+        pos: Point<f32>,
+        color: ColorName,
+    ) -> Vec<Vec<Option<Glyph>>> {
         let width = 3;
         let mut output = vec![vec![None; width]; width];
         let grid_offset = Game::offset_from_grid(pos);
@@ -301,7 +334,8 @@ impl Glyph {
                 let y = j as i32 - 1;
                 let square = p(x as f32, y as f32);
                 if (offset_dir.x() == x || x == 0) && (offset_dir.y() == y || y == 0) {
-                    let glyph = Glyph::colored_square_with_half_step_offset(grid_offset - square, color);
+                    let glyph =
+                        Glyph::colored_square_with_half_step_offset(grid_offset - square, color);
                     if glyph.character != ' ' {
                         output[i][j] = Some(glyph);
                     }
@@ -419,7 +453,8 @@ impl Game {
                 self.player_jump_delta_v * -self.player_wall_grab_direction() as f32,
                 0.0,
             ));
-            self.player_desired_direction.set_x(self.player_desired_direction.x() * -1);
+            self.player_desired_direction
+                .set_x(self.player_desired_direction.x() * -1);
         }
         self.player_vel_bpf.set_y(self.player_jump_delta_v);
     }
@@ -431,7 +466,8 @@ impl Game {
 
     fn player_dash(&mut self) {
         if self.player_desired_direction != p(0, 0) {
-            self.player_vel_bpf.add_assign(floatify(self.player_desired_direction) * DEFAULT_PLAYER_DASH_V);
+            self.player_vel_bpf
+                .add_assign(floatify(self.player_desired_direction) * DEFAULT_PLAYER_DASH_V);
         }
     }
 
@@ -515,7 +551,17 @@ impl Game {
         }
     }
     fn get_player_glyphs(&self) -> Vec<Vec<Option<Glyph>>> {
-        return Glyph::get_glyphs_for_colored_floating_square(self.player_pos, self.player_color);
+        if self.player_vel_bpf.euclidean_length() > self.player_max_run_speed_bpf {
+            return Glyph::get_glyphs_for_colored_floating_square(
+                self.player_pos,
+                PLAYER_HIGH_SPEED_COLOR,
+            );
+        } else {
+            return Glyph::get_glyphs_for_colored_floating_square(
+                self.player_pos,
+                self.player_color,
+            );
+        }
     }
 
     fn get_buffered_glyph(&self, pos: Point<i32>) -> &Glyph {
@@ -575,10 +621,11 @@ impl Game {
     }
 
     fn player_is_grabbing_wall(&self) -> bool {
-        if self.player_desired_direction.x() != 0 && self.player_vel_bpf.y() <= 0.0  && !self.player_is_standing_on_block(){
-            if let Some(block) =
-                self.get_block_relative_to_player(self.player_desired_direction)
-            {
+        if self.player_desired_direction.x() != 0
+            && self.player_vel_bpf.y() <= 0.0
+            && !self.player_is_standing_on_block()
+        {
+            if let Some(block) = self.get_block_relative_to_player(self.player_desired_direction) {
                 return block.wall_grabbable();
             }
         }
@@ -635,7 +682,7 @@ impl Game {
             end_x_vel = end_x_vel.sign() * self.player_max_run_speed_bpf;
         }
 
-        if end_x_vel == 0.0  && PLAYER_SNAP_TO_GRID_ON_STOP{
+        if end_x_vel == 0.0 && PLAYER_SNAP_TO_GRID_ON_STOP {
             self.player_pos
                 .set_x(Game::snap_to_grid(self.player_pos).x() as f32);
         }
@@ -1629,7 +1676,13 @@ mod tests {
     fn test_player_glyph_when_rounding_to_zero_for_both_axes() {
         let mut game = set_up_just_player();
         game.player_pos.add_assign(p(-0.24, 0.01));
-        assert!(game.get_player_glyphs() == Glyph::get_smooth_horizontal_glyphs_for_colored_floating_square(game.player_pos, game.player_color));
+        assert!(
+            game.get_player_glyphs()
+                == Glyph::get_smooth_horizontal_glyphs_for_colored_floating_square(
+                    game.player_pos,
+                    game.player_color
+                )
+        );
     }
     #[test]
     fn test_half_grid_glyphs_when_rounding_to_zero_for_x_and_half_step_up_for_y() {
@@ -1649,7 +1702,13 @@ mod tests {
     fn test_player_glyphs_when_rounding_to_zero_for_x_and_half_step_up_for_y() {
         let mut game = set_up_just_player();
         game.player_pos.add_assign(p(0.24, 0.26));
-        assert!(game.get_player_glyphs() == Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(game.player_pos, game.player_color));
+        assert!(
+            game.get_player_glyphs()
+                == Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(
+                    game.player_pos,
+                    game.player_color
+                )
+        );
     }
 
     #[test]
@@ -1671,7 +1730,13 @@ mod tests {
     fn test_player_glyphs_when_rounding_to_zero_for_x_and_exactly_half_step_up_for_y() {
         let mut game = set_up_just_player();
         game.player_pos.add_assign(p(0.24, 0.25));
-        assert!(game.get_player_glyphs() == Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(game.player_pos, game.player_color));
+        assert!(
+            game.get_player_glyphs()
+                == Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(
+                    game.player_pos,
+                    game.player_color
+                )
+        );
     }
     #[test]
     fn test_half_grid_glyphs_when_rounding_to_zero_for_x_and_exactly_half_step_down_for_y() {
@@ -1691,7 +1756,13 @@ mod tests {
     fn test_player_glyphs_when_rounding_to_zero_for_x_and_exactly_half_step_down_for_y() {
         let mut game = set_up_just_player();
         game.player_pos.add_assign(p(-0.2, -0.25));
-        assert!(game.get_player_glyphs() == Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(game.player_pos, game.player_color));
+        assert!(
+            game.get_player_glyphs()
+                == Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(
+                    game.player_pos,
+                    game.player_color
+                )
+        );
     }
     #[test]
     fn test_half_grid_glyphs_when_rounding_to_zero_for_y_and_half_step_right_for_x() {
@@ -1711,7 +1782,13 @@ mod tests {
     fn test_player_glyphs_when_rounding_to_zero_for_y_and_half_step_right_for_x() {
         let mut game = set_up_just_player();
         game.player_pos.add_assign(p(0.3, 0.1));
-        assert!(game.get_player_glyphs() == Glyph::get_smooth_horizontal_glyphs_for_colored_floating_square(game.player_pos, game.player_color));
+        assert!(
+            game.get_player_glyphs()
+                == Glyph::get_smooth_horizontal_glyphs_for_colored_floating_square(
+                    game.player_pos,
+                    game.player_color
+                )
+        );
     }
 
     #[test]
@@ -1732,7 +1809,13 @@ mod tests {
     fn test_player_glyphs_when_rounding_to_zero_for_y_and_half_step_left_for_x() {
         let mut game = set_up_just_player();
         game.player_pos.add_assign(p(-0.3, 0.2));
-        assert!(game.get_player_glyphs() == Glyph::get_smooth_horizontal_glyphs_for_colored_floating_square(game.player_pos, game.player_color));
+        assert!(
+            game.get_player_glyphs()
+                == Glyph::get_smooth_horizontal_glyphs_for_colored_floating_square(
+                    game.player_pos,
+                    game.player_color
+                )
+        );
     }
 
     #[test]
@@ -2036,7 +2119,6 @@ mod tests {
         let start_vel = game.player_vel_bpf;
         game.player_dash();
         assert!(game.player_vel_bpf == start_vel);
-
     }
     #[test]
     fn test_dash_right_on_ground() {
@@ -2044,18 +2126,17 @@ mod tests {
         let start_vel = game.player_vel_bpf;
         game.player_desired_direction = p(1, 0);
         game.player_dash();
-        assert!(game.player_vel_bpf == floatify(game.player_desired_direction) * DEFAULT_PLAYER_DASH_V);
-
+        assert!(
+            game.player_vel_bpf == floatify(game.player_desired_direction) * DEFAULT_PLAYER_DASH_V
+        );
     }
 
     #[ignore]
     #[test]
-    fn test_no_passive_horizontal_momentum_loss_while_midair () {
-
-    }
+    fn test_no_passive_horizontal_momentum_loss_while_midair() {}
 
     #[test]
-    fn test_dont_grab_wall_while_standing_on_ground () {
+    fn test_dont_grab_wall_while_standing_on_ground() {
         let mut game = set_up_player_on_platform();
         let wall_x = game.player_pos.x() as i32 - 1;
         game.draw_line((wall_x, 0), (wall_x, 20), Block::Wall);
@@ -2066,7 +2147,7 @@ mod tests {
     }
 
     #[test]
-    fn test_direction_buttons () {
+    fn test_direction_buttons() {
         let mut game = set_up_player_on_platform();
         game.handle_input(Event::Key(Key::Char('a')));
         assert!(game.player_desired_direction == p(-1, 0));
@@ -2085,6 +2166,5 @@ mod tests {
         assert!(game.player_desired_direction == p(1, 0));
         game.handle_input(Event::Key(Key::Up));
         assert!(game.player_desired_direction == p(0, 1));
-
     }
 }
