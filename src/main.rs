@@ -33,7 +33,7 @@ const DEFAULT_PLAYER_JUMP_DELTA_V: f32 = 1.0;
 const DEFAULT_PLAYER_DASH_V: f32 = 5.0;
 const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
 const DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION: f32 = 1.0;
-const DEFAULT_PLAYER_COYOTE_TIME_DURATION_S: f32 = 0.2;
+const DEFAULT_PLAYER_COYOTE_TIME_DURATION_S: f32 = 0.1;
 const DEFAULT_PLAYER_MAX_COYOTE_FRAMES: i32 =
     ((DEFAULT_PLAYER_COYOTE_TIME_DURATION_S * MAX_FPS as f32) + 1.0) as i32;
 const PLAYER_SNAP_TO_GRID_ON_STOP: bool = false;
@@ -69,7 +69,6 @@ enum Block {
     Air,
     Wall,
     Brick,
-    Player,
 }
 
 impl Block {
@@ -78,13 +77,19 @@ impl Block {
             Block::Air => ' ',
             Block::Wall => '█',
             Block::Brick => '▪',
-            Block::Player => EIGHTH_BLOCKS_FROM_LEFT[8],
+        }
+    }
+    fn color(&self) -> ColorName {
+        match self {
+            Block::Air => ColorName::Black,
+            Block::Wall => ColorName::White,
+            Block::Brick => ColorName::White,
         }
     }
 
     fn subject_to_block_gravity(&self) -> bool {
         match self {
-            Block::Air | Block::Wall | Block::Player => false,
+            Block::Air | Block::Wall => false,
             _ => true,
         }
     }
@@ -121,30 +126,30 @@ struct Glyph {
 impl Glyph {
     fn to_string(&self) -> String {
         let mut output = self.character.to_string();
-        if self.fg_color != ColorName::Reset {
+        //if self.fg_color != ColorName::White {
             output = format!(
                 "{}{}{}",
                 Glyph::fg_color_from_name(self.fg_color),
                 output,
-                Glyph::fg_color_from_name(ColorName::Reset),
+                Glyph::fg_color_from_name(ColorName::White),
             );
-        }
-        if self.bg_color != ColorName::Reset {
+        //}
+        //if self.bg_color != ColorName::Black {
             output = format!(
                 "{}{}{}",
                 Glyph::bg_color_from_name(self.bg_color),
                 output,
-                Glyph::bg_color_from_name(ColorName::Reset),
+                Glyph::bg_color_from_name(ColorName::Black),
             );
-        }
+        //}
         return output;
     }
 
     fn from_char(character: char) -> Glyph {
         return Glyph {
             character,
-            fg_color: ColorName::Reset,
-            bg_color: ColorName::Reset,
+            fg_color: ColorName::White,
+            bg_color: ColorName::Black,
         };
     }
 
@@ -334,7 +339,7 @@ impl Game {
         Game {
             grid: vec![vec![Block::Air; height as usize]; width as usize],
             output_buffer: vec![vec![Glyph::from_char(' '); height as usize]; width as usize],
-            output_on_screen: vec![vec![Glyph::from_char(' '); height as usize]; width as usize],
+            output_on_screen: vec![vec![Glyph::from_char('x'); height as usize]; width as usize],
             terminal_size: (width, height),
             prev_mouse_pos: (1, 1),
             running: true,
@@ -402,7 +407,6 @@ impl Game {
             self.kill_player();
         }
         let grid_point = Game::snap_to_grid(p(x, y));
-        self.grid[grid_point.x() as usize][grid_point.y() as usize] = Block::Player;
         self.player_vel_bpf = p(0.0, 0.0);
         self.player_desired_direction = p(0, 0);
         self.player_pos = p(x, y);
@@ -451,9 +455,10 @@ impl Game {
                 ),
                 Key::Char(' ') => self.player_jump_if_possible(),
                 Key::Char('f') => self.player_dash(),
-                Key::Char('a') | Key::Left => self.player_set_desired_x_direction(-1),
-                Key::Char('s') | Key::Down => self.player_set_desired_x_direction(0),
-                Key::Char('d') | Key::Right => self.player_set_desired_x_direction(1),
+                Key::Char('w') | Key::Up => self.player_desired_direction = p(0, 1),
+                Key::Char('a') | Key::Left => self.player_desired_direction = p(-1, 0),
+                Key::Char('s') | Key::Down => self.player_desired_direction = p(0, -1),
+                Key::Char('d') | Key::Right => self.player_desired_direction = p(1, 0),
                 _ => {}
             },
             Event::Mouse(me) => match me {
@@ -561,8 +566,6 @@ impl Game {
     }
 
     fn move_player_to(&mut self, pos: Point<f32>) {
-        self.set_block(Game::snap_to_grid(self.player_pos), Block::Air);
-        self.set_block(Game::snap_to_grid(pos), Block::Player);
         self.player_pos = pos;
     }
 
@@ -1079,13 +1082,10 @@ mod tests {
         assert!(game.player_alive == false);
         game.place_player(x1, y1);
 
-        assert!(game.grid[x1 as usize][y1 as usize] == Block::Player);
         assert!(game.player_pos == p(x1, y1));
         assert!(game.player_alive == true);
 
         game.place_player(x2, y2);
-        assert!(game.grid[x1 as usize][y1 as usize] == Block::Air);
-        assert!(game.grid[x2 as usize][y2 as usize] == Block::Player);
         assert!(game.player_pos == p(x2, y2));
         assert!(game.player_alive == true);
     }
@@ -1220,8 +1220,6 @@ mod tests {
         game.tick_physics();
 
         assert!(game.player_pos == p(16.0, 11.0));
-        assert!(game.grid[15][11] == Block::Air);
-        assert!(game.grid[16][11] == Block::Player);
 
         game.place_player(15.0, 11.0);
         assert!(game.player_desired_direction.x() == 0);
@@ -1230,8 +1228,6 @@ mod tests {
         game.tick_physics();
         game.tick_physics();
 
-        assert!(game.grid[15][11] == Block::Air);
-        assert!(game.grid[13][11] == Block::Player);
         assert!(game.player_pos == p(13.0, 11.0));
     }
     #[test]
@@ -1244,8 +1240,6 @@ mod tests {
         game.tick_physics();
 
         assert!(game.player_pos == p(15.0, 11.0));
-        assert!(game.grid[16][11] == Block::Wall);
-        assert!(game.grid[15][11] == Block::Player);
         assert!(game.player_vel_bpf.x() == 0.0);
     }
 
@@ -2069,8 +2063,28 @@ mod tests {
 
         assert!(game.player_is_standing_on_block() == true);
         assert!(game.player_is_grabbing_wall() == false);
+    }
 
+    #[test]
+    fn test_direction_buttons () {
+        let mut game = set_up_player_on_platform();
+        game.handle_input(Event::Key(Key::Char('a')));
+        assert!(game.player_desired_direction == p(-1, 0));
+        game.handle_input(Event::Key(Key::Char('s')));
+        assert!(game.player_desired_direction == p(0, -1));
+        game.handle_input(Event::Key(Key::Char('d')));
+        assert!(game.player_desired_direction == p(1, 0));
+        game.handle_input(Event::Key(Key::Char('w')));
+        assert!(game.player_desired_direction == p(0, 1));
 
+        game.handle_input(Event::Key(Key::Left));
+        assert!(game.player_desired_direction == p(-1, 0));
+        game.handle_input(Event::Key(Key::Down));
+        assert!(game.player_desired_direction == p(0, -1));
+        game.handle_input(Event::Key(Key::Right));
+        assert!(game.player_desired_direction == p(1, 0));
+        game.handle_input(Event::Key(Key::Up));
+        assert!(game.player_desired_direction == p(0, 1));
 
     }
 }
