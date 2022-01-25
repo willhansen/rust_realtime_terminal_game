@@ -167,6 +167,11 @@ impl Glyph {
             ColorName::Reset => color::Bg(color::Reset).to_string(),
         }
     }
+
+    fn square_with_horizontal_offset(fraction_of_square_offset: f32) -> Glyph {
+        return Glyph::colored_square_with_horizontal_offset(fraction_of_square_offset, ColorName::White);
+    }
+
     fn colored_square_with_horizontal_offset(fraction_of_square_offset: f32, color_name: ColorName) -> Glyph {
         let offset_in_eighths_rounded_towards_inf = (fraction_of_square_offset * 8.0).ceil() as i32;
         assert!(offset_in_eighths_rounded_towards_inf.abs() <= 8);
@@ -184,6 +189,9 @@ impl Glyph {
                 bg_color: color_name,
             };
         }
+    }
+    fn square_with_vertical_offset(fraction_of_square_offset: f32) -> Glyph {
+        return Glyph::colored_square_with_vertical_offset(fraction_of_square_offset, ColorName::White);
     }
     fn colored_square_with_vertical_offset(fraction_of_square_offset: f32, color_name: ColorName) -> Glyph {
         let offset_in_eighths_rounded_towards_inf = (fraction_of_square_offset * 8.0).ceil() as i32;
@@ -211,6 +219,91 @@ impl Glyph {
             fg_color: color_name,
             bg_color: ColorName::Black,
         }
+    }
+
+    fn get_glyphs_for_floating_square(pos: Point<f32>) -> Vec<Vec<Option<Glyph>>> {
+        return Glyph::get_glyphs_for_colored_floating_square(pos, ColorName::White);
+    }
+    fn get_glyphs_for_colored_floating_square(pos: Point<f32>, color: ColorName) -> Vec<Vec<Option<Glyph>>> {
+        let grid_offset = Game::offset_from_grid(pos);
+        let x_offset = grid_offset.x();
+        let y_offset = grid_offset.y();
+        return if y_offset == 0.0 {
+            Glyph::get_smooth_horizontal_glyphs_for_colored_floating_square(pos, color)
+        } else if x_offset == 0.0 {
+            Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(pos, color)
+        } else {
+            Glyph::get_half_grid_glyphs_for_colored_floating_square(pos, color)
+        }
+    }
+    fn get_smooth_horizontal_glyphs_for_floating_square(pos: Point<f32>) -> Vec<Vec<Option<Glyph>>> {
+        Glyph::get_smooth_horizontal_glyphs_for_colored_floating_square(pos, ColorName::White)
+    }
+    fn get_smooth_horizontal_glyphs_for_colored_floating_square(pos: Point<f32>, color: ColorName) -> Vec<Vec<Option<Glyph>>> {
+        let width = 3;
+        let mut output = vec![vec![None; width]; width];
+
+        let c = width / 2 as usize;
+
+        let grid_offset = Game::offset_from_grid(pos);
+        let x_offset = grid_offset.x();
+        let offset_dir = round(sign(grid_offset));
+
+        for i in 0..3 {
+            let x = i as i32 - 1;
+            if offset_dir.x() == x || x == 0 {
+                output[i][c] = Some(Glyph::colored_square_with_horizontal_offset(x_offset - x as f32, color));
+            }
+        }
+
+        return output;
+    }
+    fn get_smooth_vertical_glyphs_for_floating_square(pos: Point<f32>) -> Vec<Vec<Option<Glyph>>> {
+        Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(pos, ColorName::White)
+    }
+    fn get_smooth_vertical_glyphs_for_colored_floating_square(pos: Point<f32>, color: ColorName) -> Vec<Vec<Option<Glyph>>> {
+        let width = 3;
+        let mut output = vec![vec![None; width]; width];
+
+        let c = width / 2 as usize;
+
+        let grid_offset = Game::offset_from_grid(pos);
+        let y_offset = grid_offset.y();
+        let offset_dir = round(sign(grid_offset));
+        for j in 0..3 {
+            let y = j as i32 - 1;
+            if offset_dir.y() == y || y == 0 {
+                output[c][j] = Some(Glyph::colored_square_with_vertical_offset(y_offset - y as f32, color));
+            }
+        }
+        return output;
+    }
+
+    fn get_half_grid_glyphs_for_floating_square(pos: Point<f32>) -> Vec<Vec<Option<Glyph>>> {
+        Glyph::get_half_grid_glyphs_for_colored_floating_square(pos, ColorName::White)
+
+    }
+    fn get_half_grid_glyphs_for_colored_floating_square(pos: Point<f32>, color: ColorName) -> Vec<Vec<Option<Glyph>>> {
+
+        let width = 3;
+        let mut output = vec![vec![None; width]; width];
+        let grid_offset = Game::offset_from_grid(pos);
+        let offset_dir = round(sign(grid_offset));
+
+        for i in 0..3 {
+            for j in 0..3 {
+                let x = i as i32 - 1;
+                let y = j as i32 - 1;
+                let square = p(x as f32, y as f32);
+                if (offset_dir.x() == x || x == 0) && (offset_dir.y() == y || y == 0) {
+                    let glyph = Glyph::colored_square_with_half_step_offset(grid_offset - square, color);
+                    if glyph.character != ' ' {
+                        output[i][j] = Some(glyph);
+                    }
+                }
+            }
+        }
+        return output;
     }
 }
 
@@ -417,84 +510,8 @@ impl Game {
         }
     }
     fn get_player_glyphs(&self) -> Vec<Vec<Option<Glyph>>> {
-        return self.get_glyphs_for_colored_floating_square(self.player_pos, self.player_color);
+        return Glyph::get_glyphs_for_colored_floating_square(self.player_pos, self.player_color);
     }
-
-    fn get_glyphs_for_floating_square(&self, pos: Point<f32>) -> Vec<Vec<Option<Glyph>>> {
-        return self.get_glyphs_for_colored_floating_square(pos, ColorName::White);
-    }
-    fn get_glyphs_for_colored_floating_square(&self, pos: Point<f32>, color: ColorName) -> Vec<Vec<Option<Glyph>>> {
-        let grid_offset = Game::offset_from_grid(self.player_pos);
-        let x_offset = grid_offset.x();
-        let y_offset = grid_offset.y();
-        return if y_offset == 0.0 {
-            self.get_smooth_horizontal_glyphs_for_colored_floating_square(pos, color)
-        } else if x_offset == 0.0 {
-            self.get_smooth_vertical_glyphs_for_colored_floating_square(pos, color)
-        } else {
-            self.get_half_grid_glyphs_for_colored_floating_square(pos, color)
-        }
-    }
-    fn get_smooth_horizontal_glyphs_for_colored_floating_square(&self, pos: Point<f32>, color: ColorName) -> Vec<Vec<Option<Glyph>>> {
-        let width = 3;
-        let mut output = vec![vec![None; width]; width];
-
-        let c = width / 2 as usize;
-
-        let grid_offset = Game::offset_from_grid(self.player_pos);
-        let x_offset = grid_offset.x();
-        let offset_dir = round(sign(grid_offset));
-
-        for i in 0..3 {
-            let x = i as i32 - 1;
-            if offset_dir.x() == x || x == 0 {
-                output[i][c] = Some(Glyph::colored_square_with_horizontal_offset(x_offset - x as f32, color));
-            }
-        }
-
-        return output;
-    }
-    fn get_smooth_vertical_glyphs_for_colored_floating_square(&self, pos: Point<f32>, color: ColorName) -> Vec<Vec<Option<Glyph>>> {
-        let width = 3;
-        let mut output = vec![vec![None; width]; width];
-
-        let c = width / 2 as usize;
-
-        let grid_offset = Game::offset_from_grid(self.player_pos);
-        let y_offset = grid_offset.y();
-        let offset_dir = round(sign(grid_offset));
-        for j in 0..3 {
-            let y = j as i32 - 1;
-            if offset_dir.y() == y || y == 0 {
-                output[c][j] = Some(Glyph::colored_square_with_vertical_offset(y_offset - y as f32, color));
-            }
-        }
-        return output;
-    }
-
-    fn get_half_grid_glyphs_for_colored_floating_square(&self, pos: Point<f32>, color: ColorName) -> Vec<Vec<Option<Glyph>>> {
-
-        let width = 3;
-        let mut output = vec![vec![None; width]; width];
-        let grid_offset = Game::offset_from_grid(pos);
-        let offset_dir = round(sign(grid_offset));
-
-        for i in 0..3 {
-            for j in 0..3 {
-                let x = i as i32 - 1;
-                let y = j as i32 - 1;
-                let square = p(x as f32, y as f32);
-                if (offset_dir.x() == x || x == 0) && (offset_dir.y() == y || y == 0) {
-                    let glyph = Glyph::colored_square_with_half_step_offset(grid_offset - square, color);
-                    if glyph.character != ' ' {
-                        output[i][j] = Some(glyph);
-                    }
-                }
-            }
-        }
-        return output;
-    }
-
 
     fn get_buffered_glyph(&self, pos: Point<i32>) -> &Glyph {
         return &self.output_buffer[pos.x() as usize][pos.y() as usize];
@@ -1617,10 +1634,8 @@ mod tests {
     }
     #[test]
     fn test_half_grid_glyphs_when_rounding_to_zero_for_x_and_half_step_up_for_y() {
-        let mut game = set_up_just_player();
-        game.player_pos.add_assign(p(0.24, 0.26));
         let test_pos = p(0.24, 0.26);
-        let glyphs = game.get_half_grid_glyphs_for_colored_floating_square(test_pos, ColorName::Red);
+        let glyphs = Glyph::get_half_grid_glyphs_for_floating_square(test_pos);
         assert!(glyphs[0][0] == None);
         assert!(glyphs[0][1] == None);
         assert!(glyphs[0][2] == None);
@@ -1630,7 +1645,13 @@ mod tests {
         assert!(glyphs[2][0] == None);
         assert!(glyphs[2][1] == None);
         assert!(glyphs[2][2] == None);
-        assert!(glyphs == game.get_smooth_vertical_glyphs_for_colored_floating_square(game.player_pos, game.player_color));
+    }
+    fn test_player_glyphs_when_rounding_to_zero_for_x_and_half_step_up_for_y() {
+        let mut game = set_up_just_player();
+        game.player_pos.add_assign(p(0.24, 0.26));
+        let test_pos = p(0.24, 0.26);
+        let glyphs = Glyph::get_half_grid_glyphs_for_colored_floating_square(test_pos, ColorName::Red);
+        assert!(glyphs == Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(game.player_pos, game.player_color));
     }
 
     #[test]
