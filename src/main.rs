@@ -228,9 +228,9 @@ impl Glyph {
         let grid_offset = Game::offset_from_grid(pos);
         let x_offset = grid_offset.x();
         let y_offset = grid_offset.y();
-        return if y_offset == 0.0 {
+        return if y_offset.abs() < x_offset.abs() && y_offset.abs() < 0.25 {
             Glyph::get_smooth_horizontal_glyphs_for_colored_floating_square(pos, color)
-        } else if x_offset == 0.0 {
+        } else if x_offset.abs() < 0.25 {
             Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(pos, color)
         } else {
             Glyph::get_half_grid_glyphs_for_colored_floating_square(pos, color)
@@ -281,8 +281,8 @@ impl Glyph {
 
     fn get_half_grid_glyphs_for_floating_square(pos: Point<f32>) -> Vec<Vec<Option<Glyph>>> {
         Glyph::get_half_grid_glyphs_for_colored_floating_square(pos, ColorName::White)
-
     }
+
     fn get_half_grid_glyphs_for_colored_floating_square(pos: Point<f32>, color: ColorName) -> Vec<Vec<Option<Glyph>>> {
 
         let width = 3;
@@ -1618,10 +1618,9 @@ mod tests {
         );
     }
     #[test]
-    fn test_player_glyph_when_rounding_to_zero_for_both_axes() {
-        let mut game = set_up_just_player();
-        game.player_pos.add_assign(p(-0.24, 0.01));
-        let glyphs = game.get_player_glyphs();
+    fn test_half_grid_glyph_when_rounding_to_zero_for_both_axes() {
+        let test_pos = p(-0.24, 0.01);
+        let glyphs = Glyph::get_half_grid_glyphs_for_floating_square(test_pos);
         assert!(glyphs[0][0] == None);
         assert!(glyphs[0][1] == None);
         assert!(glyphs[0][2] == None);
@@ -1631,6 +1630,12 @@ mod tests {
         assert!(glyphs[2][0] == None);
         assert!(glyphs[2][1] == None);
         assert!(glyphs[2][2] == None);
+    }
+    #[test]
+    fn test_player_glyph_when_rounding_to_zero_for_both_axes() {
+        let mut game = set_up_just_player();
+        game.player_pos.add_assign(p(-0.24, 0.01));
+        assert!(game.get_player_glyphs() == Glyph::get_smooth_horizontal_glyphs_for_colored_floating_square(game.player_pos, game.player_color));
     }
     #[test]
     fn test_half_grid_glyphs_when_rounding_to_zero_for_x_and_half_step_up_for_y() {
@@ -1646,19 +1651,18 @@ mod tests {
         assert!(glyphs[2][1] == None);
         assert!(glyphs[2][2] == None);
     }
+    #[test]
     fn test_player_glyphs_when_rounding_to_zero_for_x_and_half_step_up_for_y() {
         let mut game = set_up_just_player();
         game.player_pos.add_assign(p(0.24, 0.26));
-        let test_pos = p(0.24, 0.26);
-        let glyphs = Glyph::get_half_grid_glyphs_for_colored_floating_square(test_pos, ColorName::Red);
-        assert!(glyphs == Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(game.player_pos, game.player_color));
+        assert!(game.get_player_glyphs() == Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(game.player_pos, game.player_color));
     }
 
     #[test]
-    fn test_player_glyphs_when_rounding_to_zero_for_x_and_exactly_half_step_up_for_y() {
-        let mut game = set_up_just_player();
-        game.player_pos.add_assign(p(0.24, 0.25));
-        let glyphs = game.get_player_glyphs();
+    fn test_half_grid_glyphs_when_rounding_to_zero_for_x_and_exactly_half_step_up_for_y() {
+        let test_pos = p(0.24, 0.25);
+
+        let glyphs = Glyph::get_half_grid_glyphs_for_floating_square(test_pos);
         assert!(glyphs[0][0] == None);
         assert!(glyphs[0][1] == None);
         assert!(glyphs[0][2] == None);
@@ -1670,10 +1674,15 @@ mod tests {
         assert!(glyphs[2][2] == None);
     }
     #[test]
-    fn test_player_glyphs_when_rounding_to_zero_for_x_and_exactly_half_step_down_for_y() {
+    fn test_player_glyphs_when_rounding_to_zero_for_x_and_exactly_half_step_up_for_y() {
         let mut game = set_up_just_player();
-        game.player_pos.add_assign(p(-0.2, -0.25));
-        let glyphs = game.get_player_glyphs();
+        game.player_pos.add_assign(p(0.24, 0.25));
+        assert!(game.get_player_glyphs() == Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(game.player_pos, game.player_color));
+    }
+    #[test]
+    fn test_half_grid_glyphs_when_rounding_to_zero_for_x_and_exactly_half_step_down_for_y() {
+        let test_pos = p(-0.2, -0.25);
+        let glyphs = Glyph::get_half_grid_glyphs_for_floating_square(test_pos);
         assert!(glyphs[0][0] == None);
         assert!(glyphs[0][1] == None);
         assert!(glyphs[0][2] == None);
@@ -1685,10 +1694,15 @@ mod tests {
         assert!(glyphs[2][2] == None);
     }
     #[test]
-    fn test_player_glyphs_when_rounding_to_zero_for_y_and_half_step_right_for_x() {
+    fn test_player_glyphs_when_rounding_to_zero_for_x_and_exactly_half_step_down_for_y() {
         let mut game = set_up_just_player();
-        game.player_pos.add_assign(p(0.3, 0.1));
-        let glyphs = game.get_player_glyphs();
+        game.player_pos.add_assign(p(-0.2, -0.25));
+        assert!(game.get_player_glyphs() == Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(game.player_pos, game.player_color));
+    }
+    #[test]
+    fn test_half_grid_glyphs_when_rounding_to_zero_for_y_and_half_step_right_for_x() {
+        let test_pos = p(0.3, 0.1);
+        let glyphs = Glyph::get_half_grid_glyphs_for_floating_square(test_pos);
         assert!(glyphs[0][0] == None);
         assert!(glyphs[0][1] == None);
         assert!(glyphs[0][2] == None);
@@ -1699,12 +1713,17 @@ mod tests {
         assert!(glyphs[2][1].clone().unwrap().character == quarter_block_by_offset((-1, 0)));
         assert!(glyphs[2][2] == None);
     }
+    #[test]
+    fn test_player_glyphs_when_rounding_to_zero_for_y_and_half_step_right_for_x() {
+        let mut game = set_up_just_player();
+        game.player_pos.add_assign(p(0.3, 0.1));
+        assert!(game.get_player_glyphs() == Glyph::get_smooth_horizontal_glyphs_for_colored_floating_square(game.player_pos, game.player_color));
+    }
 
     #[test]
-    fn test_player_glyphs_when_rounding_to_zero_for_y_and_half_step_left_for_x() {
-        let mut game = set_up_just_player();
-        game.player_pos.add_assign(p(-0.3, 0.2));
-        let glyphs = game.get_player_glyphs();
+    fn test_half_grid_glyphs_when_rounding_to_zero_for_y_and_half_step_left_for_x() {
+        let test_pos = p(-0.3, 0.2);
+        let glyphs = Glyph::get_half_grid_glyphs_for_floating_square(test_pos);
         assert!(glyphs[0][0] == None);
         assert!(glyphs[0][1].clone().unwrap().character == quarter_block_by_offset((1, 0)));
         assert!(glyphs[0][2] == None);
@@ -1714,6 +1733,12 @@ mod tests {
         assert!(glyphs[2][0] == None);
         assert!(glyphs[2][1] == None);
         assert!(glyphs[2][2] == None);
+    }
+    #[test]
+    fn test_player_glyphs_when_rounding_to_zero_for_y_and_half_step_left_for_x() {
+        let mut game = set_up_just_player();
+        game.player_pos.add_assign(p(-0.3, 0.2));
+        assert!(game.get_player_glyphs() == Glyph::get_smooth_horizontal_glyphs_for_colored_floating_square(game.player_pos, game.player_color));
     }
 
     #[test]
