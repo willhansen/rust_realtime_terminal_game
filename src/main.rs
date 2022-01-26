@@ -10,6 +10,7 @@ use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::euclidean_length::EuclideanLength;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Point};
+use std::char;
 use std::fmt::Debug;
 use std::io::{stdin, stdout, Write};
 use std::sync::mpsc::channel;
@@ -346,6 +347,20 @@ impl Glyph {
             }
         }
         return output;
+    }
+
+    fn array_to_braille(input: Vec<Vec<bool>>) -> char {
+        let braille_value_map = vec![vec![7, 3, 2, 1], vec![8, 6, 5, 4]];
+        let dot_number_to_value = vec![0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80];
+        let mut dot_val: u32 = 0;
+        for x in 0..2 {
+            for y in 0..4 {
+                if input[x][y] {
+                    dot_val |= dot_number_to_value[braille_value_map[x][y] - 1];
+                }
+            }
+        }
+        return char::from_u32('\u{2800}' as u32 | dot_val).unwrap();
     }
 }
 
@@ -2166,5 +2181,28 @@ mod tests {
         let fast_color = game.get_player_glyphs()[1][1].clone().unwrap().fg_color;
 
         assert!(stopped_color != fast_color);
+    }
+
+    #[test]
+    fn test_array_to_braille_char() {
+        // 10
+        // 00
+        // 01
+        // 01
+        let input = vec![
+            vec![false, false, false, true],
+            vec![true, true, false, false],
+        ];
+        assert!(Glyph::array_to_braille(input) == '⢡');
+
+        // 00
+        // 11
+        // 01
+        // 00
+        let input = vec![
+            vec![false, false, true, false],
+            vec![false, true, true, false],
+        ];
+        assert!(Glyph::array_to_braille(input) == '⠲');
     }
 }
