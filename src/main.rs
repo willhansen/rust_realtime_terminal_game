@@ -350,17 +350,28 @@ impl Glyph {
     }
 
     fn array_to_braille(input: Vec<Vec<bool>>) -> char {
-        let braille_value_map = vec![vec![7, 3, 2, 1], vec![8, 6, 5, 4]];
-        let dot_number_to_value = vec![0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80];
         let mut dot_val: u32 = 0;
         for x in 0..2 {
             for y in 0..4 {
                 if input[x][y] {
-                    dot_val |= dot_number_to_value[braille_value_map[x][y] - 1];
+                    dot_val |= Glyph::braille_bit_for_pos(x as i32, y as i32);
                 }
             }
         }
         return char::from_u32('\u{2800}' as u32 | dot_val).unwrap();
+    }
+
+    fn braille_bit_for_pos(x: i32, y: i32) -> u32 {
+        let braille_value_map = vec![vec![7, 3, 2, 1], vec![8, 6, 5, 4]];
+        1 << (braille_value_map[x as usize][y as usize] - 1)
+    }
+
+    fn add_braille_dot(character: char, x: i32, y: i32) -> char {
+        char::from_u32(character as u32 | Glyph::braille_bit_for_pos(x, y)).unwrap()
+    }
+
+    fn empty_braille() -> char {
+        '\u{2800}'
     }
 }
 
@@ -2204,5 +2215,18 @@ mod tests {
             vec![false, true, true, false],
         ];
         assert!(Glyph::array_to_braille(input) == '⠲');
+    }
+
+    #[test]
+    fn test_get_empty_braille_character() {
+        assert!(Glyph::empty_braille() == '\u{2800}');
+    }
+
+    #[test]
+    fn test_set_braille_dot() {
+        let mut b = Glyph::empty_braille();
+        b = Glyph::add_braille_dot(b, 0, 0);
+        b = Glyph::add_braille_dot(b, 1, 1);
+        assert!(b == '⡠');
     }
 }
