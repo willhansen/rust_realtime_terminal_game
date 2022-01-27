@@ -1,3 +1,4 @@
+extern crate circular_queue;
 extern crate geo;
 extern crate line_drawing;
 extern crate num;
@@ -6,6 +7,7 @@ extern crate termion;
 
 // use assert2::{assert, check};
 use crate::num::traits::Pow;
+use circular_queue::CircularQueue;
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::euclidean_length::EuclideanLength;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
@@ -373,6 +375,24 @@ impl Glyph {
     fn empty_braille() -> char {
         '\u{2800}'
     }
+
+    fn get_glyphs_for_braille_line(
+        start_pos: Point<f32>,
+        end_pos: Point<f32>,
+    ) -> Vec<Vec<Option<Glyph>>> {
+        Glyph::get_glyphs_for_colored_braille_line(start_pos, end_pos, ColorName::White)
+    }
+
+    fn get_glyphs_for_colored_braille_line(
+        start_pos: Point<f32>,
+        end_pos: Point<f32>,
+        color: ColorName,
+    ) -> Vec<Vec<Option<Glyph>>> {
+        let start_grid_square = round(start_pos);
+        let end_grid_square = round(end_pos);
+        let start_braille_square = round(start_pos * 8.0);
+        return vec![vec![Option::<Glyph>::None]];
+    }
 }
 
 struct Game {
@@ -386,6 +406,7 @@ struct Game {
     selected_block: Block, // What the mouse places
     player_alive: bool,
     player_pos: Point<f32>,
+    recent_player_poses: CircularQueue<Point<f32>>,
     player_max_run_speed_bpf: f32,
     player_vel_bpf: Point<f32>,
     player_desired_direction: Point<i32>,
@@ -409,6 +430,7 @@ impl Game {
             selected_block: Block::Wall,
             player_alive: false,
             player_pos: p(0.0, 0.0),
+            recent_player_poses: CircularQueue::with_capacity(10),
             player_max_run_speed_bpf: PLAYER_DEFAULT_MAX_SPEED_BPF,
             player_vel_bpf: Point::<f32>::new(0.0, 0.0),
             player_desired_direction: p(0, 0),
@@ -450,15 +472,17 @@ impl Game {
         self.grid[pos.x() as usize][pos.y() as usize] = block;
     }
 
-    fn draw_line(&mut self, pos0: (i32, i32), pos1: (i32, i32), block: Block) {
+    fn place_line_of_blocks(&mut self, pos0: (i32, i32), pos1: (i32, i32), block: Block) {
         for (x1, y1) in line_drawing::Bresenham::new(pos0, pos1) {
             self.grid[x1 as usize][y1 as usize] = block;
         }
     }
 
-    fn draw_point(&mut self, pos: Point<i32>, block: Block) {
+    fn place_block(&mut self, pos: Point<i32>, block: Block) {
         self.grid[pos.x() as usize][pos.y() as usize] = block;
     }
+
+    fn draw_visual_braille_line(start_pos: Point<f32>, end_pos: Point<f32>, color: ColorName) {}
 
     fn clear(&mut self) {
         let (width, height) = termion::terminal_size().unwrap();
@@ -529,7 +553,7 @@ impl Game {
             Event::Mouse(me) => match me {
                 MouseEvent::Press(MouseButton::Left, term_x, term_y) => {
                     let (x, y) = self.screen_to_world(&(term_x, term_y));
-                    self.draw_point(p(x, y), self.selected_block);
+                    self.place_block(p(x, y), self.selected_block);
                     self.prev_mouse_pos = (x, y);
                 }
                 MouseEvent::Press(MouseButton::Right, term_x, term_y) => {
@@ -538,7 +562,7 @@ impl Game {
                 }
                 MouseEvent::Hold(term_x, term_y) => {
                     let (x, y) = self.screen_to_world(&(term_x, term_y));
-                    self.draw_line(self.prev_mouse_pos, (x, y), self.selected_block);
+                    self.place_line_of_blocks(self.prev_mouse_pos, (x, y), self.selected_block);
                     self.prev_mouse_pos = (x, y);
                 }
                 _ => {}
@@ -636,10 +660,6 @@ impl Game {
         }
     }
 
-    fn move_player_to(&mut self, pos: Point<f32>) {
-        self.player_pos = pos;
-    }
-
     fn kill_player(&mut self) {
         self.set_block(Game::snap_to_grid(self.player_pos), Block::Air);
         self.player_alive = false;
@@ -722,7 +742,6 @@ impl Game {
     fn apply_player_motion(&mut self) {
         self.update_player_acceleration();
 
-        // TODO: sliding within one tick.  Iterate until distance to travel is gone.  Use vector projections
         let start_point = self.player_pos;
         let mut remaining_step: Point<f32> = self.player_vel_bpf;
         let mut current_start_point = start_point.clone();
@@ -758,7 +777,8 @@ impl Game {
         } else {
             // no collision, and in world
             step_taken = actual_endpoint - self.player_pos;
-            self.move_player_to(actual_endpoint);
+            self.recent_player_poses.push(self.player_pos.clone());
+            self.player_pos = actual_endpoint;
         }
 
         // moved vertically => instant empty charge
@@ -868,12 +888,12 @@ impl Game {
             (self.terminal_size.0 / 5) as i32,
             (self.terminal_size.1 / 4) as i32,
         );
-        self.draw_line(
+        self.place_line_of_blocks(
             bottom_left,
             ((4 * self.terminal_size.0 / 5) as i32, bottom_left.1),
             Block::Wall,
         );
-        self.draw_line(
+        self.place_line_of_blocks(
             bottom_left,
             (bottom_left.0, 3 * (self.terminal_size.1 / 4) as i32),
             Block::Wall,
@@ -1118,13 +1138,13 @@ mod tests {
 
     fn set_up_player_on_platform() -> Game {
         let mut game = set_up_just_player();
-        game.draw_line((10, 10), (20, 10), Block::Wall);
+        game.place_line_of_blocks((10, 10), (20, 10), Block::Wall);
         return game;
     }
 
     fn set_up_player_hanging_on_wall_on_left() -> Game {
         let mut game = set_up_just_player();
-        game.draw_line((14, 0), (14, 20), Block::Wall);
+        game.place_line_of_blocks((14, 0), (14, 20), Block::Wall);
         game.player_desired_direction.set_x(-1);
         return game;
     }
@@ -1132,8 +1152,8 @@ mod tests {
     #[test]
     fn test_placement_and_gravity() {
         let mut game = Game::new(30, 30);
-        game.draw_point(p(10, 10), Block::Wall);
-        game.draw_point(p(20, 10), Block::Brick);
+        game.place_block(p(10, 10), Block::Wall);
+        game.place_block(p(20, 10), Block::Brick);
 
         assert!(game.grid[10][10] == Block::Wall);
         assert!(game.grid[20][10] == Block::Brick);
@@ -1204,7 +1224,7 @@ mod tests {
     fn test_movecast_horizontal_hit() {
         let mut game = Game::new(30, 30);
         let p_wall = p(5, 0);
-        game.draw_point(p_wall, Block::Wall);
+        game.place_block(p_wall, Block::Wall);
 
         let p1 = floatify(p_wall) + p(-2.0, 0.0);
         let p2 = floatify(p_wall) + p(2.0, 0.0);
@@ -1219,7 +1239,7 @@ mod tests {
     fn test_movecast_vertical_hit() {
         let mut game = Game::new(30, 30);
         let p_wall = p(15, 10);
-        game.draw_point(p_wall, Block::Wall);
+        game.place_block(p_wall, Block::Wall);
 
         let p1 = floatify(p_wall) + p(0.0, -1.1);
         let p2 = floatify(p_wall);
@@ -1234,7 +1254,7 @@ mod tests {
     fn test_movecast_end_slightly_overlapping_a_block() {
         let mut game = Game::new(30, 30);
         let p_wall = p(15, 10);
-        game.draw_point(p_wall, Block::Wall);
+        game.place_block(p_wall, Block::Wall);
 
         let p1 = floatify(p_wall) + p(0.0, 1.5);
         let p2 = floatify(p_wall) + p(0.0, 0.999999);
@@ -1248,7 +1268,7 @@ mod tests {
     #[test]
     fn test_movecast() {
         let mut game = Game::new(30, 30);
-        game.draw_line((10, 10), (20, 10), Block::Wall);
+        game.place_line_of_blocks((10, 10), (20, 10), Block::Wall);
 
         assert!(
             game.movecast(p(15.0, 9.0), p(17.0, 11.0))
@@ -1305,7 +1325,7 @@ mod tests {
     #[test]
     fn test_stop_on_collision() {
         let mut game = set_up_player_on_platform();
-        game.draw_point(round(game.player_pos) + p(1, 0), Block::Wall);
+        game.place_block(round(game.player_pos) + p(1, 0), Block::Wall);
         game.player_max_run_speed_bpf = 1.0;
         game.player_desired_direction.set_x(1);
 
@@ -1318,7 +1338,7 @@ mod tests {
     #[test]
     fn test_snap_to_object_on_collision() {
         let mut game = set_up_player_on_platform();
-        game.draw_point(round(game.player_pos) + p(2, 0), Block::Wall);
+        game.place_block(round(game.player_pos) + p(2, 0), Block::Wall);
         game.player_pos.add_assign(p(0.999, 0.0));
         game.player_desired_direction.set_x(1);
         game.player_vel_bpf.set_x(5.0);
@@ -1362,7 +1382,7 @@ mod tests {
     fn test_fast_player_collision_between_frames() {
         let mut game = set_up_player_on_platform();
         // Player should not teleport through this block
-        game.draw_point(p(16, 11), Block::Wall);
+        game.place_block(p(16, 11), Block::Wall);
         game.player_max_run_speed_bpf = 2.0;
         game.player_desired_direction.set_x(1);
 
@@ -1405,8 +1425,8 @@ mod tests {
     #[test]
     fn test_slide_on_angled_collision() {
         let mut game = Game::new(30, 30);
-        game.draw_line((10, 10), (20, 10), Block::Wall);
-        game.draw_line((14, 10), (14, 20), Block::Wall);
+        game.place_line_of_blocks((10, 10), (20, 10), Block::Wall);
+        game.place_line_of_blocks((14, 10), (14, 20), Block::Wall);
 
         game.place_player(15.0, 11.0);
         game.player_vel_bpf = p(-2.0, 2.0);
@@ -1477,7 +1497,7 @@ mod tests {
     fn test_no_friction_when_sliding_up_wall() {
         let mut game = set_up_player_on_platform();
         let wall_x = game.player_pos.x() as i32 - 2;
-        game.draw_line((wall_x, 0), (wall_x, 20), Block::Wall);
+        game.place_line_of_blocks((wall_x, 0), (wall_x, 20), Block::Wall);
         game.player_desired_direction.set_x(-1);
         game.player_pos.add_assign(p(0.0, 2.0));
         game.player_pos.set_x(wall_x as f32 + 1.0);
@@ -2155,7 +2175,7 @@ mod tests {
     fn test_dont_grab_wall_while_standing_on_ground() {
         let mut game = set_up_player_on_platform();
         let wall_x = game.player_pos.x() as i32 - 1;
-        game.draw_line((wall_x, 0), (wall_x, 20), Block::Wall);
+        game.place_line_of_blocks((wall_x, 0), (wall_x, 20), Block::Wall);
         game.player_desired_direction = p(-1, 0);
 
         assert!(game.player_is_standing_on_block() == true);
@@ -2228,5 +2248,27 @@ mod tests {
         b = Glyph::add_braille_dot(b, 0, 0);
         b = Glyph::add_braille_dot(b, 1, 1);
         assert!(b == '⡠');
+    }
+
+    #[test]
+    fn test_chars_for_horizontal_braille_line_without_rounding() {
+        let start = p(-0.25, -0.4);
+        let end = p(1.75, -0.4);
+
+        // Expected braille:
+        // 00 00 00
+        // 00 00 00
+        // 00 00 00
+        // 11 11 10
+
+        let line_glyphs = Glyph::get_glyphs_for_braille_line(start, end);
+        assert!(line_glyphs.len() == 3);
+        assert!(line_glyphs[0].len() == 1);
+        assert!(line_glyphs[1].len() == 1);
+        assert!(line_glyphs[2].len() == 1);
+
+        assert!(line_glyphs[0][0].clone().unwrap().character == '\u{28C0}');
+        assert!(line_glyphs[1][0].clone().unwrap().character == '\u{28C0}');
+        assert!(line_glyphs[2][0].clone().unwrap().character == '\u{2840}');
     }
 }
