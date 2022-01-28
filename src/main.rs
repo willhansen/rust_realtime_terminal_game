@@ -13,6 +13,7 @@ use geo::algorithm::euclidean_length::EuclideanLength;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Point};
 use std::char;
+use std::cmp::{max, min};
 use std::fmt::Debug;
 use std::io::{stdin, stdout, Write};
 use std::sync::mpsc::channel;
@@ -125,7 +126,7 @@ enum ColorName {
     Reset,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Copy)]
 struct Glyph {
     character: char,
     fg_color: ColorName,
@@ -380,6 +381,12 @@ impl Glyph {
         '\u{2800}'
     }
 
+    fn is_braille(c: char) -> bool {
+        let x = c as u32;
+        // The unicode braille block
+        x >= 0x2800 && x <= 0x28FF
+    }
+
     fn get_glyphs_for_braille_line(
         start_pos: Point<f32>,
         end_pos: Point<f32>,
@@ -417,6 +424,10 @@ impl Glyph {
         let grid_width = grid_diagonal.x().abs() + 1;
         let grid_height = grid_diagonal.y().abs() + 1;
 
+        let bottom_square_y = min(start_grid_square.y(), end_grid_square.y());
+        let left_square_x = min(start_grid_square.x(), end_grid_square.x());
+        let grid_origin_square = p(left_square_x, bottom_square_y);
+
         let mut output_grid: Vec<Vec<Option<Glyph>>> =
             vec![vec![None; grid_height as usize]; grid_width as usize];
 
@@ -424,7 +435,8 @@ impl Glyph {
             start_braille_grid_square.x_y(),
             end_braille_grid_square.x_y(),
         ) {
-            let character_grid_square = Glyph::braille_grid_to_character_grid(p(x, y));
+            let character_grid_square =
+                Glyph::braille_grid_to_character_grid(p(x, y)) - grid_origin_square;
             let maybe_glyph = &mut output_grid[character_grid_square.x() as usize]
                 [character_grid_square.y() as usize];
             if *maybe_glyph == None {
@@ -457,6 +469,7 @@ struct Game {
     player_pos: Point<f32>,
     recent_player_poses: CircularQueue<Point<f32>>,
     player_max_run_speed_bpf: f32,
+    player_color_change_speed_threshold: f32,
     player_vel_bpf: Point<f32>,
     player_desired_direction: Point<i32>,
     player_jump_delta_v: f32,
@@ -481,6 +494,8 @@ impl Game {
             player_pos: p(0.0, 0.0),
             recent_player_poses: CircularQueue::with_capacity(10),
             player_max_run_speed_bpf: PLAYER_DEFAULT_MAX_SPEED_BPF,
+            player_color_change_speed_threshold: PLAYER_DEFAULT_MAX_SPEED_BPF
+                + DEFAULT_PLAYER_JUMP_DELTA_V,
             player_vel_bpf: Point::<f32>::new(0.0, 0.0),
             player_desired_direction: p(0, 0),
             player_jump_delta_v: DEFAULT_PLAYER_JUMP_DELTA_V,
@@ -525,7 +540,36 @@ impl Game {
         self.grid[pos.x() as usize][pos.y() as usize] = block;
     }
 
-    fn draw_visual_braille_line(start_pos: Point<f32>, end_pos: Point<f32>, color: ColorName) {}
+    fn draw_visual_braille_line(
+        &mut self,
+        start_pos: Point<f32>,
+        end_pos: Point<f32>,
+        color: ColorName,
+    ) {
+        let squares_to_place =
+            Glyph::get_glyphs_for_colored_braille_line(start_pos, end_pos, color);
+
+        let start_grid_square = snap_to_grid(start_pos);
+        let end_grid_square = snap_to_grid(end_pos);
+        let grid_diagonal = end_grid_square - start_grid_square;
+        let grid_width = grid_diagonal.x().abs() + 1;
+        let grid_height = grid_diagonal.y().abs() + 1;
+        let bottom_square_y = min(start_grid_square.y(), end_grid_square.y());
+        let left_square_x = min(start_grid_square.x(), end_grid_square.x());
+
+        for i in 0..squares_to_place.len() {
+            for j in 0..squares_to_place[0].len() {
+                if let Some(glyph) = squares_to_place[i][j] {
+                    let square_on_grid = p(left_square_x + i as i32, bottom_square_y + j as i32);
+                    self.output_buffer[square_on_grid.x() as usize][square_on_grid.y() as usize] =
+                        glyph;
+                }
+            }
+        }
+        for x in left_square_x..grid_width {
+            for y in bottom_square_y..grid_height {}
+        }
+    }
 
     fn clear(&mut self) {
         let (width, height) = termion::terminal_size().unwrap();
@@ -647,9 +691,7 @@ impl Game {
         }
     }
     fn get_player_glyphs(&self) -> Vec<Vec<Option<Glyph>>> {
-        return if magnitude(self.player_vel_bpf)
-            > magnitude(p(self.player_max_run_speed_bpf, self.player_jump_delta_v))
-        {
+        return if magnitude(self.player_vel_bpf) > self.player_color_change_speed_threshold {
             Glyph::get_glyphs_for_colored_floating_square(self.player_pos, PLAYER_HIGH_SPEED_COLOR)
         } else {
             Glyph::get_glyphs_for_colored_floating_square(self.player_pos, self.player_color)
@@ -2312,11 +2354,58 @@ mod tests {
     }
 
     #[test]
+    fn test_chars_for_horizontal_braille_line_with_offset_without_rounding() {
+        let start = p(-0.25, 0.4);
+        let end = p(1.75, 0.4);
+
+        // Expected braille:
+        // 11 11 10
+        // 00 00 00
+        // 00 00 00
+        // 00 00 00
+
+        let line_glyphs = Glyph::get_glyphs_for_braille_line(start, end);
+        assert!(line_glyphs.len() == 3);
+        assert!(line_glyphs[0].len() == 1);
+        assert!(line_glyphs[1].len() == 1);
+        assert!(line_glyphs[2].len() == 1);
+
+        assert!(line_glyphs[0][0].clone().unwrap().character == '\u{2809}');
+        assert!(line_glyphs[1][0].clone().unwrap().character == '\u{2809}');
+        assert!(line_glyphs[2][0].clone().unwrap().character == '\u{2801}');
+    }
+
+    #[test]
+    fn test_chars_for_vertical_braille_line_without_rounding() {
+        let start = p(-0.25, -0.4);
+        let end = p(-0.25, 0.875);
+
+        // Expected braille:
+        // 00
+        // 00
+        // 10
+        // 10
+
+        // 10
+        // 10
+        // 10
+        // 10
+
+        let line_glyphs = Glyph::get_glyphs_for_braille_line(start, end);
+        assert!(line_glyphs.len() == 1);
+        assert!(line_glyphs[0].len() == 2);
+
+        assert!(line_glyphs[0][0].clone().unwrap().character == '\u{2847}');
+        assert!(line_glyphs[0][1].clone().unwrap().character == '\u{2844}');
+    }
+
+    #[test]
     fn test_braille_grid_to_character_grid() {
         assert!(Glyph::braille_grid_to_character_grid(p(0, 0)) == p(0, 0));
         assert!(Glyph::braille_grid_to_character_grid(p(1, 3)) == p(0, 0));
         assert!(Glyph::braille_grid_to_character_grid(p(-1, -1)) == p(-1, -1));
         assert!(Glyph::braille_grid_to_character_grid(p(2, 8)) == p(1, 2));
+        assert!(Glyph::braille_grid_to_character_grid(p(21, 80)) == p(10, 20));
     }
 
     #[test]
@@ -2332,5 +2421,44 @@ mod tests {
         assert!(Glyph::braille_square_to_dot_in_character(p(1, 3)) == p(1, 3));
         assert!(Glyph::braille_square_to_dot_in_character(p(25, 4)) == p(1, 0));
         assert!(Glyph::braille_square_to_dot_in_character(p(-3, 4)) == p(1, 0));
+    }
+
+    #[test]
+    fn test_draw_visual_braille_line_without_rounding() {
+        let mut game = set_up_player_on_platform();
+        let start = game.player_pos + p(0.51, 0.1);
+        let end = start + p(2.1, 0.1);
+        let color = ColorName::Blue;
+
+        // Expected braille:
+        // 00 00 00
+        // 11 11 10
+        // 00 00 00
+        // 00 00 00
+
+        game.draw_visual_braille_line(start, end, color);
+
+        assert!(game.get_buffered_glyph(snap_to_grid(start)).fg_color == color);
+        assert!(game.get_buffered_glyph(snap_to_grid(start)).character == '\u{2812}');
+        assert!(
+            game.get_buffered_glyph(snap_to_grid(start) + p(1, 0))
+                .fg_color
+                == color
+        );
+        assert!(
+            game.get_buffered_glyph(snap_to_grid(start) + p(1, 0))
+                .character
+                == '\u{2812}' // '⠒'
+        );
+        assert!(
+            game.get_buffered_glyph(snap_to_grid(start) + p(2, 0))
+                .fg_color
+                == color
+        );
+        assert!(
+            game.get_buffered_glyph(snap_to_grid(start) + p(2, 0))
+                .character
+                == '\u{2802}'
+        );
     }
 }
