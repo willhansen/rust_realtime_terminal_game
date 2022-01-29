@@ -7,20 +7,18 @@ extern crate termion;
 
 // use assert2::{assert, check};
 use crate::num::traits::Pow;
-use circular_queue::CircularQueue;
 use geo::algorithm::euclidean_distance::EuclideanDistance;
-use geo::algorithm::euclidean_length::EuclideanLength;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Point};
 use std::char;
-use std::cmp::{max, min};
+use std::cmp::min;
+use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::io::{stdin, stdout, Write};
 use std::sync::mpsc::channel;
 use std::thread;
 use std::time::{Duration, Instant};
 use termion::color;
-use termion::color::Color;
 use termion::event::{Event, Key, MouseButton, MouseEvent};
 use termion::input::{MouseTerminal, TermRead};
 use termion::raw::IntoRawMode;
@@ -31,10 +29,10 @@ const MAX_FPS: i32 = 60; // frames per second
 const IDEAL_FRAME_DURATION_MS: u128 = (1000.0 / MAX_FPS as f32) as u128;
 const PLAYER_COLOR: ColorName = ColorName::Red;
 const PLAYER_HIGH_SPEED_COLOR: ColorName = ColorName::Blue;
+const NUM_SAVED_PLAYER_POSES: i32 = 10;
 
 // a block every two ticks
-const PLAYER_DEFAULT_MAX_SPEED_BPS: f32 = 30.0; // blocks per second
-const PLAYER_DEFAULT_MAX_SPEED_BPF: f32 = PLAYER_DEFAULT_MAX_SPEED_BPS / MAX_FPS as f32; // blocks per frame
+const PLAYER_DEFAULT_MAX_SPEED_BPF: f32 = 0.5;
 const DEFAULT_PLAYER_JUMP_DELTA_V: f32 = 1.0;
 const DEFAULT_PLAYER_DASH_V: f32 = 5.0;
 const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
@@ -387,6 +385,10 @@ impl Glyph {
         x >= 0x2800 && x <= 0x28FF
     }
 
+    fn add_braille(c1: char, c2: char) -> char {
+        char::from_u32(c1 as u32 | c2 as u32).unwrap()
+    }
+
     fn get_glyphs_for_braille_line(
         start_pos: Point<f32>,
         end_pos: Point<f32>,
@@ -467,7 +469,7 @@ struct Game {
     selected_block: Block, // What the mouse places
     player_alive: bool,
     player_pos: Point<f32>,
-    recent_player_poses: CircularQueue<Point<f32>>,
+    recent_player_poses: VecDeque<Point<f32>>,
     player_max_run_speed_bpf: f32,
     player_color_change_speed_threshold: f32,
     player_vel_bpf: Point<f32>,
@@ -492,7 +494,7 @@ impl Game {
             selected_block: Block::Wall,
             player_alive: false,
             player_pos: p(0.0, 0.0),
-            recent_player_poses: CircularQueue::with_capacity(10),
+            recent_player_poses: VecDeque::<Point<f32>>::new(),
             player_max_run_speed_bpf: PLAYER_DEFAULT_MAX_SPEED_BPF,
             player_color_change_speed_threshold: PLAYER_DEFAULT_MAX_SPEED_BPF
                 + DEFAULT_PLAYER_JUMP_DELTA_V,
@@ -559,15 +561,20 @@ impl Game {
 
         for i in 0..squares_to_place.len() {
             for j in 0..squares_to_place[0].len() {
-                if let Some(glyph) = squares_to_place[i][j] {
+                if let Some(new_glyph) = squares_to_place[i][j] {
                     let square_on_grid = p(left_square_x + i as i32, bottom_square_y + j as i32);
-                    self.output_buffer[square_on_grid.x() as usize][square_on_grid.y() as usize] =
-                        glyph;
+                    let grid_glyph = &mut self.output_buffer[square_on_grid.x() as usize]
+                        [square_on_grid.y() as usize];
+                    if Glyph::is_braille(grid_glyph.character) {
+                        let combined_braille =
+                            Glyph::add_braille(grid_glyph.character, new_glyph.character);
+                        *grid_glyph = new_glyph;
+                        grid_glyph.character = combined_braille;
+                    } else {
+                        *grid_glyph = new_glyph;
+                    }
                 }
             }
-        }
-        for x in left_square_x..grid_width {
-            for y in bottom_square_y..grid_height {}
         }
     }
 
@@ -674,12 +681,26 @@ impl Game {
             }
         }
 
+        if magnitude(self.player_vel_bpf) > self.player_color_change_speed_threshold {
+            if let Some(&last_pos) = self.recent_player_poses.get(0) {
+                // draw all corners
+                let offsets = [p(0.5, 0.5), p(-0.5, 0.5), p(-0.5, -0.5), p(0.5, -0.5)];
+                for offset in offsets {
+                    self.draw_visual_braille_line(
+                        last_pos + offset,
+                        self.player_pos + offset,
+                        ColorName::Blue,
+                    );
+                }
+            }
+        }
+
         let player_glyphs = self.get_player_glyphs();
         let grid_pos = snap_to_grid(self.player_pos);
 
         for i in 0..player_glyphs.len() {
             for j in 0..player_glyphs[i].len() {
-                if let Some(glyph) = player_glyphs[i][j].clone() {
+                if let Some(glyph) = player_glyphs[i][j] {
                     let x = grid_pos.x() - 1 + i as i32;
                     let y = grid_pos.y() - 1 + j as i32;
 
@@ -691,11 +712,11 @@ impl Game {
         }
     }
     fn get_player_glyphs(&self) -> Vec<Vec<Option<Glyph>>> {
-        return if magnitude(self.player_vel_bpf) > self.player_color_change_speed_threshold {
+        if magnitude(self.player_vel_bpf) > self.player_color_change_speed_threshold {
             Glyph::get_glyphs_for_colored_floating_square(self.player_pos, PLAYER_HIGH_SPEED_COLOR)
         } else {
             Glyph::get_glyphs_for_colored_floating_square(self.player_pos, self.player_color)
-        };
+        }
     }
 
     fn get_buffered_glyph(&self, pos: Point<i32>) -> &Glyph {
@@ -862,7 +883,7 @@ impl Game {
         } else {
             // no collision, and in world
             step_taken = actual_endpoint - self.player_pos;
-            self.recent_player_poses.push(self.player_pos.clone());
+            self.save_recent_player_pose(self.player_pos);
             self.player_pos = actual_endpoint;
         }
 
@@ -874,6 +895,13 @@ impl Game {
             self.player_remaining_coyote_frames = self.player_max_coyote_frames;
         } else if self.player_remaining_coyote_frames > 0 {
             self.player_remaining_coyote_frames -= 1;
+        }
+    }
+
+    fn save_recent_player_pose(&mut self, pos: Point<f32>) {
+        self.recent_player_poses.push_front(pos);
+        while self.recent_player_poses.len() > NUM_SAVED_PLAYER_POSES as usize {
+            self.recent_player_poses.pop_back();
         }
     }
 
@@ -1231,6 +1259,17 @@ mod tests {
     fn set_up_player_on_platform() -> Game {
         let mut game = set_up_just_player();
         game.place_line_of_blocks((10, 10), (20, 10), Block::Wall);
+        return game;
+    }
+
+    fn set_up_player_on_platform_in_box() -> Game {
+        let mut game = set_up_player_on_platform();
+        let xmax = game.grid.len() as i32 - 1;
+        let ymax = game.grid[0].len() as i32 - 1;
+        game.place_line_of_blocks((0, 0), (xmax, 0), Block::Wall);
+        game.place_line_of_blocks((xmax, 0), (xmax, ymax), Block::Wall);
+        game.place_line_of_blocks((xmax, ymax), (0, ymax), Block::Wall);
+        game.place_line_of_blocks((0, ymax), (0, 0), Block::Wall);
         return game;
     }
 
@@ -2424,6 +2463,12 @@ mod tests {
     }
 
     #[test]
+    fn test_combine_braille_character() {
+        assert!(Glyph::add_braille('\u{2800}', '\u{2820}') == '\u{2820}');
+        assert!(Glyph::add_braille('\u{2801}', '\u{28C0}') == '\u{28C1}');
+    }
+
+    #[test]
     fn test_draw_visual_braille_line_without_rounding() {
         let mut game = set_up_player_on_platform();
         let start = game.player_pos + p(0.51, 0.1);
@@ -2460,5 +2505,70 @@ mod tests {
                 .character
                 == '\u{2802}'
         );
+    }
+
+    #[test]
+    fn test_drawn_braille_adds_instead_of_overwrites() {
+        let mut game = Game::new(30, 30);
+        let start_square = p(12, 5);
+        let color = ColorName::Blue;
+        let start_upper_line = floatify(start_square) + p(-0.1, 0.1);
+        let end_upper_line = floatify(start_square) + p(1.6, 0.1);
+        let start_lower_line = floatify(start_square) + p(-0.1, -0.3);
+        let end_lower_line = floatify(start_square) + p(1.6, -0.3);
+
+        game.draw_visual_braille_line(start_upper_line, end_upper_line, color);
+        game.draw_visual_braille_line(start_lower_line, end_lower_line, color);
+
+        // Expected braille:
+        // 00 00 00
+        // 11 11 10
+        // 00 00 00
+        // 11 11 10
+
+        // \u{28D2}, \u{28D2}, \u{2842},
+
+        assert!(game.get_buffered_glyph(start_square + p(0, 0)).character == '\u{28D2}');
+        assert!(game.get_buffered_glyph(start_square + p(1, 0)).character == '\u{28D2}');
+        assert!(game.get_buffered_glyph(start_square + p(2, 0)).character == '\u{2842}');
+    }
+
+    #[test]
+    fn test_braille_speed_lines_when_go_fast() {
+        let mut game = set_up_player_on_platform_in_box();
+        game.player_vel_bpf = p(game.player_color_change_speed_threshold * 5.0, 0.0);
+        let start_pos = game.player_pos;
+        game.tick_physics();
+        game.update_output_buffer();
+        for x in 0..3 {
+            assert!(Glyph::is_braille(
+                game.get_buffered_glyph(snap_to_grid(start_pos) + p(x, 0))
+                    .character
+            ));
+        }
+    }
+
+    #[test]
+    fn test_recent_player_poses_starts_empty() {
+        let mut game = set_up_player_on_platform();
+        assert!(game.recent_player_poses.is_empty());
+    }
+
+    #[test]
+    fn test_recent_player_poses_are_saved() {
+        let mut game = set_up_player_on_platform();
+        let p0 = game.player_pos;
+        let p1 = p(5.0, 2.0);
+        let p2 = p(6.7, 3.4);
+        game.tick_physics();
+        game.player_pos = p1;
+        game.tick_physics();
+        game.player_pos = p2;
+        game.tick_physics();
+
+        assert!(game.recent_player_poses.len() == 3);
+        assert!(game.recent_player_poses.get(0).unwrap() == &p2);
+        assert!(game.recent_player_poses.get(1).unwrap() == &p1);
+        assert!(game.recent_player_poses.get(2).unwrap() == &p0);
     }
 }
