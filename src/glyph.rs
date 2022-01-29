@@ -2,8 +2,6 @@ extern crate geo;
 
 use termion::color;
 
-use geo::algorithm::euclidean_distance::EuclideanDistance;
-use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Point};
 use std::cmp::min;
 
@@ -69,11 +67,11 @@ impl Glyph {
     }
 
     pub fn from_char(character: char) -> Glyph {
-        return Glyph {
+        Glyph {
             character,
             fg_color: ColorName::White,
             bg_color: ColorName::Black,
-        };
+        }
     }
 
     pub fn fg_color_from_name(color_name: ColorName) -> String {
@@ -99,10 +97,7 @@ impl Glyph {
     }
 
     pub fn square_with_horizontal_offset(fraction_of_square_offset: f32) -> Glyph {
-        return Glyph::colored_square_with_horizontal_offset(
-            fraction_of_square_offset,
-            ColorName::White,
-        );
+        Glyph::colored_square_with_horizontal_offset(fraction_of_square_offset, ColorName::White)
     }
 
     pub fn colored_square_with_horizontal_offset(

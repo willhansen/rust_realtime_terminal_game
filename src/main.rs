@@ -590,8 +590,8 @@ impl Game {
         for point_to_check in &intermediate_player_positions_to_check {
             let overlapping_squares =
                 grid_squares_overlapped_by_floating_unit_square(*point_to_check);
+            let mut collisions = Vec::<MovecastCollision>::new();
             for overlapping_square in &overlapping_squares {
-                let mut collisions = Vec::<MovecastCollision>::new();
                 if self.in_world(*overlapping_square)
                     && self.get_block(*overlapping_square) == Block::Wall
                 {
@@ -600,30 +600,29 @@ impl Game {
                     {
                         collisions.push(collision);
                     } else {
-                        dbg!(
-                            //&self.recent_player_poses[0],
-                            self.player_pos,
-                            &intermediate_player_positions_to_check,
-                            start_pos,
-                            end_pos,
-                            ideal_step,
-                            point_to_check,
-                            overlapping_square,
-                            &overlapping_squares,
-                            collisions,
-                        );
+                        //dbg!(
+                        //self.player_pos,
+                        //&intermediate_player_positions_to_check,
+                        //start_pos,
+                        //end_pos,
+                        //ideal_step,
+                        //point_to_check,
+                        //overlapping_square,
+                        //&overlapping_squares,
+                        //collisions,
+                        //);
                         panic!("Started inside a block");
                     }
                 }
-                if !collisions.is_empty() {
-                    collisions.sort_by(|a, b| {
-                        let a_dist = a.pos.euclidean_distance(&start_pos);
-                        let b_dist = b.pos.euclidean_distance(&start_pos);
-                        a_dist.partial_cmp(&b_dist).unwrap()
-                    });
-                    let closest_collision_to_start = collisions[0];
-                    return Some(closest_collision_to_start);
-                }
+            }
+            if !collisions.is_empty() {
+                collisions.sort_by(|a, b| {
+                    let a_dist = a.pos.euclidean_distance(&start_pos);
+                    let b_dist = b.pos.euclidean_distance(&start_pos);
+                    a_dist.partial_cmp(&b_dist).unwrap()
+                });
+                let closest_collision_to_start = collisions[0];
+                return Some(closest_collision_to_start);
             }
         }
         return None;
