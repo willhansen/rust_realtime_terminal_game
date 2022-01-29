@@ -1,0 +1,119 @@
+
+[src/main.rs:976] &self.recent_player_poses = [                                                                        
+  Point(                                                              
+      Coordinate {                                          
+x: 33.600082,                 
+y: 17.300001,                                                                                                               
+},                                                                                                     
+),                                                                                               
+  Point(                                                                                     
+      Coordinate {                                                                 
+x: 38.600082,                                        
+y: 17.900002,               
+},     
+),                                                                                                                      
+  Point(                                                                                                           
+      Coordinate {                                                                                        
+x: 43.600082,                                                               
+y: 18.45,                                          
+},                                
+),                          
+  Point(                
+      Coordinate {                                                                                                                  
+x: 48.600082,                                                                                          
+y: 18.95,                                                                     
+},                                                           
+),                                                     
+  Point(                                           
+      Coordinate {                       
+x: 53.600082,                                                                                                                    
+y: 19.400002,                                                                                            
+},                                                                                  
+),                                                                            
+  Point(                                                                  
+      Coordinate {                                              
+x: 58.600082,                     
+y: 19.800001,                                                                                                                  
+},                                                                                                        
+),   
+  Point(                                                                                         
+      Coordinate {                                                                     
+x: 63.600082,                                            
+y: 20.150002,                   
+},         
+),   
+  Point(                                                                                                                
+      Coordinate {                                                                                            
+x: 68.60008,                                                                    
+y: 20.45,                                               
+},                                     
+),                               
+  Point(
+      Coordinate {
+x: 73.60008,
+y: 20.7,
+},
+),
+  Point(
+      Coordinate {
+x: 78.60008,
+y: 20.900002,
+},
+),
+  ]
+
+
+  [src/main.rs:976] &points_to_check = [
+    Point(
+        Coordinate {
+x: 23.957212,
+y: 16.0,
+},
+),
+    Point(
+        Coordinate {
+x: 23.832212,
+y: 16.0,
+},
+),
+    Point(
+        Coordinate {
+x: 23.600082,
+y: 16.0,
+},
+),
+  ]
+
+
+  [src/main.rs:976] start_pos = Point(
+      Coordinate {
+x: 23.957212,
+y: 16.0,
+},
+)
+  [src/main.rs:976] end_pos = Point(
+      Coordinate {
+x: 23.600082,
+y: 16.0,
+},
+)
+  [src/main.rs:976] ideal_step = Point(
+      Coordinate {
+x: -0.35713005,
+y: 0.0,
+},
+)
+  [src/main.rs:976] point_to_check = Point(
+      Coordinate {
+x: 23.957212,
+y: 16.0,
+},
+)
+  [src/main.rs:976] touching_grid_point = Point(
+      Coordinate {
+x: 23,
+y: 16,
+},
+)
+  thread 'main' panicked at 'Failed to find intersection.', src/main.rs:985:25
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

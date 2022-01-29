@@ -25,7 +25,7 @@ use termion::raw::IntoRawMode;
 
 // const player_jump_height: i32 = 3;
 // const player_jump_hang_frames: i32 = 4;
-const MAX_FPS: i32 = 6; // frames per second
+const MAX_FPS: i32 = 60; // frames per second
 const IDEAL_FRAME_DURATION_MS: u128 = (1000.0 / MAX_FPS as f32) as u128;
 const PLAYER_COLOR: ColorName = ColorName::Red;
 const PLAYER_HIGH_SPEED_COLOR: ColorName = ColorName::Blue;
@@ -41,6 +41,7 @@ const DEFAULT_PLAYER_COYOTE_TIME_DURATION_S: f32 = 0.1;
 const DEFAULT_PLAYER_MAX_COYOTE_FRAMES: i32 =
     ((DEFAULT_PLAYER_COYOTE_TIME_DURATION_S * MAX_FPS as f32) + 1.0) as i32;
 const PLAYER_SNAP_TO_GRID_ON_STOP: bool = false;
+const PLAYER_SLOW_DOWN_MIDAIR: bool = false;
 
 // "heighth", "reighth"
 const EIGHTH_BLOCKS_FROM_LEFT: &[char] = &[' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
@@ -800,40 +801,65 @@ impl Game {
 
     fn apply_player_acceleration_from_floor_traction(&mut self) {
         let start_x_vel = self.player_vel_bpf.x();
-        let desired_acceleration_direction = self.player_desired_direction.x().sign();
 
-        let trying_to_stop = desired_acceleration_direction == 0 && start_x_vel != 0.0;
+        let want_stop = self.player_desired_direction.x() == 0 && start_x_vel != 0.0;
+
+        let want_go_fast = (start_x_vel.abs() > 0.0
+            && start_x_vel.sign() == self.player_desired_direction.x().sign() as f32)
+            || (start_x_vel == 0.0 && self.player_desired_direction.x() != 0);
+
+        let want_turn_around =
+            start_x_vel.abs() > 0.0 && self.player_desired_direction.x() as f32 * start_x_vel < 0.0;
+
+        let desired_acceleration_direction;
+        if want_stop {
+            desired_acceleration_direction = -start_x_vel.sign() as i32;
+        } else {
+            desired_acceleration_direction = self.player_desired_direction.x().sign();
+        }
+
         let started_above_max_speed = start_x_vel.abs() > self.player_max_run_speed_bpf;
 
-        let real_acceleration_direction;
-        if trying_to_stop || started_above_max_speed {
-            real_acceleration_direction = -start_x_vel.sign() as i32;
+        let midair = !self.player_is_supported();
+
+        let mut end_x_vel = start_x_vel;
+        if started_above_max_speed {
+            if !(midair && want_go_fast) {
+                // slowing down to the max speed automatically
+                let delta_vx = -start_x_vel.sign() * self.player_acceleration_from_traction;
+                let is_slowdown_overshoot =
+                    (start_x_vel + delta_vx).abs() < self.player_max_run_speed_bpf;
+                if want_go_fast && is_slowdown_overshoot {
+                    end_x_vel = start_x_vel.sign() as f32 * self.player_max_run_speed_bpf;
+                } else {
+                    end_x_vel = start_x_vel + delta_vx;
+                }
+            }
         } else {
-            real_acceleration_direction = desired_acceleration_direction;
+            // can speed up or slow down. maybe limited by max speed
+            let delta_vx =
+                desired_acceleration_direction as f32 * self.player_acceleration_from_traction;
+            let is_speedup_overshoot =
+                (start_x_vel + delta_vx).abs() > self.player_max_run_speed_bpf;
+            if is_speedup_overshoot && !midair {
+                end_x_vel = desired_acceleration_direction as f32 * self.player_max_run_speed_bpf;
+            } else {
+                end_x_vel = start_x_vel + delta_vx;
+            }
         }
-        let delta_vx =
-            real_acceleration_direction.sign() as f32 * self.player_acceleration_from_traction;
-        let mut end_x_vel = self.player_vel_bpf.x() + delta_vx;
+
         let changed_direction = start_x_vel * end_x_vel < 0.0;
+        let is_stop_overshoot = want_stop && changed_direction;
 
-        if trying_to_stop && changed_direction {
+        if is_stop_overshoot {
             end_x_vel = 0.0;
-        }
-
-        let want_to_go_faster = start_x_vel.sign() == desired_acceleration_direction.sign() as f32;
-        let ended_above_max_speed = end_x_vel.abs() >= self.player_max_run_speed_bpf;
-        if started_above_max_speed && !ended_above_max_speed && want_to_go_faster {
-            end_x_vel = start_x_vel.sign() * self.player_max_run_speed_bpf;
-        }
-
-        if !started_above_max_speed && ended_above_max_speed {
-            end_x_vel = end_x_vel.sign() * self.player_max_run_speed_bpf;
         }
 
         if end_x_vel == 0.0 && PLAYER_SNAP_TO_GRID_ON_STOP {
             self.player_pos
                 .set_x(snap_to_grid(self.player_pos).x() as f32);
         }
+
         self.player_vel_bpf.set_x(end_x_vel);
     }
 
