@@ -595,18 +595,19 @@ impl Game {
         self.player_remaining_coyote_frames = 0;
     }
     fn player_jump(&mut self) {
-        if self.player_is_grabbing_wall() {
-            self.player_vel_bpf.add_assign(p(
-                self.player_jump_delta_v * -self.player_wall_grab_direction() as f32,
-                0.0,
-            ));
-            self.player_desired_direction
-                .set_x(self.player_desired_direction.x() * -1);
+        if self.player_is_grabbing_wall() || self.player_is_running_up_wall() {
+            let wall_direction = sign(self.player_desired_direction);
+            self.player_vel_bpf
+                .add_assign(floatify(-wall_direction) * self.player_jump_delta_v);
+            self.player_desired_direction = -wall_direction;
         }
         self.player_vel_bpf.set_y(self.player_jump_delta_v);
     }
     fn player_jump_if_possible(&mut self) {
-        if self.player_is_supported() || self.player_is_grabbing_wall() {
+        if self.player_is_supported()
+            || self.player_is_grabbing_wall()
+            || self.player_is_running_up_wall()
+        {
             self.player_jump();
         }
     }
@@ -771,23 +772,20 @@ impl Game {
     }
 
     fn player_is_grabbing_wall(&self) -> bool {
-        if self.player_desired_direction.x() != 0
+        self.player_is_pressing_against_wall()
             && self.player_vel_bpf.y() <= 0.0
             && !self.player_is_standing_on_block()
-        {
-            if let Some(block) = self.get_block_relative_to_player(self.player_desired_direction) {
-                return block.wall_grabbable();
-            }
+    }
+
+    fn player_is_running_up_wall(&self) -> bool {
+        self.player_is_pressing_against_wall() && self.player_vel_bpf.y() > 0.0
+    }
+
+    fn player_is_pressing_against_wall(&self) -> bool {
+        if let Some(block) = self.get_block_relative_to_player(self.player_desired_direction) {
+            return block.wall_grabbable();
         }
         return false;
-    }
-    fn player_wall_grab_direction(&self) -> i32 {
-        // TODO: is this good?  Is the check necessary?
-        if self.player_is_grabbing_wall() {
-            return self.player_desired_direction.x().sign();
-        } else {
-            return 0;
-        }
     }
 
     fn apply_player_acceleration_from_wall_friction(&mut self) {
@@ -1673,12 +1671,20 @@ mod tests {
 
         assert!(game1.player_vel_bpf.y() == game2.player_vel_bpf.y());
     }
-    #[ignore]
+
     #[test]
-    fn test_wall_jump_while_sliding_up_wall() {
+    fn test_player_does_not_spawn_with_coyote_frames() {
+        let mut game = set_up_just_player();
+        let start_pos = game.player_pos;
+        game.player_acceleration_from_gravity = 1.0;
+        game.tick_physics();
+        assert!(game.player_pos.y() != start_pos.y());
+    }
+
+    #[test]
+    fn test_wall_jump_while_running_up_wall() {
         let mut game = set_up_player_hanging_on_wall_on_left();
         game.player_vel_bpf.set_y(1.0);
-        game.player_remaining_coyote_frames = 0;
         game.player_jump_if_possible();
         assert!(game.player_vel_bpf.x() > 0.0);
     }
@@ -2292,9 +2298,16 @@ mod tests {
         );
     }
 
-    #[ignore]
     #[test]
-    fn test_no_passive_horizontal_momentum_loss_while_midair() {}
+    fn test_no_passive_horizontal_momentum_loss_while_midair() {
+        let mut game = set_up_just_player();
+        game.player_desired_direction = p(1, 0);
+        let vx = 5.0;
+        game.player_vel_bpf = p(vx, 0.0);
+        game.tick_physics();
+
+        assert!(game.player_vel_bpf.x() == vx);
+    }
 
     #[test]
     fn test_dont_grab_wall_while_standing_on_ground() {
