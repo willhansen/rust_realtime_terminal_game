@@ -1,3 +1,6 @@
+mod glyph;
+mod utility;
+
 extern crate circular_queue;
 extern crate geo;
 extern crate line_drawing;
@@ -23,6 +26,9 @@ use termion::event::{Event, Key, MouseButton, MouseEvent};
 use termion::input::{MouseTerminal, TermRead};
 use termion::raw::IntoRawMode;
 
+use glyph::*;
+use utility::*;
+
 // const player_jump_height: i32 = 3;
 // const player_jump_hang_frames: i32 = 4;
 const MAX_FPS: i32 = 60; // frames per second
@@ -42,34 +48,6 @@ const DEFAULT_PLAYER_MAX_COYOTE_FRAMES: i32 =
     ((DEFAULT_PLAYER_COYOTE_TIME_DURATION_S * MAX_FPS as f32) + 1.0) as i32;
 const PLAYER_SNAP_TO_GRID_ON_STOP: bool = false;
 const PLAYER_SLOW_DOWN_MIDAIR: bool = false;
-
-// "heighth", "reighth"
-const EIGHTH_BLOCKS_FROM_LEFT: &[char] = &[' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
-const EIGHTH_BLOCKS_FROM_BOTTOM: &[char] = &[' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-
-type BrailleArray = [[bool; 4]; 2];
-
-fn quarter_block_by_offset(half_steps: (i32, i32)) -> char {
-    match half_steps {
-        (1, -1) => '▗',
-        (1, 0) => '▐',
-        (1, 1) => '▝',
-        (0, -1) => '▄',
-        (0, 0) => '█',
-        (0, 1) => '▀',
-        (-1, -1) => '▖',
-        (-1, 0) => '▌',
-        (-1, 1) => '▘',
-        _ => ' ',
-    }
-}
-
-fn p<T: 'static>(x: T, y: T) -> Point<T>
-where
-    T: CoordNum,
-{
-    return point!(x: x, y: y);
-}
 
 // These have no positional information
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -106,356 +84,6 @@ impl Block {
             Block::Air => false,
             _ => true,
         }
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Debug)]
-struct MovecastCollision {
-    pos: Point<f32>,
-    normal: Point<i32>,
-}
-
-#[derive(Clone, PartialEq, Eq, Debug, Copy)]
-enum ColorName {
-    Red,
-    Green,
-    Blue,
-    Black,
-    White,
-    Reset,
-}
-
-#[derive(Clone, PartialEq, Eq, Debug, Copy)]
-struct Glyph {
-    character: char,
-    fg_color: ColorName,
-    bg_color: ColorName,
-}
-
-impl Glyph {
-    fn to_string(&self) -> String {
-        let mut output = self.character.to_string();
-        //if self.fg_color != ColorName::White {
-        output = format!(
-            "{}{}{}",
-            Glyph::fg_color_from_name(self.fg_color),
-            output,
-            Glyph::fg_color_from_name(ColorName::White),
-        );
-        //}
-        //if self.bg_color != ColorName::Black {
-        output = format!(
-            "{}{}{}",
-            Glyph::bg_color_from_name(self.bg_color),
-            output,
-            Glyph::bg_color_from_name(ColorName::Black),
-        );
-        //}
-        return output;
-    }
-
-    fn from_char(character: char) -> Glyph {
-        return Glyph {
-            character,
-            fg_color: ColorName::White,
-            bg_color: ColorName::Black,
-        };
-    }
-
-    fn fg_color_from_name(color_name: ColorName) -> String {
-        match color_name {
-            ColorName::Red => color::Fg(color::Red).to_string(),
-            ColorName::Green => color::Fg(color::Green).to_string(),
-            ColorName::Blue => color::Fg(color::Blue).to_string(),
-            ColorName::White => color::Fg(color::White).to_string(),
-            ColorName::Black => color::Fg(color::Black).to_string(),
-            ColorName::Reset => color::Fg(color::Reset).to_string(),
-        }
-    }
-
-    fn bg_color_from_name(color_name: ColorName) -> String {
-        match color_name {
-            ColorName::Red => color::Bg(color::Red).to_string(),
-            ColorName::Green => color::Bg(color::Green).to_string(),
-            ColorName::Blue => color::Bg(color::Blue).to_string(),
-            ColorName::White => color::Bg(color::White).to_string(),
-            ColorName::Black => color::Bg(color::Black).to_string(),
-            ColorName::Reset => color::Bg(color::Reset).to_string(),
-        }
-    }
-
-    fn square_with_horizontal_offset(fraction_of_square_offset: f32) -> Glyph {
-        return Glyph::colored_square_with_horizontal_offset(
-            fraction_of_square_offset,
-            ColorName::White,
-        );
-    }
-
-    fn colored_square_with_horizontal_offset(
-        fraction_of_square_offset: f32,
-        color_name: ColorName,
-    ) -> Glyph {
-        let offset_in_eighths_rounded_towards_inf = (fraction_of_square_offset * 8.0).ceil() as i32;
-        assert!(offset_in_eighths_rounded_towards_inf.abs() <= 8);
-        if offset_in_eighths_rounded_towards_inf <= 0 {
-            return Glyph {
-                character: EIGHTH_BLOCKS_FROM_LEFT
-                    [(8 + offset_in_eighths_rounded_towards_inf) as usize],
-                fg_color: color_name,
-                bg_color: ColorName::Black,
-            };
-        } else {
-            return Glyph {
-                character: EIGHTH_BLOCKS_FROM_LEFT[offset_in_eighths_rounded_towards_inf as usize],
-                fg_color: ColorName::Black,
-                bg_color: color_name,
-            };
-        }
-    }
-    fn square_with_vertical_offset(fraction_of_square_offset: f32) -> Glyph {
-        return Glyph::colored_square_with_vertical_offset(
-            fraction_of_square_offset,
-            ColorName::White,
-        );
-    }
-    fn colored_square_with_vertical_offset(
-        fraction_of_square_offset: f32,
-        color_name: ColorName,
-    ) -> Glyph {
-        let offset_in_eighths_rounded_towards_inf = (fraction_of_square_offset * 8.0).ceil() as i32;
-        assert!(offset_in_eighths_rounded_towards_inf.abs() <= 8);
-        if offset_in_eighths_rounded_towards_inf <= 0 {
-            return Glyph {
-                character: EIGHTH_BLOCKS_FROM_BOTTOM
-                    [(8 + offset_in_eighths_rounded_towards_inf) as usize],
-                fg_color: color_name,
-                bg_color: ColorName::Black,
-            };
-        } else {
-            return Glyph {
-                character: EIGHTH_BLOCKS_FROM_BOTTOM
-                    [(offset_in_eighths_rounded_towards_inf) as usize],
-                fg_color: ColorName::Black,
-                bg_color: color_name,
-            };
-        }
-    }
-    fn colored_square_with_half_step_offset(offset: Point<f32>, color_name: ColorName) -> Glyph {
-        let step = round_vector_with_tie_break_toward_inf(offset * 2.0);
-        Glyph {
-            character: quarter_block_by_offset((step.x(), step.y())),
-            fg_color: color_name,
-            bg_color: ColorName::Black,
-        }
-    }
-
-    fn get_glyphs_for_floating_square(pos: Point<f32>) -> Vec<Vec<Option<Glyph>>> {
-        Glyph::get_glyphs_for_colored_floating_square(pos, ColorName::White)
-    }
-
-    fn get_glyphs_for_colored_floating_square(
-        pos: Point<f32>,
-        color: ColorName,
-    ) -> Vec<Vec<Option<Glyph>>> {
-        let grid_offset = offset_from_grid(pos);
-        let x_offset = grid_offset.x();
-        let y_offset = grid_offset.y();
-        if y_offset.abs() < x_offset.abs() && y_offset.abs() < 0.25 {
-            Glyph::get_smooth_horizontal_glyphs_for_colored_floating_square(pos, color)
-        } else if x_offset.abs() < 0.25 {
-            Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(pos, color)
-        } else {
-            Glyph::get_half_grid_glyphs_for_colored_floating_square(pos, color)
-        }
-    }
-    fn get_smooth_horizontal_glyphs_for_floating_square(
-        pos: Point<f32>,
-    ) -> Vec<Vec<Option<Glyph>>> {
-        Glyph::get_smooth_horizontal_glyphs_for_colored_floating_square(pos, ColorName::White)
-    }
-    fn get_smooth_horizontal_glyphs_for_colored_floating_square(
-        pos: Point<f32>,
-        color: ColorName,
-    ) -> Vec<Vec<Option<Glyph>>> {
-        let width = 3;
-        let mut output = vec![vec![None; width]; width];
-
-        let c = width / 2 as usize;
-
-        let grid_offset = offset_from_grid(pos);
-        let x_offset = grid_offset.x();
-        let offset_dir = round(sign(grid_offset));
-
-        for i in 0..3 {
-            let x = i as i32 - 1;
-            if offset_dir.x() == x || x == 0 {
-                output[i][c] = Some(Glyph::colored_square_with_horizontal_offset(
-                    x_offset - x as f32,
-                    color,
-                ));
-            }
-        }
-
-        return output;
-    }
-    fn get_smooth_vertical_glyphs_for_floating_square(pos: Point<f32>) -> Vec<Vec<Option<Glyph>>> {
-        Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(pos, ColorName::White)
-    }
-    fn get_smooth_vertical_glyphs_for_colored_floating_square(
-        pos: Point<f32>,
-        color: ColorName,
-    ) -> Vec<Vec<Option<Glyph>>> {
-        let width = 3;
-        let mut output = vec![vec![None; width]; width];
-
-        let c = width / 2 as usize;
-
-        let grid_offset = offset_from_grid(pos);
-        let y_offset = grid_offset.y();
-        let offset_dir = round(sign(grid_offset));
-        for j in 0..3 {
-            let y = j as i32 - 1;
-            if offset_dir.y() == y || y == 0 {
-                output[c][j] = Some(Glyph::colored_square_with_vertical_offset(
-                    y_offset - y as f32,
-                    color,
-                ));
-            }
-        }
-        return output;
-    }
-
-    fn get_half_grid_glyphs_for_floating_square(pos: Point<f32>) -> Vec<Vec<Option<Glyph>>> {
-        Glyph::get_half_grid_glyphs_for_colored_floating_square(pos, ColorName::White)
-    }
-
-    fn get_half_grid_glyphs_for_colored_floating_square(
-        pos: Point<f32>,
-        color: ColorName,
-    ) -> Vec<Vec<Option<Glyph>>> {
-        let width = 3;
-        let mut output = vec![vec![None; width]; width];
-        let grid_offset = offset_from_grid(pos);
-        let offset_dir = round(sign(grid_offset));
-
-        for i in 0..3 {
-            for j in 0..3 {
-                let x = i as i32 - 1;
-                let y = j as i32 - 1;
-                let square = p(x as f32, y as f32);
-                if (offset_dir.x() == x || x == 0) && (offset_dir.y() == y || y == 0) {
-                    let glyph =
-                        Glyph::colored_square_with_half_step_offset(grid_offset - square, color);
-                    if glyph.character != ' ' {
-                        output[i][j] = Some(glyph);
-                    }
-                }
-            }
-        }
-        return output;
-    }
-
-    fn array_to_braille(input: BrailleArray) -> char {
-        let mut dot_val: u32 = 0;
-        for x in 0..2 {
-            for y in 0..4 {
-                if input[x][y] {
-                    dot_val |= Glyph::braille_bit_for_pos(p(x as i32, y as i32));
-                }
-            }
-        }
-        return char::from_u32('\u{2800}' as u32 | dot_val).unwrap();
-    }
-
-    fn braille_bit_for_pos(p: Point<i32>) -> u32 {
-        let braille_value_map = vec![vec![7, 3, 2, 1], vec![8, 6, 5, 4]];
-        1 << (braille_value_map[p.x() as usize][p.y() as usize] - 1)
-    }
-
-    fn add_braille_dot(character: char, p: Point<i32>) -> char {
-        char::from_u32(character as u32 | Glyph::braille_bit_for_pos(p)).unwrap()
-    }
-
-    fn empty_braille() -> char {
-        '\u{2800}'
-    }
-
-    fn is_braille(c: char) -> bool {
-        let x = c as u32;
-        // The unicode braille block
-        x >= 0x2800 && x <= 0x28FF
-    }
-
-    fn add_braille(c1: char, c2: char) -> char {
-        char::from_u32(c1 as u32 | c2 as u32).unwrap()
-    }
-
-    fn get_glyphs_for_braille_line(
-        start_pos: Point<f32>,
-        end_pos: Point<f32>,
-    ) -> Vec<Vec<Option<Glyph>>> {
-        Glyph::get_glyphs_for_colored_braille_line(start_pos, end_pos, ColorName::White)
-    }
-
-    fn character_pos_to_braille_pos(pos: Point<f32>) -> Point<f32> {
-        p(pos.x() * 2.0 + 0.5, pos.y() * 4.0 + 1.5)
-    }
-
-    fn braille_square_to_dot_in_character(pos: Point<i32>) -> Point<i32> {
-        p((pos.x() % 2).abs(), (pos.y() % 4).abs())
-    }
-
-    fn braille_grid_to_character_grid(braille_square: Point<i32>) -> Point<i32> {
-        p(
-            ((braille_square.x() as f32 - 0.5) / 2.0).round() as i32,
-            ((braille_square.y() as f32 - 1.5) / 4.0).round() as i32,
-        )
-    }
-
-    fn get_glyphs_for_colored_braille_line(
-        start_pos: Point<f32>,
-        end_pos: Point<f32>,
-        color: ColorName,
-    ) -> Vec<Vec<Option<Glyph>>> {
-        let start_grid_square = snap_to_grid(start_pos);
-        let end_grid_square = snap_to_grid(end_pos);
-        let start_braille_grid_square =
-            snap_to_grid(Glyph::character_pos_to_braille_pos(start_pos));
-        let end_braille_grid_square = snap_to_grid(Glyph::character_pos_to_braille_pos(end_pos));
-
-        let grid_diagonal = end_grid_square - start_grid_square;
-        let grid_width = grid_diagonal.x().abs() + 1;
-        let grid_height = grid_diagonal.y().abs() + 1;
-
-        let bottom_square_y = min(start_grid_square.y(), end_grid_square.y());
-        let left_square_x = min(start_grid_square.x(), end_grid_square.x());
-        let grid_origin_square = p(left_square_x, bottom_square_y);
-
-        let mut output_grid: Vec<Vec<Option<Glyph>>> =
-            vec![vec![None; grid_height as usize]; grid_width as usize];
-
-        for (x, y) in line_drawing::Bresenham::new(
-            start_braille_grid_square.x_y(),
-            end_braille_grid_square.x_y(),
-        ) {
-            let character_grid_square =
-                Glyph::braille_grid_to_character_grid(p(x, y)) - grid_origin_square;
-            let maybe_glyph = &mut output_grid[character_grid_square.x() as usize]
-                [character_grid_square.y() as usize];
-            if *maybe_glyph == None {
-                *maybe_glyph = Some(Glyph {
-                    character: Glyph::empty_braille(),
-                    fg_color: color,
-                    bg_color: ColorName::Black,
-                });
-            }
-            let braille_character = &mut (*maybe_glyph).as_mut().unwrap().character;
-            *braille_character = Glyph::add_braille_dot(
-                *braille_character,
-                Glyph::braille_square_to_dot_in_character(p(x, y)),
-            );
-        }
-        return output_grid;
     }
 }
 
@@ -563,9 +191,12 @@ impl Game {
         for i in 0..squares_to_place.len() {
             for j in 0..squares_to_place[0].len() {
                 if let Some(new_glyph) = squares_to_place[i][j] {
-                    let square_on_grid = p(left_square_x + i as i32, bottom_square_y + j as i32);
-                    let grid_glyph = &mut self.output_buffer[square_on_grid.x() as usize]
-                        [square_on_grid.y() as usize];
+                    let grid_square = p(left_square_x + i as i32, bottom_square_y + j as i32);
+                    if !self.in_world(grid_square) {
+                        continue;
+                    }
+                    let grid_glyph =
+                        &mut self.output_buffer[grid_square.x() as usize][grid_square.y() as usize];
                     if Glyph::is_braille(grid_glyph.character) {
                         let combined_braille =
                             Glyph::add_braille(grid_glyph.character, new_glyph.character);
@@ -873,7 +504,7 @@ impl Game {
 
         let start_point = self.player_pos;
         let mut remaining_step: Point<f32> = self.player_vel_bpf;
-        let mut current_start_point = start_point.clone();
+        let mut current_start_point = start_point;
         let actual_endpoint: Point<f32>;
         let mut current_target = start_point + remaining_step;
         loop {
@@ -949,46 +580,55 @@ impl Game {
         let collision_checks_per_block_travelled = 8.0;
         let num_points_to_check =
             (magnitude(ideal_step) * collision_checks_per_block_travelled).floor() as i32;
-        let mut collision: Option<MovecastCollision> = None;
-        let mut points_to_check = Vec::<Point<f32>>::new();
+        let mut intermediate_player_positions_to_check = Vec::<Point<f32>>::new();
         for i in 0..num_points_to_check {
-            points_to_check.push(
+            intermediate_player_positions_to_check.push(
                 start_pos
                     + direction(ideal_step) * (i as f32 / collision_checks_per_block_travelled),
             );
         }
         // needed for very small steps
-        points_to_check.push(end_pos);
-        'outer: for point_to_check in &points_to_check {
-            //println!("point to check: {:?}", point_to_check);
-            for touching_grid_point in
-                grid_squares_overlapped_by_floating_unit_square(*point_to_check)
-            {
-                //println!("grid square: {:?}", touching_grid_point);
-                if self.in_world(touching_grid_point)
-                    && self.get_block(touching_grid_point) == Block::Wall
+        intermediate_player_positions_to_check.push(end_pos);
+        for point_to_check in &intermediate_player_positions_to_check {
+            let overlapping_squares =
+                grid_squares_overlapped_by_floating_unit_square(*point_to_check);
+            for overlapping_square in &overlapping_squares {
+                let mut collisions = Vec::<MovecastCollision>::new();
+                if self.in_world(*overlapping_square)
+                    && self.get_block(*overlapping_square) == Block::Wall
                 {
-                    //println!("hit grid square: {:?}", touching_grid_point);
-
-                    collision =
-                        single_block_movecast(start_pos, *point_to_check, touching_grid_point);
-                    if collision == None {
+                    if let Some(collision) =
+                        single_block_movecast(start_pos, *point_to_check, *overlapping_square)
+                    {
+                        collisions.push(collision);
+                    } else {
                         dbg!(
-                            &self.recent_player_poses,
-                            &points_to_check,
+                            &self.recent_player_poses[0],
+                            self.player_pos,
+                            &intermediate_player_positions_to_check,
                             start_pos,
                             end_pos,
                             ideal_step,
                             point_to_check,
-                            touching_grid_point
+                            overlapping_square,
+                            &overlapping_squares,
+                            collisions,
                         );
                         panic!("Failed to find intersection.");
                     }
-                    break 'outer;
+                }
+                if !collisions.is_empty() {
+                    collisions.sort_by(|a, b| {
+                        let a_dist = a.pos.euclidean_distance(&start_pos);
+                        let b_dist = b.pos.euclidean_distance(&start_pos);
+                        a_dist.partial_cmp(&b_dist).unwrap()
+                    });
+                    let closest_collision_to_start = collisions[0];
+                    return Some(closest_collision_to_start);
                 }
             }
         }
-        return collision;
+        return None;
     }
 
     fn player_is_supported(&self) -> bool {
@@ -1092,188 +732,6 @@ fn main() {
     }
 }
 
-fn single_block_movecast(
-    start_point: Point<f32>,
-    end_point: Point<f32>,
-    grid_square_center: Point<i32>,
-) -> Option<MovecastCollision>
-where
-{
-    // formulates the problem as a point crossing the boundary of an r=1 square
-    let movement_line = geo::Line::new(start_point, end_point);
-    //println!("movement_line: {:?}", movement_line);
-    let expanded_corner_offsets = vec![p(1.0, 1.0), p(-1.0, 1.0), p(-1.0, -1.0), p(1.0, -1.0)];
-    let expanded_square_corners: Vec<Point<f32>> = expanded_corner_offsets
-        .iter()
-        .map(|&rel_p| floatify(grid_square_center) + rel_p)
-        .collect();
-    let expanded_square_edges = vec![
-        geo::Line::new(expanded_square_corners[0], expanded_square_corners[1]),
-        geo::Line::new(expanded_square_corners[1], expanded_square_corners[2]),
-        geo::Line::new(expanded_square_corners[2], expanded_square_corners[3]),
-        geo::Line::new(expanded_square_corners[3], expanded_square_corners[0]),
-    ];
-    //println!("expanded_edges: {:?}", expanded_square_edges);
-    let mut candidate_edge_intersections = Vec::<Point<f32>>::new();
-    for edge in expanded_square_edges {
-        if let Some(LineIntersection::SinglePoint {
-            intersection: coord,
-            is_proper: _,
-        }) = line_intersection(movement_line, edge)
-        {
-            candidate_edge_intersections.push(coord.into());
-        }
-    }
-    if candidate_edge_intersections.is_empty() {
-        return None;
-    }
-
-    // four intersections with extended walls of stationary square
-    candidate_edge_intersections.sort_by(|a, b| {
-        start_point
-            .euclidean_distance(a)
-            .partial_cmp(&start_point.euclidean_distance(b))
-            .unwrap()
-    });
-    //println!("intersections: {:?}", candidate_edge_intersections);
-    let collision_point = candidate_edge_intersections[0];
-    //println!("collision_point: {:?}", collision_point);
-    //println!("rounded_dir_number: {:?}", round_to_direction_number( collision_point - floatify(grid_square_center)));
-    let collision_normal = e(round_to_direction_number(
-        collision_point - floatify(grid_square_center),
-    ));
-    return Some(MovecastCollision {
-        pos: collision_point,
-        normal: collision_normal,
-    });
-}
-
-fn e<T: CoordNum + num::Signed + std::fmt::Display>(dir_num: T) -> Point<T> {
-    let dir_num_int = dir_num.to_i32().unwrap() % 4;
-    match dir_num_int {
-        0 => Point::<T>::new(T::one(), T::zero()),
-        1 => Point::<T>::new(T::zero(), T::one()),
-        2 => Point::<T>::new(-T::one(), T::zero()),
-        3 => Point::<T>::new(T::zero(), -T::one()),
-        _ => panic!("bad direction number: {}", dir_num),
-    }
-}
-
-fn round_to_direction_number(point: Point<f32>) -> i32 {
-    let (x, y) = point.x_y();
-    if x.abs() > y.abs() {
-        if x > 0.0 {
-            return 0;
-        } else {
-            return 2;
-        }
-    } else {
-        if y > 0.0 {
-            return 1;
-        } else {
-            return 3;
-        }
-    }
-}
-
-fn grid_squares_overlapped_by_floating_unit_square(pos: Point<f32>) -> Vec<Point<i32>> {
-    let mut output = Vec::<Point<i32>>::new();
-    let offset_direction = round(sign(offset_from_grid(pos)));
-    // each non-zero offset axis implies one more square.  Both implies three
-    for i in 0..3 {
-        for j in 0..3 {
-            let candidate_square_pos = p(i as i32 - 1, j as i32 - 1);
-            if (candidate_square_pos.x() == offset_direction.x() || candidate_square_pos.x() == 0)
-                && (candidate_square_pos.y() == offset_direction.y()
-                    || candidate_square_pos.y() == 0)
-            {
-                output.push(snap_to_grid(pos) + candidate_square_pos);
-            }
-        }
-    }
-    return output;
-}
-
-fn snap_to_grid(world_pos: Point<f32>) -> Point<i32> {
-    return round(world_pos);
-}
-fn offset_from_grid(world_pos: Point<f32>) -> Point<f32> {
-    return world_pos - floatify(snap_to_grid(world_pos));
-}
-
-fn trunc(vec: Point<f32>) -> Point<i32> {
-    return Point::<i32>::new(vec.x().trunc() as i32, vec.y().trunc() as i32);
-}
-
-fn round(vec: Point<f32>) -> Point<i32> {
-    return Point::<i32>::new(vec.x().round() as i32, vec.y().round() as i32);
-}
-fn round_vector_with_tie_break_toward_inf(vec: Point<f32>) -> Point<i32> {
-    return Point::<i32>::new(
-        round_with_tie_break_toward_inf(vec.x()),
-        round_with_tie_break_toward_inf(vec.y()),
-    );
-}
-fn round_with_tie_break_toward_inf(x: f32) -> i32 {
-    if (x - x.round()).abs() == 0.5 {
-        return (x + 0.1).round() as i32;
-    } else {
-        return x.round() as i32;
-    }
-}
-fn floatify(vec: Point<i32>) -> Point<f32> {
-    return Point::<f32>::new(vec.x() as f32, vec.y() as f32);
-}
-
-fn magnitude(vec: Point<f32>) -> f32 {
-    return (vec.x().pow(2.0) + vec.y().pow(2.0)).sqrt();
-}
-fn direction(vec: Point<f32>) -> Point<f32> {
-    return vec / magnitude(vec);
-}
-
-fn fract(vec: Point<f32>) -> Point<f32> {
-    return Point::<f32>::new(vec.x().fract(), vec.y().fract());
-}
-
-fn sign<T>(p: Point<T>) -> Point<T>
-where
-    T: SignedExt + CoordNum,
-{
-    return Point::<T>::new(p.x().sign(), p.y().sign());
-}
-
-trait SignedExt: num::Signed {
-    fn sign(&self) -> Self;
-}
-
-impl<T: num::Signed> SignedExt for T {
-    // I am so angry this is not built-in
-    fn sign(&self) -> T {
-        if *self == T::zero() {
-            return T::zero();
-        } else if self.is_negative() {
-            return -T::one();
-        } else {
-            return T::one();
-        }
-    }
-}
-
-fn project(v1: Point<f32>, v2: Point<f32>) -> Point<f32> {
-    return direction(v2) * v1.dot(v2) / magnitude(v2);
-}
-
-trait PointExt {
-    fn add_assign(&mut self, rhs: Self);
-}
-
-impl<T: CoordNum> PointExt for Point<T> {
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1358,18 +816,6 @@ mod tests {
         let p_wall = p(5, 5);
 
         assert!(single_block_movecast(point, point, p_wall) == None);
-    }
-
-    #[test]
-    fn test_single_block_movecast_horizontal_hit() {
-        let start = p(0.0, 0.0);
-        let end = p(5.0, 0.0);
-        let wall = p(2, 0);
-        let result = single_block_movecast(start, end, wall);
-
-        assert!(result != None);
-        assert!(result.unwrap().pos == floatify(wall - p(1, 0)));
-        assert!(result.unwrap().normal == p(-1, 0));
     }
 
     #[test]
@@ -1801,87 +1247,6 @@ mod tests {
         assert!(bottom_glyph.bg_color == PLAYER_COLOR);
     }
     #[test]
-    fn test_colored_square_with_half_step_offsets() {
-        assert!(
-            Glyph::colored_square_with_half_step_offset(p(0.0, 0.0), ColorName::Red).character
-                == quarter_block_by_offset((0, 0))
-        );
-        assert!(
-            Glyph::colored_square_with_half_step_offset(p(0.0, 0.0), ColorName::Red).fg_color
-                == ColorName::Red
-        );
-        assert!(
-            Glyph::colored_square_with_half_step_offset(p(0.0, 0.0), ColorName::Red).bg_color
-                == ColorName::Black
-        );
-        assert!(
-            Glyph::colored_square_with_half_step_offset(p(0.1, 0.1), ColorName::Red).character
-                == quarter_block_by_offset((0, 0))
-        );
-        assert!(
-            Glyph::colored_square_with_half_step_offset(p(0.24, 0.0), ColorName::Red).character
-                == quarter_block_by_offset((0, 0))
-        );
-        assert!(
-            Glyph::colored_square_with_half_step_offset(p(0.25, 0.0), ColorName::Red).character
-                == quarter_block_by_offset((1, 0))
-        );
-        assert!(
-            Glyph::colored_square_with_half_step_offset(p(0.26, 0.0), ColorName::Red).character
-                == quarter_block_by_offset((1, 0))
-        );
-        assert!(
-            Glyph::colored_square_with_half_step_offset(p(-0.25, 0.0), ColorName::Red).character
-                == quarter_block_by_offset((0, 0))
-        );
-        assert!(
-            Glyph::colored_square_with_half_step_offset(p(-0.26, 0.0), ColorName::Red).character
-                == quarter_block_by_offset((-1, 0))
-        );
-        assert!(
-            Glyph::colored_square_with_half_step_offset(p(0.49, 0.0), ColorName::Red).character
-                == quarter_block_by_offset((1, 0))
-        );
-        assert!(
-            Glyph::colored_square_with_half_step_offset(p(0.5, 0.0), ColorName::Red).character
-                == quarter_block_by_offset((1, 0))
-        );
-        assert!(
-            Glyph::colored_square_with_half_step_offset(p(0.2, 0.4), ColorName::Red).character
-                == quarter_block_by_offset((0, 1))
-        );
-        assert!(
-            Glyph::colored_square_with_half_step_offset(p(-0.499, 0.4), ColorName::Red).character
-                == quarter_block_by_offset((-1, 1))
-        );
-        assert!(
-            Glyph::colored_square_with_half_step_offset(p(0.74, 0.0), ColorName::Red).character
-                == quarter_block_by_offset((1, 0))
-        );
-        assert!(
-            Glyph::colored_square_with_half_step_offset(p(0.76, 0.0), ColorName::Red).character
-                == quarter_block_by_offset((2, 0))
-        );
-        assert!(
-            Glyph::colored_square_with_half_step_offset(p(0.3, -0.6), ColorName::Red).character
-                == quarter_block_by_offset((1, -1))
-        );
-    }
-    #[test]
-    fn test_half_grid_glyph_when_rounding_to_zero_for_both_axes() {
-        let test_pos = p(-0.24, 0.01);
-        let glyphs = Glyph::get_half_grid_glyphs_for_floating_square(test_pos);
-        assert!(glyphs[0][0] == None);
-        assert!(glyphs[0][1] == None);
-        assert!(glyphs[0][2] == None);
-        assert!(glyphs[1][0] == None);
-        assert!(glyphs[1][1].clone().unwrap().character == quarter_block_by_offset((0, 0)));
-        assert!(glyphs[1][2] == None);
-        assert!(glyphs[2][0] == None);
-        assert!(glyphs[2][1] == None);
-        assert!(glyphs[2][2] == None);
-    }
-    #[test]
     fn test_player_glyph_when_rounding_to_zero_for_both_axes() {
         let mut game = set_up_just_player();
         game.player_pos.add_assign(p(-0.24, 0.01));
@@ -1892,20 +1257,6 @@ mod tests {
                     game.player_color
                 )
         );
-    }
-    #[test]
-    fn test_half_grid_glyphs_when_rounding_to_zero_for_x_and_half_step_up_for_y() {
-        let test_pos = p(0.24, 0.26);
-        let glyphs = Glyph::get_half_grid_glyphs_for_floating_square(test_pos);
-        assert!(glyphs[0][0] == None);
-        assert!(glyphs[0][1] == None);
-        assert!(glyphs[0][2] == None);
-        assert!(glyphs[1][0] == None);
-        assert!(glyphs[1][1].clone().unwrap().character == quarter_block_by_offset((0, 1)));
-        assert!(glyphs[1][2].clone().unwrap().character == quarter_block_by_offset((0, -1)));
-        assert!(glyphs[2][0] == None);
-        assert!(glyphs[2][1] == None);
-        assert!(glyphs[2][2] == None);
     }
     #[test]
     fn test_player_glyphs_when_rounding_to_zero_for_x_and_half_step_up_for_y() {
@@ -1921,21 +1272,6 @@ mod tests {
     }
 
     #[test]
-    fn test_half_grid_glyphs_when_rounding_to_zero_for_x_and_exactly_half_step_up_for_y() {
-        let test_pos = p(0.24, 0.25);
-
-        let glyphs = Glyph::get_half_grid_glyphs_for_floating_square(test_pos);
-        assert!(glyphs[0][0] == None);
-        assert!(glyphs[0][1] == None);
-        assert!(glyphs[0][2] == None);
-        assert!(glyphs[1][0] == None);
-        assert!(glyphs[1][1].clone().unwrap().character == quarter_block_by_offset((0, 1)));
-        assert!(glyphs[1][2].clone().unwrap().character == quarter_block_by_offset((0, -1)));
-        assert!(glyphs[2][0] == None);
-        assert!(glyphs[2][1] == None);
-        assert!(glyphs[2][2] == None);
-    }
-    #[test]
     fn test_player_glyphs_when_rounding_to_zero_for_x_and_exactly_half_step_up_for_y() {
         let mut game = set_up_just_player();
         game.player_pos.add_assign(p(0.24, 0.25));
@@ -1946,20 +1282,6 @@ mod tests {
                     game.player_color
                 )
         );
-    }
-    #[test]
-    fn test_half_grid_glyphs_when_rounding_to_zero_for_x_and_exactly_half_step_down_for_y() {
-        let test_pos = p(-0.2, -0.25);
-        let glyphs = Glyph::get_half_grid_glyphs_for_floating_square(test_pos);
-        assert!(glyphs[0][0] == None);
-        assert!(glyphs[0][1] == None);
-        assert!(glyphs[0][2] == None);
-        assert!(glyphs[1][0] == None);
-        assert!(glyphs[1][1].clone().unwrap().character == quarter_block_by_offset((0, 0)));
-        assert!(glyphs[1][2] == None);
-        assert!(glyphs[2][0] == None);
-        assert!(glyphs[2][1] == None);
-        assert!(glyphs[2][2] == None);
     }
     #[test]
     fn test_player_glyphs_when_rounding_to_zero_for_x_and_exactly_half_step_down_for_y() {
@@ -1974,20 +1296,6 @@ mod tests {
         );
     }
     #[test]
-    fn test_half_grid_glyphs_when_rounding_to_zero_for_y_and_half_step_right_for_x() {
-        let test_pos = p(0.3, 0.1);
-        let glyphs = Glyph::get_half_grid_glyphs_for_floating_square(test_pos);
-        assert!(glyphs[0][0] == None);
-        assert!(glyphs[0][1] == None);
-        assert!(glyphs[0][2] == None);
-        assert!(glyphs[1][0] == None);
-        assert!(glyphs[1][1].clone().unwrap().character == quarter_block_by_offset((1, 0)));
-        assert!(glyphs[1][2] == None);
-        assert!(glyphs[2][0] == None);
-        assert!(glyphs[2][1].clone().unwrap().character == quarter_block_by_offset((-1, 0)));
-        assert!(glyphs[2][2] == None);
-    }
-    #[test]
     fn test_player_glyphs_when_rounding_to_zero_for_y_and_half_step_right_for_x() {
         let mut game = set_up_just_player();
         game.player_pos.add_assign(p(0.3, 0.1));
@@ -2000,20 +1308,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_half_grid_glyphs_when_rounding_to_zero_for_y_and_half_step_left_for_x() {
-        let test_pos = p(-0.3, 0.2);
-        let glyphs = Glyph::get_half_grid_glyphs_for_floating_square(test_pos);
-        assert!(glyphs[0][0] == None);
-        assert!(glyphs[0][1].clone().unwrap().character == quarter_block_by_offset((1, 0)));
-        assert!(glyphs[0][2] == None);
-        assert!(glyphs[1][0] == None);
-        assert!(glyphs[1][1].clone().unwrap().character == quarter_block_by_offset((-1, 0)));
-        assert!(glyphs[1][2] == None);
-        assert!(glyphs[2][0] == None);
-        assert!(glyphs[2][1] == None);
-        assert!(glyphs[2][2] == None);
-    }
     #[test]
     fn test_player_glyphs_when_rounding_to_zero_for_y_and_half_step_left_for_x() {
         let mut game = set_up_just_player();
@@ -2109,103 +1403,6 @@ mod tests {
         assert!(bottom_left_glyph.character == quarter_block_by_offset((1, 1)));
         assert!(bottom_right_glyph.character == quarter_block_by_offset((-1, 1)));
     }
-    #[test]
-    fn grid_square_overlap_one_square() {
-        let point = p(57.0, -90.0);
-        let squares = grid_squares_overlapped_by_floating_unit_square(point);
-        assert!(squares.len() == 1);
-        assert!(squares[0] == snap_to_grid(point));
-    }
-    #[test]
-    fn grid_square_overlap_two_squares_horizontal() {
-        let point = p(0.5, 0.0);
-        let squares = grid_squares_overlapped_by_floating_unit_square(point);
-        assert!(squares.len() == 2);
-        assert!(squares.contains(&p(0, 0)));
-        assert!(squares.contains(&p(1, 0)));
-    }
-
-    #[test]
-    fn grid_square_overlap_two_squares_vertical() {
-        let point = p(0.0, -0.1);
-        let squares = grid_squares_overlapped_by_floating_unit_square(point);
-        assert!(squares.len() == 2);
-        assert!(squares.contains(&p(0, 0)));
-        assert!(squares.contains(&p(0, -1)));
-    }
-
-    #[test]
-    fn grid_square_overlap_four_squares() {
-        let point = p(5.9, -8.1);
-        let squares = grid_squares_overlapped_by_floating_unit_square(point);
-        assert!(squares.len() == 4);
-        assert!(squares.contains(&p(5, -8)));
-        assert!(squares.contains(&p(6, -8)));
-        assert!(squares.contains(&p(5, -9)));
-        assert!(squares.contains(&p(6, -9)));
-    }
-
-    #[test]
-    fn test_offset_from_grid_rounds_to_zero() {
-        assert!(offset_from_grid(p(9.0, -9.0)) == p(0.0, 0.0));
-    }
-    #[test]
-    fn test_offset_from_grid_consistent_with_round_to_grid() {
-        let mut p1 = p(0.0, 0.0);
-        assert!(floatify(snap_to_grid(p1)) + offset_from_grid(p1) == p1);
-        p1 = p(0.5, 0.5);
-        assert!(floatify(snap_to_grid(p1)) + offset_from_grid(p1) == p1);
-        p1 = p(-0.5, 0.5);
-        assert!(floatify(snap_to_grid(p1)) + offset_from_grid(p1) == p1);
-        p1 = p(-0.5, -0.5);
-        assert!(floatify(snap_to_grid(p1)) + offset_from_grid(p1) == p1);
-    }
-
-    #[test]
-    fn test_sign() {
-        assert!(9.0.sign() == 1.0);
-        assert!(0.1.sign() == 1.0);
-        assert!(0.0.sign() == 0.0);
-        assert!(-0.1.sign() == -1.0);
-        assert!(-100.0.sign() == -1.0);
-
-        assert!(9.sign() == 1);
-        assert!(1.sign() == 1);
-        assert!(0.sign() == 0);
-        assert!(-1.sign() == -1);
-        assert!(-100.sign() == -1);
-    }
-
-    #[test]
-    fn test_vector_sign() {
-        assert!(sign(p(9.0, -9.0)) == p(1.0, -1.0));
-        assert!(sign(p(0.0, 0.0)) == p(0.0, 0.0));
-        assert!(sign(p(-0.1, 0.1)) == p(-1.0, 1.0));
-    }
-
-    #[test]
-    fn test_sign_of_offset_from_grid_rounds_to_zero() {
-        assert!(sign(offset_from_grid(p(9.0, -9.0))) == p(0.0, 0.0));
-    }
-    #[test]
-    fn test_snap_to_grid_at_zero() {
-        assert!(snap_to_grid(p(0.0, 0.0)) == p(0, 0));
-    }
-
-    #[test]
-    fn test_snap_to_grid_rounding_down_from_positive_x() {
-        assert!(snap_to_grid(p(0.4, 0.0)) == p(0, 0));
-    }
-
-    #[test]
-    fn test_snap_to_grid_rounding_up_diagonally() {
-        assert!(snap_to_grid(p(0.9, 59.51)) == p(1, 60));
-    }
-
-    #[test]
-    fn test_snap_to_grid_rounding_up_diagonally_in_the_negazone() {
-        assert!(snap_to_grid(p(-0.9, -59.51)) == p(-1, -60));
-    }
 
     #[test]
     // The timing of when to slide to a stop should give the player precision positioning
@@ -2240,77 +1437,6 @@ mod tests {
     #[test]
     // Once we have vertical subsquare positioning up and running, a slow slide down will look cool.
     fn test_slowly_slide_down_when_grabbing_wall() {}
-    #[test]
-    fn test_collision_point_head_on_horizontal() {
-        let start_point = p(0.0, 0.0);
-        let end_point = start_point + p(3.0, 0.0);
-        let block_center = p(3, 0);
-        assert!(
-            single_block_movecast(start_point, end_point, block_center)
-                .unwrap()
-                .pos
-                == p(2.0, 0.0)
-        );
-    }
-
-    #[test]
-    fn test_collision_point_head_slightly_offset_from_vertical() {
-        let start_point = p(0.3, 0.0);
-        let end_point = start_point + p(0.0, 5.0);
-        let block_center = p(0, 5);
-        assert!(
-            single_block_movecast(start_point, end_point, block_center)
-                .unwrap()
-                .pos
-                == p(start_point.x(), 4.0)
-        );
-    }
-
-    #[test]
-    fn test_collision_point_slightly_diagonalish() {
-        let start_point = p(5.0, 0.0);
-        let end_point = start_point + p(3.0, 3.0);
-        let block_center = p(7, 1);
-        assert!(
-            single_block_movecast(start_point, end_point, block_center)
-                .unwrap()
-                .pos
-                == p(6.0, 1.0)
-        );
-    }
-
-    #[test]
-    fn test_orthogonal_direction_generation() {
-        assert!(e(0.0) == p(1.0, 0.0));
-        assert!(e(0) == p(1, 0));
-        assert!(e(1.0) == p(0.0, 1.0));
-        assert!(e(1) == p(0, 1));
-        assert!(e(2.0) == p(-1.0, 0.0));
-        assert!(e(2) == p(-1, 0));
-        assert!(e(3.0) == p(0.0, -1.0));
-        assert!(e(3) == p(0, -1));
-        assert!(e(4.0) == p(1.0, 0.0));
-        assert!(e(4) == p(1, 0));
-    }
-    #[test]
-    fn test_projection() {
-        assert!(project(p(1.0, 0.0), p(5.0, 0.0)) == p(1.0, 0.0));
-        assert!(project(p(1.0, 0.0), p(0.0, 5.0)) == p(0.0, 0.0));
-        assert!(project(p(1.0, 1.0), p(1.0, 0.0)) == p(1.0, 0.0));
-        assert!(project(p(6.0, 6.0), p(0.0, 1.0)) == p(0.0, 6.0));
-        assert!(project(p(2.0, 6.0), p(0.0, 1.0)) == p(0.0, 6.0));
-        assert!(project(p(-6.0, 6.0), p(0.0, 1.0)) == p(0.0, 6.0));
-    }
-    #[test]
-    fn test_round_with_tie_break_to_inf() {
-        assert!(round_vector_with_tie_break_toward_inf(p(0.0, 0.0)) == p(0, 0));
-        assert!(round_vector_with_tie_break_toward_inf(p(1.0, 1.0)) == p(1, 1));
-        assert!(round_vector_with_tie_break_toward_inf(p(-1.0, -1.0)) == p(-1, -1));
-        assert!(round_vector_with_tie_break_toward_inf(p(0.1, 0.1)) == p(0, 0));
-        assert!(round_vector_with_tie_break_toward_inf(p(-0.1, -0.1)) == p(0, 0));
-        assert!(round_vector_with_tie_break_toward_inf(p(0.5, 0.5)) == p(1, 1));
-        assert!(round_vector_with_tie_break_toward_inf(p(-0.5, -0.5)) == p(0, 0));
-    }
 
     #[test]
     fn test_dash_no_direction_does_nothing() {
@@ -2382,134 +1508,6 @@ mod tests {
         let fast_color = game.get_player_glyphs()[1][1].clone().unwrap().fg_color;
 
         assert!(stopped_color != fast_color);
-    }
-
-    #[test]
-    fn test_array_to_braille_char() {
-        // 10
-        // 00
-        // 01
-        // 01
-        let input = [[false, false, false, true], [true, true, false, false]];
-        assert!(Glyph::array_to_braille(input) == '⢡');
-
-        // 00
-        // 11
-        // 01
-        // 00
-        let input = [[false, false, true, false], [false, true, true, false]];
-        assert!(Glyph::array_to_braille(input) == '⠲');
-    }
-
-    #[test]
-    fn test_get_empty_braille_character() {
-        assert!(Glyph::empty_braille() == '\u{2800}');
-    }
-
-    #[test]
-    fn test_set_braille_dot() {
-        let mut b = Glyph::empty_braille();
-        b = Glyph::add_braille_dot(b, p(0, 0));
-        b = Glyph::add_braille_dot(b, p(1, 1));
-        assert!(b == '⡠');
-    }
-
-    #[test]
-    fn test_chars_for_horizontal_braille_line_without_rounding() {
-        let start = p(-0.25, -0.4);
-        let end = p(1.75, -0.4);
-
-        // Expected braille:
-        // 00 00 00
-        // 00 00 00
-        // 00 00 00
-        // 11 11 10
-
-        let line_glyphs = Glyph::get_glyphs_for_braille_line(start, end);
-        assert!(line_glyphs.len() == 3);
-        assert!(line_glyphs[0].len() == 1);
-        assert!(line_glyphs[1].len() == 1);
-        assert!(line_glyphs[2].len() == 1);
-
-        assert!(line_glyphs[0][0].clone().unwrap().character == '\u{28C0}');
-        assert!(line_glyphs[1][0].clone().unwrap().character == '\u{28C0}');
-        assert!(line_glyphs[2][0].clone().unwrap().character == '\u{2840}');
-    }
-
-    #[test]
-    fn test_chars_for_horizontal_braille_line_with_offset_without_rounding() {
-        let start = p(-0.25, 0.4);
-        let end = p(1.75, 0.4);
-
-        // Expected braille:
-        // 11 11 10
-        // 00 00 00
-        // 00 00 00
-        // 00 00 00
-
-        let line_glyphs = Glyph::get_glyphs_for_braille_line(start, end);
-        assert!(line_glyphs.len() == 3);
-        assert!(line_glyphs[0].len() == 1);
-        assert!(line_glyphs[1].len() == 1);
-        assert!(line_glyphs[2].len() == 1);
-
-        assert!(line_glyphs[0][0].clone().unwrap().character == '\u{2809}');
-        assert!(line_glyphs[1][0].clone().unwrap().character == '\u{2809}');
-        assert!(line_glyphs[2][0].clone().unwrap().character == '\u{2801}');
-    }
-
-    #[test]
-    fn test_chars_for_vertical_braille_line_without_rounding() {
-        let start = p(-0.25, -0.4);
-        let end = p(-0.25, 0.875);
-
-        // Expected braille:
-        // 00
-        // 00
-        // 10
-        // 10
-
-        // 10
-        // 10
-        // 10
-        // 10
-
-        let line_glyphs = Glyph::get_glyphs_for_braille_line(start, end);
-        assert!(line_glyphs.len() == 1);
-        assert!(line_glyphs[0].len() == 2);
-
-        assert!(line_glyphs[0][0].clone().unwrap().character == '\u{2847}');
-        assert!(line_glyphs[0][1].clone().unwrap().character == '\u{2844}');
-    }
-
-    #[test]
-    fn test_braille_grid_to_character_grid() {
-        assert!(Glyph::braille_grid_to_character_grid(p(0, 0)) == p(0, 0));
-        assert!(Glyph::braille_grid_to_character_grid(p(1, 3)) == p(0, 0));
-        assert!(Glyph::braille_grid_to_character_grid(p(-1, -1)) == p(-1, -1));
-        assert!(Glyph::braille_grid_to_character_grid(p(2, 8)) == p(1, 2));
-        assert!(Glyph::braille_grid_to_character_grid(p(21, 80)) == p(10, 20));
-    }
-
-    #[test]
-    fn test_character_pos_to_braille_pos() {
-        assert!(Glyph::character_pos_to_braille_pos(p(0.0, 0.0)) == p(0.5, 1.5));
-        assert!(Glyph::character_pos_to_braille_pos(p(1.0, 0.0)) == p(2.5, 1.5));
-        assert!(Glyph::character_pos_to_braille_pos(p(0.25, 0.375)) == p(1.0, 3.0));
-    }
-
-    #[test]
-    fn test_braille_square_to_dot_in_character() {
-        assert!(Glyph::braille_square_to_dot_in_character(p(0, 0)) == p(0, 0));
-        assert!(Glyph::braille_square_to_dot_in_character(p(1, 3)) == p(1, 3));
-        assert!(Glyph::braille_square_to_dot_in_character(p(25, 4)) == p(1, 0));
-        assert!(Glyph::braille_square_to_dot_in_character(p(-3, 4)) == p(1, 0));
-    }
-
-    #[test]
-    fn test_combine_braille_character() {
-        assert!(Glyph::add_braille('\u{2800}', '\u{2820}') == '\u{2820}');
-        assert!(Glyph::add_braille('\u{2801}', '\u{28C0}') == '\u{28C1}');
     }
 
     #[test]

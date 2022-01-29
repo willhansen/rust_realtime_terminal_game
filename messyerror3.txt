@@ -1,0 +1,118 @@
+
+[src/main.rs:977] &self.recent_player_poses = [                                                                                                                                                                                                                                             
+  Point(                                                                                                                                                                                                                                   
+      Coordinate {                                                                                                                                                                                                               
+x: 131.40007,                                                                                                                                                                                      
+y: 18.45,                                                                                                                                                                 
+},                                                                                                                                                       
+),                                                                                                                                                 
+  Point(                                                                                                                                       
+      Coordinate {                                                                                                                   
+x: 136.40007,                                                                                          
+y: 19.25,                                                                     
+},                                                           
+),                                                     
+  Point(                                           
+      Coordinate {                       
+x: 141.40007,                                                                                                                                                                                                                                                                                         
+y: 20.0,                                                                                                                                                                                                                                                                     
+},                                                                                                                                                                                                                                                           
+),                                                                                                                                                                                                                                                     
+  Point(                                                                                                                                                                                                                                           
+      Coordinate {                                                                                                                                                                                                                        
+x: 146.40007,                                                                                                                                                                                               
+y: 20.7,                                                                                                                                                                           
+},                                                                                                                                                                 
+),                                                                                                                                                           
+  Point(                                                                                                                                                 
+      Coordinate {                                                                                                                             
+x: 151.40007,                                                                                                    
+y: 21.35,                                                                               
+},                                                                     
+),                                                               
+  Point(                                                     
+      Coordinate {                                 
+x: 156.40007,        
+y: 21.95,                                                                                                                                                                                                                                                                              
+},                                                                                                                                                                                                                                                                    
+),                                                                                                                                                                                                                                                              
+  Point(                                                                                                                                                                                                                                                    
+      Coordinate {                                                                                                                                                                                                                                 
+x: 161.40007,                                                                                                                                                                                                        
+y: 22.5,                                                                                                                                                                                    
+},                                                                                                                                                                          
+),                                                                                                                                                                    
+  Point(                                                                                                                                                       
+      Coordinate {                                                                                                                                      
+x: 166.40007,                                                                                                             
+y: 23.0,
+},                                                                               
+),                                                                         
+  Point(                                                               
+      Coordinate {                                           
+x: 171.40007,                  
+y: 23.45,                                                                                                                                                                                                                                                                                         
+},                                                                                                                                                                                                                                                                               
+),                                                                                                                                                                                                                                                                         
+  Point(                                                                                                                                                                                                                                                               
+      Coordinate {                                                                                                                                                                                                                                           
+x: 176.40007,                                                                                                                                                                                                                  
+y: 23.85,                                                                                                                                                                                             
+},                                                                                                                                                                                   
+),                                                                                                                                                                             
+  ]                                                                                                                                                                            
+
+
+  [src/main.rs:977] &points_to_check = [
+    Point(
+        Coordinate {
+x: 123.0,
+y: 16.987988,
+},
+),
+    Point(
+        Coordinate {
+x: 123.0,
+y: 16.862988,
+},
+),
+    Point(
+        Coordinate {
+x: 123.0,
+y: 16.7,
+},
+),
+  ]
+
+  [src/main.rs:977] start_pos = Point(
+      Coordinate {
+x: 123.0,
+y: 16.987988,
+},
+)
+  [src/main.rs:977] end_pos = Point(
+      Coordinate {
+x: 123.0,
+y: 16.7,
+},
+)
+  [src/main.rs:977] ideal_step = Point(
+      Coordinate {
+x: 0.0,
+y: -0.28798676,
+},
+)
+  [src/main.rs:977] point_to_check = Point(
+      Coordinate {
+x: 123.0,
+y: 16.987988,
+},
+)
+  [src/main.rs:977] overlapping_square = Point(
+      Coordinate {
+x: 123,
+y: 16,
+},
+)
+  thread 'main' panicked at 'Failed to find intersection.', src/main.rs:986:25
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
