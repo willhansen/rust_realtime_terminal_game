@@ -25,7 +25,7 @@ use termion::raw::IntoRawMode;
 
 // const player_jump_height: i32 = 3;
 // const player_jump_hang_frames: i32 = 4;
-const MAX_FPS: i32 = 60; // frames per second
+const MAX_FPS: i32 = 6; // frames per second
 const IDEAL_FRAME_DURATION_MS: u128 = (1000.0 / MAX_FPS as f32) as u128;
 const PLAYER_COLOR: ColorName = ColorName::Red;
 const PLAYER_HIGH_SPEED_COLOR: ColorName = ColorName::Blue;
@@ -933,10 +933,10 @@ impl Game {
         }
         // needed for very small steps
         points_to_check.push(end_pos);
-        'outer: for point_to_check in points_to_check {
+        'outer: for point_to_check in &points_to_check {
             //println!("point to check: {:?}", point_to_check);
             for touching_grid_point in
-                grid_squares_overlapped_by_floating_unit_square(point_to_check)
+                grid_squares_overlapped_by_floating_unit_square(*point_to_check)
             {
                 //println!("grid square: {:?}", touching_grid_point);
                 if self.in_world(touching_grid_point)
@@ -945,12 +945,18 @@ impl Game {
                     //println!("hit grid square: {:?}", touching_grid_point);
 
                     collision =
-                        single_block_movecast(start_pos, point_to_check, touching_grid_point);
+                        single_block_movecast(start_pos, *point_to_check, touching_grid_point);
                     if collision == None {
-                        panic!(
-                            "Failed to find intersection. start:{:?}, end:{:?}, grid_square:{:?}",
-                            start_pos, end_pos, touching_grid_point
+                        dbg!(
+                            &self.recent_player_poses,
+                            &points_to_check,
+                            start_pos,
+                            end_pos,
+                            ideal_step,
+                            point_to_check,
+                            touching_grid_point
                         );
+                        panic!("Failed to find intersection.");
                     }
                     break 'outer;
                 }
@@ -2310,7 +2316,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dont_grab_wall_while_standing_on_ground() {
+    fn test_do_not_grab_wall_while_standing_on_ground() {
         let mut game = set_up_player_on_platform();
         let wall_x = game.player_pos.x() as i32 - 1;
         game.place_line_of_blocks((wall_x, 0), (wall_x, 20), Block::Wall);
@@ -2592,4 +2598,13 @@ mod tests {
         game.player_dash();
         assert!(game.player_vel_bpf.x() > 0.0);
     }
+
+    #[ignore]
+    #[test]
+    // slomo is cool
+    fn test_bullet_time() {}
+
+    #[ignore]
+    #[test]
+    fn test_speed_lines_do_not_cover_blocks() {}
 }
