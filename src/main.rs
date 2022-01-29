@@ -1,7 +1,6 @@
 mod glyph;
 mod utility;
 
-extern crate circular_queue;
 extern crate geo;
 extern crate line_drawing;
 extern crate num;
@@ -36,6 +35,7 @@ const IDEAL_FRAME_DURATION_MS: u128 = (1000.0 / MAX_FPS as f32) as u128;
 const PLAYER_COLOR: ColorName = ColorName::Red;
 const PLAYER_HIGH_SPEED_COLOR: ColorName = ColorName::Blue;
 const NUM_SAVED_PLAYER_POSES: i32 = 10;
+const NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS: f32 = 8.0;
 
 // a block every two ticks
 const PLAYER_DEFAULT_MAX_SPEED_BPF: f32 = 0.5;
@@ -109,6 +109,7 @@ struct Game {
     player_remaining_coyote_frames: i32,
     player_max_coyote_frames: i32,
     player_color: ColorName,
+    num_positions_per_block_to_check_for_collisions: f32,
 }
 
 impl Game {
@@ -135,6 +136,8 @@ impl Game {
             player_remaining_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
             player_max_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
             player_color: PLAYER_COLOR,
+            num_positions_per_block_to_check_for_collisions:
+                NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS,
         }
     }
 
@@ -247,12 +250,6 @@ impl Game {
     fn player_dash(&mut self) {
         if self.player_desired_direction != p(0, 0) {
             self.player_vel_bpf = floatify(self.player_desired_direction) * DEFAULT_PLAYER_DASH_V;
-        }
-    }
-
-    fn player_set_desired_x_direction(&mut self, new_x_dir: i32) {
-        if new_x_dir != self.player_desired_direction.x() {
-            self.player_desired_direction = p(new_x_dir.sign(), 0);
         }
     }
 
@@ -577,7 +574,8 @@ impl Game {
     fn movecast(&self, start_pos: Point<f32>, end_pos: Point<f32>) -> Option<MovecastCollision> {
         let ideal_step = end_pos - start_pos;
 
-        let collision_checks_per_block_travelled = 8.0;
+        let collision_checks_per_block_travelled =
+            self.num_positions_per_block_to_check_for_collisions;
         let num_points_to_check =
             (magnitude(ideal_step) * collision_checks_per_block_travelled).floor() as i32;
         let mut intermediate_player_positions_to_check = Vec::<Point<f32>>::new();
@@ -603,7 +601,7 @@ impl Game {
                         collisions.push(collision);
                     } else {
                         dbg!(
-                            &self.recent_player_poses[0],
+                            //&self.recent_player_poses[0],
                             self.player_pos,
                             &intermediate_player_positions_to_check,
                             start_pos,
@@ -614,7 +612,7 @@ impl Game {
                             &overlapping_squares,
                             collisions,
                         );
-                        panic!("Failed to find intersection.");
+                        panic!("Started inside a block");
                     }
                 }
                 if !collisions.is_empty() {
@@ -893,12 +891,14 @@ mod tests {
         assert!(game.movecast(p(1.0, 9.0), p(-17.0, 9.0)) == None);
         assert!(game.movecast(p(15.0, 9.0), p(17.0, -11.0)) == None);
     }
+
     #[test]
     fn test_movecast_ignore_player() {
         let game = set_up_player_on_platform();
 
         assert!(game.movecast(p(15.0, 11.0), p(15.0, 13.0)) == None);
     }
+
     #[test]
     fn test_in_world_check() {
         let game = Game::new(30, 30);
@@ -928,6 +928,7 @@ mod tests {
 
         assert!(game.player_pos == p(13.0, 11.0));
     }
+
     #[test]
     fn test_stop_on_collision() {
         let mut game = set_up_player_on_platform();
@@ -972,6 +973,7 @@ mod tests {
         assert!(game.player_pos.x() > 15.5);
         assert!(game.player_pos.x() < 16.0);
     }
+
     #[test]
     fn test_move_player_quickly() {
         let mut game = set_up_player_on_platform();
@@ -984,6 +986,7 @@ mod tests {
         game.tick_physics();
         assert!(game.player_pos.x() > 19.0);
     }
+
     #[test]
     fn test_fast_player_collision_between_frames() {
         let mut game = set_up_player_on_platform();
@@ -996,6 +999,7 @@ mod tests {
         assert!(game.player_pos == p(15.0, 11.0));
         assert!(game.player_vel_bpf.x() == 0.0);
     }
+
     #[test]
     fn test_can_jump() {
         let mut game = set_up_player_on_platform();
@@ -1005,6 +1009,7 @@ mod tests {
         game.tick_physics();
         assert!(game.player_pos.y() > start_pos.y());
     }
+
     #[test]
     fn test_player_gravity() {
         let mut game = Game::new(30, 30);
@@ -1016,6 +1021,7 @@ mod tests {
 
         assert!(game.player_pos.y() < 11.0);
     }
+
     #[test]
     fn test_land_after_jump() {
         let mut game = set_up_player_on_platform();
@@ -1040,6 +1046,7 @@ mod tests {
         assert!(game.player_vel_bpf.x() == 0.0);
         assert!(game.player_vel_bpf.y() > 0.0);
     }
+
     #[test]
     fn test_decellerate_when_already_moving_faster_than_max_speed() {
         let mut game = set_up_player_on_platform();
@@ -1050,6 +1057,7 @@ mod tests {
         assert!(game.player_vel_bpf.x() > game.player_max_run_speed_bpf);
         assert!(game.player_vel_bpf.x() < 5.0);
     }
+
     #[test]
     fn test_no_double_jump() {
         let mut game = set_up_player_on_platform();
@@ -1093,12 +1101,14 @@ mod tests {
         game.tick_physics();
         assert!(game.player_vel_bpf.y() < start_vel_y);
     }
+
     #[test]
     fn test_dont_grab_wall_while_moving_up() {
         let mut game = set_up_player_hanging_on_wall_on_left();
         game.player_vel_bpf.set_y(1.0);
         assert!(!game.player_is_grabbing_wall());
     }
+
     #[test]
     fn test_no_friction_when_sliding_up_wall() {
         let mut game = set_up_player_on_platform();
@@ -1132,6 +1142,7 @@ mod tests {
         game.tick_physics();
         assert!(game.player_pos.y() < start_pos.y());
     }
+
     #[test]
     fn test_coyote_frames_dont_assist_jump() {
         let mut game1 = set_up_player_on_platform();
@@ -1194,6 +1205,7 @@ mod tests {
         assert!(left_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[7]);
         assert!(right_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[7]);
     }
+
     #[test]
     fn test_horizontal_sub_glyph_positioning_on_left_above_rounding_point() {
         let mut game = set_up_player_on_platform();
@@ -1205,6 +1217,7 @@ mod tests {
         assert!(left_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[5]);
         assert!(right_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[5]);
     }
+
     #[test]
     fn test_horizontal_sub_glyph_positioning_on_left_rounding_down() {
         let mut game = set_up_player_on_platform();
@@ -1216,6 +1229,7 @@ mod tests {
         assert!(left_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
         assert!(right_glyph.character == EIGHTH_BLOCKS_FROM_LEFT[4]);
     }
+
     #[test]
     fn test_vertical_sub_glyph_positioning_upwards() {
         let mut game = set_up_player_on_platform();
@@ -1231,6 +1245,7 @@ mod tests {
         assert!(bottom_glyph.fg_color == ColorName::Black);
         assert!(bottom_glyph.bg_color == PLAYER_COLOR);
     }
+
     #[test]
     fn test_vertical_sub_glyph_positioning_downwards() {
         let mut game = set_up_player_on_platform();
@@ -1246,6 +1261,7 @@ mod tests {
         assert!(bottom_glyph.fg_color == ColorName::Black);
         assert!(bottom_glyph.bg_color == PLAYER_COLOR);
     }
+
     #[test]
     fn test_player_glyph_when_rounding_to_zero_for_both_axes() {
         let mut game = set_up_just_player();
@@ -1258,6 +1274,7 @@ mod tests {
                 )
         );
     }
+
     #[test]
     fn test_player_glyphs_when_rounding_to_zero_for_x_and_half_step_up_for_y() {
         let mut game = set_up_just_player();
@@ -1283,6 +1300,7 @@ mod tests {
                 )
         );
     }
+
     #[test]
     fn test_player_glyphs_when_rounding_to_zero_for_x_and_exactly_half_step_down_for_y() {
         let mut game = set_up_just_player();
@@ -1295,6 +1313,7 @@ mod tests {
                 )
         );
     }
+
     #[test]
     fn test_player_glyphs_when_rounding_to_zero_for_y_and_half_step_right_for_x() {
         let mut game = set_up_just_player();
@@ -1385,6 +1404,7 @@ mod tests {
         assert!(glyphs[2][1].clone().unwrap().character == quarter_block_by_offset((-1, -1)));
         assert!(glyphs[2][2] == None);
     }
+
     #[test]
     fn test_off_alignment_player_coarse_rendering_given_diagonal_offset() {
         let mut game = set_up_just_player();
@@ -1445,6 +1465,7 @@ mod tests {
         game.player_dash();
         assert!(game.player_vel_bpf == start_vel);
     }
+
     #[test]
     fn test_dash_right_on_ground() {
         let mut game = set_up_player_on_platform();
@@ -1631,4 +1652,26 @@ mod tests {
     #[ignore]
     #[test]
     fn test_speed_lines_do_not_cover_blocks() {}
+
+    #[test]
+    fn test_prevent_clip_into_wall_when_colliding_with_internal_block_edge() {
+        // data comes from observed bug reproduction
+        let start_pos = p(35.599968, 16.5);
+        let prev_pos = p(36.899967, 17.25);
+
+        let mut game = Game::new(50, 50);
+        game.place_player(start_pos.x(), start_pos.y());
+        game.player_vel_bpf = start_pos - prev_pos;
+        game.player_desired_direction = p(-1, 0);
+
+        game.place_block(p(34, 17), Block::Wall);
+        game.place_block(p(34, 16), Block::Wall);
+        game.place_block(p(34, 15), Block::Wall);
+
+        game.num_positions_per_block_to_check_for_collisions = 0.00001;
+        game.tick_physics();
+        let step = game.player_pos - start_pos;
+
+        assert!(game.player_pos.x() == 35.0);
+    }
 }
