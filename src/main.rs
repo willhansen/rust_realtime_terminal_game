@@ -613,8 +613,7 @@ impl Game {
 
     fn player_dash(&mut self) {
         if self.player_desired_direction != p(0, 0) {
-            self.player_vel_bpf
-                .add_assign(floatify(self.player_desired_direction) * DEFAULT_PLAYER_DASH_V);
+            self.player_vel_bpf = floatify(self.player_desired_direction) * DEFAULT_PLAYER_DASH_V;
         }
     }
 
@@ -2570,5 +2569,14 @@ mod tests {
         assert!(game.recent_player_poses.get(0).unwrap() == &p2);
         assert!(game.recent_player_poses.get(1).unwrap() == &p1);
         assert!(game.recent_player_poses.get(2).unwrap() == &p0);
+    }
+
+    #[test]
+    fn test_dash_sets_velocity_rather_than_adds_to_it() {
+        let mut game = set_up_just_player();
+        game.player_vel_bpf = p(-DEFAULT_PLAYER_DASH_V * 4.0, 0.0);
+        game.player_desired_direction = p(1, 0);
+        game.player_dash();
+        assert!(game.player_vel_bpf.x() > 0.0);
     }
 }
