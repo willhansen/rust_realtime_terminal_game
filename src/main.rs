@@ -109,6 +109,7 @@ struct Game {
     player_max_coyote_frames: i32,
     player_color: ColorName,
     num_positions_per_block_to_check_for_collisions: f32,
+    is_bullet_time: bool,
 }
 
 impl Game {
@@ -139,6 +140,7 @@ impl Game {
             player_color: PLAYER_COLOR,
             num_positions_per_block_to_check_for_collisions:
                 NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS,
+            is_bullet_time: false,
         }
     }
 
@@ -265,6 +267,9 @@ impl Game {
             self.player_vel_bpf = floatify(self.player_desired_direction) * DEFAULT_PLAYER_DASH_V;
         }
     }
+    fn toggle_bullet_time(&mut self) {
+        self.is_bullet_time = !self.is_bullet_time;
+    }
 
     fn handle_input(&mut self, evt: termion::event::Event) {
         match evt {
@@ -280,6 +285,7 @@ impl Game {
                 ),
                 Key::Char(' ') => self.player_jump_if_possible(),
                 Key::Char('f') => self.player_dash(),
+                Key::Char('g') => self.toggle_bullet_time(),
                 Key::Char('w') | Key::Up => self.player_desired_direction = p(0, 1),
                 Key::Char('a') | Key::Left => self.player_desired_direction = p(-1, 0),
                 Key::Char('s') | Key::Down => self.player_desired_direction = p(0, -1),
@@ -334,7 +340,16 @@ impl Game {
         if self.get_player_color() == PLAYER_HIGH_SPEED_COLOR {
             if let Some(&last_pos) = self.recent_player_poses.get(0) {
                 // draw all corners
-                let offsets = [p(0.5, 0.5), p(-0.5, 0.5), p(-0.5, -0.5), p(0.5, -0.5)];
+                let mut offsets = Vec::<Point<f32>>::new();
+                let n = 2;
+                let r = 0.5;
+                for i in -n..=n {
+                    for j in -n..=n {
+                        let x = i as f32 * r / n as f32;
+                        let y = j as f32 * r / n as f32;
+                        offsets.push(p(x, y));
+                    }
+                }
                 for offset in offsets {
                     self.draw_visual_braille_line(
                         last_pos + offset,
@@ -1723,5 +1738,15 @@ mod tests {
         game.tick_physics();
 
         assert!(magnitude(game.player_vel_bpf) <= magnitude(vel_at_start_of_jump));
+    }
+
+    #[test]
+    fn test_toggle_bullet_time() {
+        let mut game = set_up_player_on_platform();
+        assert!(!game.is_bullet_time);
+        game.handle_input(Event::Key(Key::Char('g')));
+        assert!(game.is_bullet_time);
+        game.handle_input(Event::Key(Key::Char('g')));
+        assert!(!game.is_bullet_time);
     }
 }
