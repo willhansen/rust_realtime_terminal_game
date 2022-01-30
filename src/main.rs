@@ -126,8 +126,10 @@ impl Game {
             player_pos: p(0.0, 0.0),
             recent_player_poses: VecDeque::<Point<f32>>::new(),
             player_max_run_speed_bpf: PLAYER_DEFAULT_MAX_SPEED_BPF,
-            player_color_change_speed_threshold: PLAYER_DEFAULT_MAX_SPEED_BPF
-                + DEFAULT_PLAYER_JUMP_DELTA_V,
+            player_color_change_speed_threshold: magnitude(p(
+                PLAYER_DEFAULT_MAX_SPEED_BPF,
+                DEFAULT_PLAYER_JUMP_DELTA_V,
+            )),
             player_vel_bpf: Point::<f32>::new(0.0, 0.0),
             player_desired_direction: p(0, 0),
             player_jump_delta_v: DEFAULT_PLAYER_JUMP_DELTA_V,
@@ -139,6 +141,21 @@ impl Game {
             num_positions_per_block_to_check_for_collisions:
                 NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS,
         }
+    }
+
+    fn set_player_jump_delta_v(&mut self, delta_v: f32) {
+        self.player_jump_delta_v = delta_v;
+        self.update_player_color_change_speed_thresh();
+    }
+
+    fn set_player_max_run_speed(&mut self, speed: f32) {
+        self.player_max_run_speed_bpf = speed;
+        self.update_player_color_change_speed_thresh();
+    }
+
+    fn update_player_color_change_speed_thresh(&mut self) {
+        self.player_color_change_speed_threshold =
+            magnitude(p(self.player_max_run_speed_bpf, self.player_jump_delta_v));
     }
 
     fn screen_to_world(&self, terminal_position: &(u16, u16)) -> (i32, i32) {
@@ -600,17 +617,6 @@ impl Game {
                     {
                         collisions.push(collision);
                     } else {
-                        //dbg!(
-                        //self.player_pos,
-                        //&intermediate_player_positions_to_check,
-                        //start_pos,
-                        //end_pos,
-                        //ideal_step,
-                        //point_to_check,
-                        //overlapping_square,
-                        //&overlapping_squares,
-                        //collisions,
-                        //);
                         panic!("Started inside a block");
                     }
                 }
@@ -658,10 +664,10 @@ impl Game {
             && pos.y() < self.terminal_size.1 as i32;
     }
     fn init_world(&mut self) {
-        self.player_jump_delta_v = 1.0;
+        self.set_player_jump_delta_v(1.0);
         self.player_acceleration_from_gravity = 0.05;
         self.player_acceleration_from_traction = 0.6;
-        self.player_max_run_speed_bpf = 0.7;
+        self.set_player_max_run_speed(0.7);
 
         let bottom_left = (
             (self.terminal_size.0 / 5) as i32,
@@ -734,8 +740,12 @@ mod tests {
     use super::*;
     use assert2::assert;
 
+    fn set_up_game() -> Game {
+        Game::new(30, 30)
+    }
+
     fn set_up_just_player() -> Game {
-        let mut game = Game::new(30, 30);
+        let mut game = set_up_game();
         game.place_player(15.0, 11.0);
         return game;
     }
@@ -1672,5 +1682,21 @@ mod tests {
         let step = game.player_pos - start_pos;
 
         assert!(game.player_pos.x() == 35.0);
+    }
+
+    #[test]
+    fn update_color_threshold_with_jump_delta_v_update() {
+        let mut game = set_up_game();
+        let start_thresh = game.player_color_change_speed_threshold;
+        game.set_player_jump_delta_v(game.player_jump_delta_v + 1.0);
+        assert!(game.player_color_change_speed_threshold != start_thresh);
+    }
+
+    #[test]
+    fn update_color_threshold_with_speed_update() {
+        let mut game = set_up_game();
+        let start_thresh = game.player_color_change_speed_threshold;
+        game.set_player_max_run_speed(game.player_max_run_speed_bpf + 1.0);
+        assert!(game.player_color_change_speed_threshold != start_thresh);
     }
 }
