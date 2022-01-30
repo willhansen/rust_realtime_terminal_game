@@ -20,7 +20,6 @@ use std::io::{stdin, stdout, Write};
 use std::sync::mpsc::channel;
 use std::thread;
 use std::time::{Duration, Instant};
-use termion::color;
 use termion::event::{Event, Key, MouseButton, MouseEvent};
 use termion::input::{MouseTerminal, TermRead};
 use termion::raw::IntoRawMode;
@@ -47,7 +46,7 @@ const DEFAULT_PLAYER_COYOTE_TIME_DURATION_S: f32 = 0.1;
 const DEFAULT_PLAYER_MAX_COYOTE_FRAMES: i32 =
     ((DEFAULT_PLAYER_COYOTE_TIME_DURATION_S * MAX_FPS as f32) + 1.0) as i32;
 const PLAYER_SNAP_TO_GRID_ON_STOP: bool = false;
-const PLAYER_SLOW_DOWN_MIDAIR: bool = false;
+//const PLAYER_SLOW_DOWN_MIDAIR: bool = false;
 
 // These have no positional information
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -202,9 +201,6 @@ impl Game {
 
         let start_grid_square = snap_to_grid(start_pos);
         let end_grid_square = snap_to_grid(end_pos);
-        let grid_diagonal = end_grid_square - start_grid_square;
-        let grid_width = grid_diagonal.x().abs() + 1;
-        let grid_height = grid_diagonal.y().abs() + 1;
         let bottom_square_y = min(start_grid_square.y(), end_grid_square.y());
         let left_square_x = min(start_grid_square.x(), end_grid_square.x());
 
@@ -318,6 +314,14 @@ impl Game {
         }
     }
 
+    fn get_player_color(&self) -> ColorName {
+        if magnitude(self.player_vel_bpf) > self.player_color_change_speed_threshold {
+            PLAYER_HIGH_SPEED_COLOR
+        } else {
+            PLAYER_COLOR
+        }
+    }
+
     fn update_output_buffer(&mut self) {
         let width = self.grid.len();
         let height = self.grid[0].len();
@@ -327,7 +331,7 @@ impl Game {
             }
         }
 
-        if magnitude(self.player_vel_bpf) > self.player_color_change_speed_threshold {
+        if self.get_player_color() == PLAYER_HIGH_SPEED_COLOR {
             if let Some(&last_pos) = self.recent_player_poses.get(0) {
                 // draw all corners
                 let offsets = [p(0.5, 0.5), p(-0.5, 0.5), p(-0.5, -0.5), p(0.5, -0.5)];
@@ -335,7 +339,7 @@ impl Game {
                     self.draw_visual_braille_line(
                         last_pos + offset,
                         self.player_pos + offset,
-                        ColorName::Blue,
+                        PLAYER_HIGH_SPEED_COLOR,
                     );
                 }
             }
@@ -358,11 +362,7 @@ impl Game {
         }
     }
     fn get_player_glyphs(&self) -> Vec<Vec<Option<Glyph>>> {
-        if magnitude(self.player_vel_bpf) > self.player_color_change_speed_threshold {
-            Glyph::get_glyphs_for_colored_floating_square(self.player_pos, PLAYER_HIGH_SPEED_COLOR)
-        } else {
-            Glyph::get_glyphs_for_colored_floating_square(self.player_pos, self.player_color)
-        }
+        Glyph::get_glyphs_for_colored_floating_square(self.player_pos, self.get_player_color())
     }
 
     fn get_buffered_glyph(&self, pos: Point<i32>) -> &Glyph {
@@ -1698,5 +1698,30 @@ mod tests {
         let start_thresh = game.player_color_change_speed_threshold;
         game.set_player_max_run_speed(game.player_max_run_speed_bpf + 1.0);
         assert!(game.player_color_change_speed_threshold != start_thresh);
+    }
+
+    #[test]
+    fn test_no_high_speed_color_with_normal_move_and_jump() {
+        let mut game = set_up_player_on_platform();
+        game.player_vel_bpf = p(game.player_max_run_speed_bpf, 0.0);
+        game.player_desired_direction = p(1, 0);
+        game.player_jump();
+        let player_color = game.get_player_glyphs()[1][1].unwrap().fg_color;
+        assert!(game.get_player_color() == PLAYER_COLOR);
+        assert!(player_color != PLAYER_HIGH_SPEED_COLOR);
+    }
+
+    #[test]
+    fn test_be_fastest_at_very_start_of_jump() {
+        let mut game = set_up_player_on_platform();
+        game.player_vel_bpf = p(game.player_max_run_speed_bpf, 0.0);
+        game.player_desired_direction = p(1, 0);
+        game.player_jump();
+        let vel_at_start_of_jump = game.player_vel_bpf;
+        game.tick_physics();
+        game.tick_physics();
+        game.tick_physics();
+
+        assert!(magnitude(game.player_vel_bpf) <= magnitude(vel_at_start_of_jump));
     }
 }
