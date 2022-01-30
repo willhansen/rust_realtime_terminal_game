@@ -107,7 +107,6 @@ struct Game {
     player_acceleration_from_traction: f32,
     player_remaining_coyote_frames: i32,
     player_max_coyote_frames: i32,
-    player_color: ColorName,
     num_positions_per_block_to_check_for_collisions: f32,
     is_bullet_time: bool,
 }
@@ -137,7 +136,6 @@ impl Game {
             player_acceleration_from_traction: DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION,
             player_remaining_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
             player_max_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
-            player_color: PLAYER_COLOR,
             num_positions_per_block_to_check_for_collisions:
                 NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS,
             is_bullet_time: false,
@@ -1294,7 +1292,7 @@ mod tests {
             game.get_player_glyphs()
                 == Glyph::get_smooth_horizontal_glyphs_for_colored_floating_square(
                     game.player_pos,
-                    game.player_color
+                    PLAYER_COLOR
                 )
         );
     }
@@ -1307,7 +1305,7 @@ mod tests {
             game.get_player_glyphs()
                 == Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(
                     game.player_pos,
-                    game.player_color
+                    PLAYER_COLOR
                 )
         );
     }
@@ -1320,7 +1318,7 @@ mod tests {
             game.get_player_glyphs()
                 == Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(
                     game.player_pos,
-                    game.player_color
+                    PLAYER_COLOR
                 )
         );
     }
@@ -1333,7 +1331,7 @@ mod tests {
             game.get_player_glyphs()
                 == Glyph::get_smooth_vertical_glyphs_for_colored_floating_square(
                     game.player_pos,
-                    game.player_color
+                    PLAYER_COLOR
                 )
         );
     }
@@ -1346,7 +1344,7 @@ mod tests {
             game.get_player_glyphs()
                 == Glyph::get_smooth_horizontal_glyphs_for_colored_floating_square(
                     game.player_pos,
-                    game.player_color
+                    PLAYER_COLOR
                 )
         );
     }
@@ -1359,7 +1357,7 @@ mod tests {
             game.get_player_glyphs()
                 == Glyph::get_smooth_horizontal_glyphs_for_colored_floating_square(
                     game.player_pos,
-                    game.player_color
+                    PLAYER_COLOR
                 )
         );
     }
