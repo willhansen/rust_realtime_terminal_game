@@ -1,6 +1,7 @@
 mod glyph;
 mod utility;
 
+extern crate device_query;
 extern crate geo;
 extern crate line_drawing;
 extern crate num;
@@ -9,12 +10,13 @@ extern crate termion;
 
 // use assert2::{assert, check};
 use crate::num::traits::Pow;
+use device_query::{DeviceQuery, DeviceState, Keycode};
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Point};
 use std::char;
 use std::cmp::min;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::fmt::Debug;
 use std::io::{stdin, stdout, Write};
 use std::sync::mpsc::channel;
@@ -109,6 +111,8 @@ struct Game {
     player_max_coyote_frames: i32,
     num_positions_per_block_to_check_for_collisions: f32,
     is_bullet_time: bool,
+    device_state: Option<DeviceState>,
+    held_keys: Vec<Keycode>,
 }
 
 impl Game {
@@ -139,6 +143,8 @@ impl Game {
             num_positions_per_block_to_check_for_collisions:
                 NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS,
             is_bullet_time: false,
+            device_state: None,
+            held_keys: Vec::<Keycode>::new(),
         }
     }
 
@@ -269,7 +275,7 @@ impl Game {
         self.is_bullet_time = !self.is_bullet_time;
     }
 
-    fn handle_input(&mut self, evt: termion::event::Event) {
+    fn handle_event(&mut self, evt: termion::event::Event) {
         match evt {
             Event::Key(ke) => match ke {
                 Key::Char('q') => self.running = false,
@@ -309,6 +315,33 @@ impl Game {
             },
             _ => {}
         }
+    }
+
+    fn update_held_keys(&mut self) {
+        if self.device_state.is_none() {
+            panic!("Device state not initialized");
+        }
+        self.held_keys = self.device_state.as_ref().unwrap().get_keys();
+    }
+
+    fn process_held_keys(&mut self) {
+        self.player_desired_direction = p(0, 0);
+        if self.held_keys.contains(&Keycode::Left) || self.held_keys.contains(&Keycode::A) {
+            self.player_desired_direction.add_assign(p(-1, 0));
+        }
+        if self.held_keys.contains(&Keycode::Right) || self.held_keys.contains(&Keycode::D) {
+            self.player_desired_direction.add_assign(p(1, 0));
+        }
+        if self.held_keys.contains(&Keycode::Up) || self.held_keys.contains(&Keycode::W) {
+            self.player_desired_direction.add_assign(p(0, 1));
+        }
+        if self.held_keys.contains(&Keycode::Down) || self.held_keys.contains(&Keycode::S) {
+            self.player_desired_direction.add_assign(p(0, -1));
+        }
+    }
+
+    fn init_device_state(&mut self, device_state: DeviceState) {
+        self.device_state = Some(device_state);
     }
 
     fn tick_physics(&mut self) {
@@ -499,7 +532,7 @@ impl Game {
                 desired_acceleration_direction as f32 * self.player_acceleration_from_traction;
             let is_speedup_overshoot =
                 (start_x_vel + delta_vx).abs() > self.player_max_run_speed_bpf;
-            if is_speedup_overshoot && !midair {
+            if is_speedup_overshoot {
                 end_x_vel = desired_acceleration_direction as f32 * self.player_max_run_speed_bpf;
             } else {
                 end_x_vel = start_x_vel + delta_vx;
@@ -709,6 +742,8 @@ fn main() {
     let mut game = Game::new(width, height);
     let mut stdout = MouseTerminal::from(stdout().into_raw_mode().unwrap());
 
+    //game.init_device_state(DeviceState::new());
+
     write!(
         stdout,
         "{}{}q to exit.  c to clear.  Mouse to draw.  Begin!",
@@ -734,7 +769,7 @@ fn main() {
     while game.running {
         let start_time = Instant::now();
         while let Ok(evt) = rx.try_recv() {
-            game.handle_input(evt);
+            game.handle_event(evt);
         }
         game.tick_physics();
         game.update_output_buffer();
@@ -1094,7 +1129,7 @@ mod tests {
     #[test]
     fn test_respawn_button() {
         let mut game = Game::new(30, 30);
-        game.handle_input(Event::Key(Key::Char('r')));
+        game.handle_event(Event::Key(Key::Char('r')));
         assert!(game.player_alive);
         assert!(game.player_pos == p(15.0, 15.0));
     }
@@ -1524,22 +1559,22 @@ mod tests {
     #[test]
     fn test_direction_buttons() {
         let mut game = set_up_player_on_platform();
-        game.handle_input(Event::Key(Key::Char('a')));
+        game.handle_event(Event::Key(Key::Char('a')));
         assert!(game.player_desired_direction == p(-1, 0));
-        game.handle_input(Event::Key(Key::Char('s')));
+        game.handle_event(Event::Key(Key::Char('s')));
         assert!(game.player_desired_direction == p(0, -1));
-        game.handle_input(Event::Key(Key::Char('d')));
+        game.handle_event(Event::Key(Key::Char('d')));
         assert!(game.player_desired_direction == p(1, 0));
-        game.handle_input(Event::Key(Key::Char('w')));
+        game.handle_event(Event::Key(Key::Char('w')));
         assert!(game.player_desired_direction == p(0, 1));
 
-        game.handle_input(Event::Key(Key::Left));
+        game.handle_event(Event::Key(Key::Left));
         assert!(game.player_desired_direction == p(-1, 0));
-        game.handle_input(Event::Key(Key::Down));
+        game.handle_event(Event::Key(Key::Down));
         assert!(game.player_desired_direction == p(0, -1));
-        game.handle_input(Event::Key(Key::Right));
+        game.handle_event(Event::Key(Key::Right));
         assert!(game.player_desired_direction == p(1, 0));
-        game.handle_input(Event::Key(Key::Up));
+        game.handle_event(Event::Key(Key::Up));
         assert!(game.player_desired_direction == p(0, 1));
     }
 
@@ -1692,7 +1727,6 @@ mod tests {
 
         game.num_positions_per_block_to_check_for_collisions = 0.00001;
         game.tick_physics();
-        let step = game.player_pos - start_pos;
 
         assert!(game.player_pos.x() == 35.0);
     }
@@ -1742,9 +1776,57 @@ mod tests {
     fn test_toggle_bullet_time() {
         let mut game = set_up_player_on_platform();
         assert!(!game.is_bullet_time);
-        game.handle_input(Event::Key(Key::Char('g')));
+        game.handle_event(Event::Key(Key::Char('g')));
         assert!(game.is_bullet_time);
-        game.handle_input(Event::Key(Key::Char('g')));
+        game.handle_event(Event::Key(Key::Char('g')));
         assert!(!game.is_bullet_time);
+    }
+
+    #[ignore]
+    #[test]
+    fn test_movement_based_on_held_keys() {
+        let mut game = set_up_player_on_platform();
+        let start_desired_direction = game.player_desired_direction;
+        game.held_keys.clear();
+        game.held_keys.push(Keycode::Right);
+        game.process_held_keys();
+        assert!(game.player_desired_direction == p(1, 0));
+        game.held_keys.clear();
+        game.held_keys.push(Keycode::Left);
+        game.process_held_keys();
+        assert!(game.player_desired_direction == p(-1, 0));
+        game.held_keys.clear();
+        game.held_keys.push(Keycode::D);
+        game.held_keys.push(Keycode::Left);
+        game.process_held_keys();
+        assert!(game.player_desired_direction == p(0, 0));
+        game.held_keys.clear();
+        game.held_keys.push(Keycode::Right);
+        game.held_keys.push(Keycode::W);
+        game.process_held_keys();
+        assert!(game.player_desired_direction == p(1, 1));
+    }
+
+    #[ignore]
+    #[test]
+    fn test_player_compresses_like_a_spring_when_colliding_at_high_speed() {
+        let mut game = set_up_player_on_platform();
+    }
+
+    #[ignore]
+    #[test]
+    fn test_jump_bonus_if_jump_when_coming_out_of_compression() {}
+
+    #[ignore]
+    #[test]
+    fn test_jump_penalty_if_jump_when_entering_compression() {}
+
+    #[test]
+    fn test_no_passing_max_speed_horizontally_in_midair() {
+        let mut game = set_up_just_player();
+        game.player_vel_bpf = p(game.player_max_run_speed_bpf, 0.0);
+        game.player_desired_direction = p(1, 0);
+        game.tick_physics();
+        assert!(game.player_vel_bpf.x().abs() <= game.player_max_run_speed_bpf);
     }
 }
