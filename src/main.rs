@@ -116,6 +116,7 @@ struct Game {
     is_bullet_time: bool,
     device_state: Option<DeviceState>,
     held_keys: Vec<Keycode>,
+    player_dash_vel: f32,
 }
 
 impl Game {
@@ -150,6 +151,7 @@ impl Game {
             is_bullet_time: false,
             device_state: None,
             held_keys: Vec::<Keycode>::new(),
+            player_dash_vel: DEFAULT_PLAYER_DASH_V,
         }
     }
 
@@ -281,7 +283,7 @@ impl Game {
 
     fn player_dash(&mut self) {
         if self.player_desired_direction != p(0, 0) {
-            self.player_vel_bpf = floatify(self.player_desired_direction) * DEFAULT_PLAYER_DASH_V;
+            self.player_vel_bpf = floatify(self.player_desired_direction) * self.player_dash_vel;
         }
     }
     fn toggle_bullet_time(&mut self) {
@@ -365,11 +367,21 @@ impl Game {
     }
 
     fn get_player_color(&self) -> ColorName {
-        if magnitude(self.player_vel_bpf) > self.player_color_change_speed_threshold {
+        if self.player_is_officially_fast() {
             PLAYER_HIGH_SPEED_COLOR
         } else {
             PLAYER_COLOR
         }
+    }
+
+    fn player_is_officially_fast(&self) -> bool {
+        let mut inferred_speed = 0.0;
+        if let Some(last_pos) = self.recent_player_poses.get(0) {
+            inferred_speed = magnitude(self.player_pos - *last_pos);
+        }
+        let actual_speed = magnitude(self.player_vel_bpf);
+        actual_speed > self.player_color_change_speed_threshold
+            || inferred_speed > self.player_color_change_speed_threshold
     }
 
     fn update_output_buffer(&mut self) {
@@ -381,7 +393,7 @@ impl Game {
             }
         }
 
-        if self.get_player_color() == PLAYER_HIGH_SPEED_COLOR {
+        if self.player_is_officially_fast() {
             self.draw_speed_lines();
         }
 
@@ -422,7 +434,7 @@ impl Game {
                 self.draw_visual_braille_line(
                     last_pos + offset,
                     self.player_pos + offset,
-                    PLAYER_HIGH_SPEED_COLOR,
+                    self.get_player_color(),
                 );
             }
         }
@@ -1527,7 +1539,7 @@ mod tests {
         game.player_desired_direction = p(1, 0);
         game.player_dash();
         assert!(
-            game.player_vel_bpf == floatify(game.player_desired_direction) * DEFAULT_PLAYER_DASH_V
+            game.player_vel_bpf == floatify(game.player_desired_direction) * game.player_dash_vel
         );
     }
 
@@ -1726,7 +1738,7 @@ mod tests {
     #[test]
     fn test_dash_sets_velocity_rather_than_adds_to_it() {
         let mut game = set_up_just_player();
-        game.player_vel_bpf = p(-DEFAULT_PLAYER_DASH_V * 4.0, 0.0);
+        game.player_vel_bpf = p(-game.player_dash_vel * 4.0, 0.0);
         game.player_desired_direction = p(1, 0);
         game.player_dash();
         assert!(game.player_vel_bpf.x() > 0.0);
@@ -1738,6 +1750,7 @@ mod tests {
     fn test_bullet_time() {}
 
     #[ignore]
+    // most visible in tunnels
     #[test]
     fn test_speed_lines_do_not_cover_blocks() {}
 
@@ -1787,6 +1800,7 @@ mod tests {
         game.player_jump();
         assert!(game.get_player_color() == PLAYER_COLOR);
         assert!(game.get_player_color() != PLAYER_HIGH_SPEED_COLOR);
+        assert!(!game.player_is_officially_fast());
     }
 
     #[test]
@@ -1794,6 +1808,7 @@ mod tests {
         let mut game = set_up_player_hanging_on_wall_on_left();
         game.player_jump_if_possible();
         assert!(game.get_player_color() != PLAYER_HIGH_SPEED_COLOR);
+        assert!(!game.player_is_officially_fast());
     }
 
     #[ignore]
@@ -1823,6 +1838,7 @@ mod tests {
     }
 
     #[ignore]
+    // Couldn't get the library working.  Also there is the elitism of playing over ssh
     #[test]
     fn test_movement_based_on_held_keys() {
         let mut game = set_up_player_on_platform();
@@ -1848,16 +1864,19 @@ mod tests {
     }
 
     #[ignore]
+    // bounciness probably feels good
     #[test]
     fn test_player_compresses_like_a_spring_when_colliding_at_high_speed() {
         let mut game = set_up_player_on_platform();
     }
 
     #[ignore]
+    // like a spring
     #[test]
     fn test_jump_bonus_if_jump_when_coming_out_of_compression() {}
 
     #[ignore]
+    // just as the spring giveth, so doth the spring taketh away(-eth)
     #[test]
     fn test_jump_penalty_if_jump_when_entering_compression() {}
 
@@ -1890,11 +1909,27 @@ mod tests {
         assert!(end_vx < vx_one_frame_into_jump);
     }
 
-    #[ignore]
+    // There's missing coolness here.  especially when jumping and immediately dashing down
     #[test]
-    fn show_dash_visuals_even_if_hit_wall_in_first_frame() {}
+    fn show_dash_visuals_even_if_hit_wall_in_first_frame() {
+        let mut game = set_up_player_on_platform();
+        game.player_pos.add_assign(p(10.0, 0.0));
+        game.player_desired_direction = p(0, -1);
+        game.player_dash_vel = 100.0;
+        game.player_color_change_speed_threshold = 9.0;
+
+        game.player_dash();
+        game.tick_physics();
+        assert!(game.get_player_color() == PLAYER_HIGH_SPEED_COLOR);
+    }
 
     #[ignore]
+    // Not yet at least
     #[test]
     fn do_not_hang_onto_ceiling() {}
+
+    #[ignore]
+    // Dashing up looks way faster than dashing sideways.  Bad.
+    #[test]
+    fn compensate_for_non_square_grid() {}
 }
