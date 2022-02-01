@@ -1,9 +1,10 @@
 extern crate geo;
 
-use crate::num::traits::Pow;
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Point};
+use num::clamp;
+use num::traits::Pow;
 
 pub fn p<T: 'static>(x: T, y: T) -> Point<T>
 where
@@ -198,6 +199,46 @@ pub trait PointExt {
 impl<T: CoordNum> PointExt for Point<T> {
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
+    }
+}
+
+pub fn decelerate_linearly_to_cap(
+    start_vel: f32,
+    cap_vel: f32,
+    deceleration_above_cap: f32,
+) -> f32 {
+    if start_vel.abs() < cap_vel {
+        return start_vel;
+    }
+    let accel_direction = -start_vel.sign();
+    let dv = accel_direction * deceleration_above_cap;
+    let crossed_zero = start_vel.sign() * (start_vel + dv).sign() < 0.0;
+    if (start_vel + dv).abs() < cap_vel || crossed_zero {
+        return start_vel.sign() * cap_vel;
+    }
+    return start_vel + dv;
+}
+
+pub fn accelerate_within_max_speed(
+    start_vel: f32,
+    desired_direction: i32,
+    max_speed: f32,
+    acceleration: f32,
+) -> f32 {
+    let want_stop = desired_direction.sign() == 0;
+
+    let started_above_max_speed = start_vel.abs() > max_speed;
+
+    if started_above_max_speed {
+        start_vel
+    } else if want_stop {
+        decelerate_linearly_to_cap(start_vel, 0.0, acceleration)
+    } else {
+        clamp(
+            start_vel + desired_direction as f32 * acceleration,
+            -max_speed,
+            max_speed,
+        )
     }
 }
 
@@ -396,5 +437,64 @@ mod tests {
         assert!(round_vector_with_tie_break_toward_inf(p(-0.1, -0.1)) == p(0, 0));
         assert!(round_vector_with_tie_break_toward_inf(p(0.5, 0.5)) == p(1, 1));
         assert!(round_vector_with_tie_break_toward_inf(p(-0.5, -0.5)) == p(0, 0));
+    }
+
+    #[test]
+    fn test_decelerate_linearly_to_cap_under_cap() {
+        assert!(decelerate_linearly_to_cap(1.0, 2.0, 1.0) == 1.0);
+    }
+    #[test]
+    fn test_decelerate_linearly_to_cap_no_overshoot() {
+        assert!(decelerate_linearly_to_cap(3.0, 2.0, 5.0) == 2.0);
+    }
+    #[test]
+    fn test_decelerate_linearly_to_cap_partway_there() {
+        assert!(decelerate_linearly_to_cap(4.0, 2.0, 1.0) == 3.0);
+    }
+    #[test]
+    fn test_decelerate_linearly_to_cap_massive_overshoot() {
+        assert!(decelerate_linearly_to_cap(4.0, 2.0, 100000.0) == 2.0);
+    }
+    #[test]
+    fn test_decelerate_linearly_to_cap_negative_start() {
+        assert!(decelerate_linearly_to_cap(-4.0, 2.0, 1.0) == -3.0);
+    }
+    #[test]
+    fn test_decelerate_linearly_to_cap_stop_at_zero() {
+        assert!(decelerate_linearly_to_cap(1.0, 0.0, 5.0) == 0.0);
+    }
+
+    #[test]
+    fn test_accelerate_within_max_speed_within_bounds() {
+        assert!(accelerate_within_max_speed(1.0, 1, 10.0, 1.0) == 2.0);
+    }
+
+    #[test]
+    fn test_accelerate_within_max_speed_crossing_zero() {
+        assert!(accelerate_within_max_speed(1.0, -1, 10.0, 3.0) == -2.0);
+    }
+
+    #[test]
+    fn test_accelerate_within_max_speed_hitting_cap() {
+        assert!(accelerate_within_max_speed(1.0, 1, 10.0, 10.0) == 10.0);
+    }
+
+    #[test]
+    fn test_accelerate_within_max_speed_hitting_cap_across_zero() {
+        assert!(accelerate_within_max_speed(1.0, -1, 10.0, 20.0) == -10.0);
+    }
+
+    #[test]
+    fn test_accelerate_within_max_speed_stop_at_zero() {
+        assert!(accelerate_within_max_speed(1.0, 0, 10.0, 5.0) == 0.0);
+    }
+    #[test]
+    fn test_accelerate_within_max_speed_negative_slowing_down() {
+        assert!(accelerate_within_max_speed(-1.0, 1, 10.0, 0.5) == -0.5);
+    }
+
+    #[test]
+    fn test_accelerate_within_max_speed_negative_speeding_up() {
+        assert!(accelerate_within_max_speed(-1.0, -1, 10.0, 0.5) == -1.5);
     }
 }

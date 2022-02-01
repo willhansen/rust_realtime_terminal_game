@@ -39,7 +39,7 @@ const NUM_SAVED_PLAYER_POSES: i32 = 10;
 const NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS: f32 = 8.0;
 
 // a block every two ticks
-const PLAYER_DEFAULT_MAX_SPEED_BPF: f32 = 0.5;
+const DEFAULT_PLAYER_MAX_RUN_SPEED_BPF: f32 = 0.5;
 const DEFAULT_PLAYER_JUMP_DELTA_V: f32 = 1.0;
 const DEFAULT_PLAYER_DASH_V: f32 = 5.0;
 const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
@@ -48,7 +48,8 @@ const DEFAULT_PLAYER_COYOTE_TIME_DURATION_S: f32 = 0.1;
 const DEFAULT_PLAYER_MAX_COYOTE_FRAMES: i32 =
     ((DEFAULT_PLAYER_COYOTE_TIME_DURATION_S * MAX_FPS as f32) + 1.0) as i32;
 const PLAYER_SNAP_TO_GRID_ON_STOP: bool = false;
-//const PLAYER_SLOW_DOWN_MIDAIR: bool = false;
+const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
+const DEFAULT_PLAYER_MIDAIR_MAX_SPEED: f32 = 999.0;
 
 // These have no positional information
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -101,12 +102,14 @@ struct Game {
     player_pos: Point<f32>,
     recent_player_poses: VecDeque<Point<f32>>,
     player_max_run_speed_bpf: f32,
+    player_max_midair_speed: f32,
     player_color_change_speed_threshold: f32,
     player_vel_bpf: Point<f32>,
     player_desired_direction: Point<i32>,
     player_jump_delta_v: f32,
     player_acceleration_from_gravity: f32,
     player_acceleration_from_traction: f32,
+    player_deceleration_from_air_friction: f32,
     player_remaining_coyote_frames: i32,
     player_max_coyote_frames: i32,
     num_positions_per_block_to_check_for_collisions: f32,
@@ -128,9 +131,10 @@ impl Game {
             player_alive: false,
             player_pos: p(0.0, 0.0),
             recent_player_poses: VecDeque::<Point<f32>>::new(),
-            player_max_run_speed_bpf: PLAYER_DEFAULT_MAX_SPEED_BPF,
+            player_max_run_speed_bpf: DEFAULT_PLAYER_MAX_RUN_SPEED_BPF,
+            player_max_midair_speed: DEFAULT_PLAYER_MIDAIR_MAX_SPEED,
             player_color_change_speed_threshold: magnitude(p(
-                PLAYER_DEFAULT_MAX_SPEED_BPF,
+                DEFAULT_PLAYER_MAX_RUN_SPEED_BPF,
                 DEFAULT_PLAYER_JUMP_DELTA_V,
             )),
             player_vel_bpf: Point::<f32>::new(0.0, 0.0),
@@ -138,6 +142,7 @@ impl Game {
             player_jump_delta_v: DEFAULT_PLAYER_JUMP_DELTA_V,
             player_acceleration_from_gravity: DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
             player_acceleration_from_traction: DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION,
+            player_deceleration_from_air_friction: DEFAULT_PLAYER_AIR_FRICTION_DECELERATION,
             player_remaining_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
             player_max_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
             num_positions_per_block_to_check_for_collisions:
@@ -190,6 +195,15 @@ impl Game {
         for (x1, y1) in line_drawing::Bresenham::new(pos0, pos1) {
             self.grid[x1 as usize][y1 as usize] = block;
         }
+    }
+
+    fn place_boundary_wall(&mut self) {
+        let xmax = self.grid.len() as i32 - 1;
+        let ymax = self.grid[0].len() as i32 - 1;
+        self.place_line_of_blocks((0, 0), (xmax, 0), Block::Wall);
+        self.place_line_of_blocks((xmax, 0), (xmax, ymax), Block::Wall);
+        self.place_line_of_blocks((xmax, ymax), (0, ymax), Block::Wall);
+        self.place_line_of_blocks((0, ymax), (0, 0), Block::Wall);
     }
 
     fn place_block(&mut self, pos: Point<i32>, block: Block) {
@@ -252,7 +266,7 @@ impl Game {
         if self.player_is_grabbing_wall() || self.player_is_running_up_wall() {
             let wall_direction = sign(self.player_desired_direction);
             self.player_vel_bpf
-                .add_assign(floatify(-wall_direction) * self.player_jump_delta_v);
+                .add_assign(floatify(-wall_direction) * self.player_max_run_speed_bpf);
             self.player_desired_direction = -wall_direction;
         }
         self.player_vel_bpf.set_y(self.player_jump_delta_v);
@@ -369,26 +383,7 @@ impl Game {
         }
 
         if self.get_player_color() == PLAYER_HIGH_SPEED_COLOR {
-            if let Some(&last_pos) = self.recent_player_poses.get(0) {
-                // draw all corners
-                let mut offsets = Vec::<Point<f32>>::new();
-                let n = 2;
-                let r = 0.5;
-                for i in -n..=n {
-                    for j in -n..=n {
-                        let x = i as f32 * r / n as f32;
-                        let y = j as f32 * r / n as f32;
-                        offsets.push(p(x, y));
-                    }
-                }
-                for offset in offsets {
-                    self.draw_visual_braille_line(
-                        last_pos + offset,
-                        self.player_pos + offset,
-                        PLAYER_HIGH_SPEED_COLOR,
-                    );
-                }
-            }
+            self.draw_speed_lines();
         }
 
         let player_glyphs = self.get_player_glyphs();
@@ -407,6 +402,33 @@ impl Game {
             }
         }
     }
+
+    fn draw_speed_lines(&mut self) {
+        if let Some(&last_pos) = self.recent_player_poses.get(0) {
+            // draw all corners
+            let mut offsets = Vec::<Point<f32>>::new();
+            let n = 1;
+            let r = 0.3;
+            for i in -n..=n {
+                for j in -n..=n {
+                    if i == 0 || j == 0 {
+                        continue;
+                    }
+                    let x = i as f32 * r / n as f32;
+                    let y = j as f32 * r / n as f32;
+                    offsets.push(p(x, y));
+                }
+            }
+            for offset in offsets {
+                self.draw_visual_braille_line(
+                    last_pos + offset,
+                    self.player_pos + offset,
+                    PLAYER_HIGH_SPEED_COLOR,
+                );
+            }
+        }
+    }
+
     fn get_player_glyphs(&self) -> Vec<Vec<Option<Glyph>>> {
         Glyph::get_glyphs_for_colored_floating_square(self.player_pos, self.get_player_color())
     }
@@ -480,78 +502,30 @@ impl Game {
         return false;
     }
 
-    fn apply_player_acceleration_from_wall_friction(&mut self) {
-        let direction_of_acceleration = -self.player_vel_bpf.y().sign();
-        let delta_v = direction_of_acceleration * self.player_acceleration_from_traction;
-        if delta_v.abs() > self.player_vel_bpf.y().abs() {
-            self.player_vel_bpf.set_y(0.0);
-        } else {
-            self.player_vel_bpf.add_assign(p(0.0, delta_v));
-        }
+    fn apply_player_wall_friction(&mut self) {
+        self.player_vel_bpf.set_y(decelerate_linearly_to_cap(
+            self.player_vel_bpf.y(),
+            0.0,
+            self.player_acceleration_from_traction,
+        ));
     }
 
-    fn apply_player_acceleration_from_floor_traction(&mut self) {
-        let start_x_vel = self.player_vel_bpf.x();
+    fn apply_player_floor_traction(&mut self) {
+        self.player_vel_bpf.set_x(accelerate_within_max_speed(
+            self.player_vel_bpf.x(),
+            self.player_desired_direction.x(),
+            self.player_max_run_speed_bpf,
+            self.player_acceleration_from_traction,
+        ));
+    }
 
-        let want_stop = self.player_desired_direction.x() == 0 && start_x_vel != 0.0;
-
-        let want_go_fast = (start_x_vel.abs() > 0.0
-            && start_x_vel.sign() == self.player_desired_direction.x().sign() as f32)
-            || (start_x_vel == 0.0 && self.player_desired_direction.x() != 0);
-
-        let want_turn_around =
-            start_x_vel.abs() > 0.0 && self.player_desired_direction.x() as f32 * start_x_vel < 0.0;
-
-        let desired_acceleration_direction;
-        if want_stop {
-            desired_acceleration_direction = -start_x_vel.sign() as i32;
-        } else {
-            desired_acceleration_direction = self.player_desired_direction.x().sign();
-        }
-
-        let started_above_max_speed = start_x_vel.abs() > self.player_max_run_speed_bpf;
-
-        let midair = !self.player_is_supported();
-
-        let mut end_x_vel = start_x_vel;
-        if started_above_max_speed {
-            if !(midair && want_go_fast) {
-                // slowing down to the max speed automatically
-                let delta_vx = -start_x_vel.sign() * self.player_acceleration_from_traction;
-                let is_slowdown_overshoot =
-                    (start_x_vel + delta_vx).abs() < self.player_max_run_speed_bpf;
-                if want_go_fast && is_slowdown_overshoot {
-                    end_x_vel = start_x_vel.sign() as f32 * self.player_max_run_speed_bpf;
-                } else {
-                    end_x_vel = start_x_vel + delta_vx;
-                }
-            }
-        } else {
-            // can speed up or slow down. maybe limited by max speed
-            let delta_vx =
-                desired_acceleration_direction as f32 * self.player_acceleration_from_traction;
-            let is_speedup_overshoot =
-                (start_x_vel + delta_vx).abs() > self.player_max_run_speed_bpf;
-            if is_speedup_overshoot {
-                end_x_vel = desired_acceleration_direction as f32 * self.player_max_run_speed_bpf;
-            } else {
-                end_x_vel = start_x_vel + delta_vx;
-            }
-        }
-
-        let changed_direction = start_x_vel * end_x_vel < 0.0;
-        let is_stop_overshoot = want_stop && changed_direction;
-
-        if is_stop_overshoot {
-            end_x_vel = 0.0;
-        }
-
-        if end_x_vel == 0.0 && PLAYER_SNAP_TO_GRID_ON_STOP {
-            self.player_pos
-                .set_x(snap_to_grid(self.player_pos).x() as f32);
-        }
-
-        self.player_vel_bpf.set_x(end_x_vel);
+    fn apply_player_air_traction(&mut self) {
+        self.player_vel_bpf.set_x(accelerate_within_max_speed(
+            self.player_vel_bpf.x(),
+            self.player_desired_direction.x(),
+            self.player_max_midair_speed,
+            self.player_deceleration_from_air_friction,
+        ));
     }
 
     fn apply_player_acceleration_from_gravity(&mut self) {
@@ -621,13 +595,39 @@ impl Game {
 
     fn update_player_acceleration(&mut self) {
         if self.player_is_grabbing_wall() && self.player_vel_bpf.y() <= 0.0 {
-            self.apply_player_acceleration_from_wall_friction();
+            self.apply_player_wall_friction();
         } else {
             if !self.player_is_supported() {
+                self.apply_player_air_friction();
+                self.apply_player_air_traction();
                 self.apply_player_acceleration_from_gravity();
+            } else {
+                self.apply_player_floor_friction();
+                self.apply_player_floor_traction();
             }
-            self.apply_player_acceleration_from_floor_traction();
         }
+    }
+
+    fn apply_player_air_friction(&mut self) {
+        self.player_vel_bpf.set_x(decelerate_linearly_to_cap(
+            self.player_vel_bpf.x(),
+            self.player_max_midair_speed,
+            self.player_deceleration_from_air_friction,
+        ));
+
+        self.player_vel_bpf.set_y(decelerate_linearly_to_cap(
+            self.player_vel_bpf.y(),
+            self.player_max_midair_speed,
+            self.player_deceleration_from_air_friction,
+        ));
+    }
+
+    fn apply_player_floor_friction(&mut self) {
+        self.player_vel_bpf.set_x(decelerate_linearly_to_cap(
+            self.player_vel_bpf.x(),
+            self.player_max_run_speed_bpf,
+            self.player_acceleration_from_traction,
+        ));
     }
 
     // Where the player can move to in a line
@@ -714,6 +714,8 @@ impl Game {
         self.player_acceleration_from_gravity = 0.05;
         self.player_acceleration_from_traction = 0.6;
         self.set_player_max_run_speed(0.7);
+
+        self.place_boundary_wall();
 
         let bottom_left = (
             (self.terminal_size.0 / 5) as i32,
@@ -806,12 +808,7 @@ mod tests {
 
     fn set_up_player_on_platform_in_box() -> Game {
         let mut game = set_up_player_on_platform();
-        let xmax = game.grid.len() as i32 - 1;
-        let ymax = game.grid[0].len() as i32 - 1;
-        game.place_line_of_blocks((0, 0), (xmax, 0), Block::Wall);
-        game.place_line_of_blocks((xmax, 0), (xmax, ymax), Block::Wall);
-        game.place_line_of_blocks((xmax, ymax), (0, ymax), Block::Wall);
-        game.place_line_of_blocks((0, ymax), (0, 0), Block::Wall);
+        game.place_boundary_wall();
         return game;
     }
 
@@ -1176,6 +1173,7 @@ mod tests {
         game.player_pos.set_x(wall_x as f32 + 1.0);
         game.player_vel_bpf = p(-3.0, 3.0);
         game.player_acceleration_from_gravity = 0.0;
+        game.player_deceleration_from_air_friction = 0.0;
 
         let start_y_vel = game.player_vel_bpf.y();
         let start_y_pos = game.player_pos.y();
@@ -1535,14 +1533,48 @@ mod tests {
     }
 
     #[test]
-    fn test_no_passive_horizontal_momentum_loss_while_midair() {
+    fn test_slow_down_to_exactly_max_speed_horizontally_midair() {
         let mut game = set_up_just_player();
         game.player_desired_direction = p(1, 0);
-        let vx = 5.0;
+        game.player_max_midair_speed = 10.0;
+        game.player_deceleration_from_air_friction = 1.0;
+        game.player_acceleration_from_traction = 0.0;
+        let vx = game.player_max_midair_speed + game.player_deceleration_from_air_friction * 0.9;
         game.player_vel_bpf = p(vx, 0.0);
         game.tick_physics();
+        assert!(game.player_vel_bpf.x() == game.player_max_midair_speed);
+    }
 
-        assert!(game.player_vel_bpf.x() == vx);
+    #[test]
+    fn test_slow_down_to_exactly_max_speed_vertically_midair() {
+        let mut game = set_up_just_player();
+        game.player_desired_direction = p(0, 1);
+        game.player_max_midair_speed = 10.0;
+        game.player_deceleration_from_air_friction = 1.0;
+        game.player_acceleration_from_gravity = 0.0;
+        let vy = game.player_max_midair_speed + game.player_deceleration_from_air_friction * 0.9;
+        game.player_vel_bpf = p(0.0, vy);
+        game.tick_physics();
+        assert!(game.player_vel_bpf.y() == game.player_max_midair_speed);
+    }
+
+    #[test]
+    fn test_air_friction_has_no_slowdown_overshoot() {
+        let mut game = set_up_just_player();
+        game.player_desired_direction = p(1, 0);
+        game.player_max_midair_speed = 10.0;
+        game.player_deceleration_from_air_friction = 1.0;
+        game.player_acceleration_from_gravity = 0.0;
+        game.player_acceleration_from_traction = 0.0;
+        let start_vx =
+            game.player_max_midair_speed + game.player_deceleration_from_air_friction * 0.9;
+        game.player_vel_bpf = p(start_vx, 0.0);
+        game.tick_physics();
+        let vx_after_slowdown = game.player_vel_bpf.x();
+        game.tick_physics();
+        let end_vx = game.player_vel_bpf.x();
+        assert!(vx_after_slowdown < start_vx);
+        assert!(end_vx == vx_after_slowdown);
     }
 
     #[test]
@@ -1717,6 +1749,7 @@ mod tests {
         let prev_pos = p(36.899967, 17.25);
 
         let mut game = Game::new(50, 50);
+        game.player_deceleration_from_air_friction = 0.0;
         game.place_player(start_pos.x(), start_pos.y());
         game.player_vel_bpf = start_pos - prev_pos;
         game.player_desired_direction = p(-1, 0);
@@ -1753,9 +1786,15 @@ mod tests {
         game.player_vel_bpf = p(game.player_max_run_speed_bpf, 0.0);
         game.player_desired_direction = p(1, 0);
         game.player_jump();
-        let player_color = game.get_player_glyphs()[1][1].unwrap().fg_color;
         assert!(game.get_player_color() == PLAYER_COLOR);
-        assert!(player_color != PLAYER_HIGH_SPEED_COLOR);
+        assert!(game.get_player_color() != PLAYER_HIGH_SPEED_COLOR);
+    }
+
+    #[test]
+    fn test_no_high_speed_color_with_normal_wall_jump() {
+        let mut game = set_up_player_hanging_on_wall_on_left();
+        game.player_jump_if_possible();
+        assert!(game.get_player_color() != PLAYER_HIGH_SPEED_COLOR);
     }
 
     #[test]
@@ -1828,5 +1867,25 @@ mod tests {
         game.player_desired_direction = p(1, 0);
         game.tick_physics();
         assert!(game.player_vel_bpf.x().abs() <= game.player_max_run_speed_bpf);
+    }
+
+    #[test]
+    fn test_can_turn_around_midair_around_after_a_wall_jump() {
+        let mut game = set_up_player_hanging_on_wall_on_left();
+        game.player_max_midair_speed = 999.0;
+        game.player_deceleration_from_air_friction = 0.0;
+        let start_vx = game.player_vel_bpf.x();
+        game.player_jump_if_possible();
+        let vx_at_start_of_jump = game.player_vel_bpf.x();
+        game.tick_physics();
+        let vx_one_frame_into_jump = game.player_vel_bpf.x();
+        game.player_desired_direction = p(-1, 0);
+        game.tick_physics();
+        let end_vx = game.player_vel_bpf.x();
+
+        assert!(start_vx == 0.0);
+        assert!(vx_at_start_of_jump > 0.0);
+        assert!(vx_one_frame_into_jump == vx_at_start_of_jump);
+        assert!(end_vx < vx_one_frame_into_jump);
     }
 }
