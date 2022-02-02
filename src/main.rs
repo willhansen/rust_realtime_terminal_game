@@ -275,11 +275,15 @@ impl Game {
         }
         self.player_vel_bpf.set_y(self.player_jump_delta_v);
     }
-    fn player_jump_if_possible(&mut self) {
-        if self.player_is_supported()
+
+    fn player_can_jump(&self) -> bool {
+        self.player_is_supported()
             || self.player_is_grabbing_wall()
             || self.player_is_running_up_wall()
-        {
+    }
+
+    fn player_jump_if_possible(&mut self) {
+        if self.player_can_jump() {
             self.player_jump();
         }
     }
@@ -689,10 +693,7 @@ impl Game {
     }
 
     fn player_is_standing_on_block(&self) -> bool {
-        match self.get_block_below_player() {
-            None | Some(Block::Air) => false,
-            _ => true,
-        }
+        !matches!(self.get_block_below_player(), None | Some(Block::Air))
     }
 
     fn get_block_below_player(&self) -> Option<Block> {
@@ -808,9 +809,22 @@ mod tests {
         return game;
     }
 
+    fn set_up_player_in_zero_g_frictionless_vacuum() -> Game {
+        let mut game = set_up_player_in_zero_g();
+        game.player_acceleration_from_traction = 0.0;
+        game.player_deceleration_from_air_friction = 0.0;
+        return game;
+    }
+
     fn set_up_player_on_platform() -> Game {
         let mut game = set_up_just_player();
         game.place_line_of_blocks((10, 10), (20, 10), Block::Wall);
+        return game;
+    }
+
+    fn set_up_player_starting_to_move_right_on_platform() -> Game {
+        let mut game = set_up_player_on_platform();
+        game.player_desired_direction = p(1, 0);
         return game;
     }
 
@@ -1887,7 +1901,6 @@ mod tests {
     #[test]
     fn test_can_turn_around_midair_around_after_a_wall_jump() {
         let mut game = set_up_player_hanging_on_wall_on_left();
-        game.player_max_midair_speed = 999.0;
         game.player_deceleration_from_air_friction = 0.0;
         let start_vx = game.player_vel_bpf.x();
         game.player_jump_if_possible();
@@ -1929,7 +1942,7 @@ mod tests {
 
     #[test]
     fn test_movement_compensates_for_non_square_grid() {
-        let mut game = set_up_player_in_zero_g();
+        let mut game = set_up_player_in_zero_g_frictionless_vacuum();
         let start_pos = game.player_pos;
 
         game.player_vel_bpf = p(1.0, 1.0);
@@ -1940,5 +1953,19 @@ mod tests {
     #[test]
     fn test_fps_display() {
         let mut game = set_up_game();
+    }
+
+    #[test]
+    fn test_no_jump_if_not_touching_floor() {
+        let mut game = set_up_player_on_platform();
+        game.player_pos.add_assign(p(0.0, 0.1));
+        assert!(!game.player_can_jump());
+    }
+
+    #[test]
+    fn test_player_not_standing_on_block_if_slightly_above_block() {
+        let mut game = set_up_player_on_platform();
+        game.player_pos.add_assign(p(0.0, 0.1));
+        assert!(!game.player_is_standing_on_block());
     }
 }
