@@ -242,8 +242,11 @@ pub fn accelerate_within_max_speed(
     }
 }
 
-pub fn to_non_square(val: f32, multiplier: f32) -> Point<f32> {
-    p(val, val * multiplier)
+pub fn compensate_for_vertical_stretch(
+    before: Point<f32>,
+    vertical_stretch_factor: f32,
+) -> Point<f32> {
+    p(before.x(), before.y() / vertical_stretch_factor)
 }
 
 #[cfg(test)]
@@ -503,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn test_to_non_square_simple() {
-        assert!(to_non_square(5.0, 2.0) == p(5.0, 10.0));
+    fn test_compensate_for_vertical_stretch() {
+        assert!(compensate_for_vertical_stretch(p(5.0, 2.0), 2.0) == p(5.0, 1.0));
     }
 }

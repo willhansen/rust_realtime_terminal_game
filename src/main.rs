@@ -49,11 +49,11 @@ const DEFAULT_PLAYER_JUMP_DELTA_V: f32 = 1.0;
 const VERTICAL_STRETCH_FACTOR: f32 = 2.0; // because the grid is not really square
 
 const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
-const DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION_AX: f32 = 1.0;
-const DEFAULT_PLAYER_MAX_RUN_VX: f32 = 0.5;
-const DEFAULT_PLAYER_DASH_VX: f32 = DEFAULT_PLAYER_MAX_RUN_VX * 3.0;
-const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION_AX: f32 = 0.0;
-const DEFAULT_PLAYER_MIDAIR_MAX_SPEED_VX: f32 = 999.0;
+const DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION: f32 = 1.0;
+const DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED: f32 = 0.5;
+const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED * 3.0;
+const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
+const DEFAULT_PLAYER_MIDAIR_SOFT_MAX_SPEED: f32 = 999.0;
 
 // These have no positional information
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -134,24 +134,24 @@ impl Game {
             player_alive: false,
             player_pos: p(0.0, 0.0),
             recent_player_poses: VecDeque::<Point<f32>>::new(),
-            player_max_run_speed_bpf: DEFAULT_PLAYER_MAX_RUN_VX,
-            player_max_midair_speed: DEFAULT_PLAYER_MIDAIR_MAX_SPEED_VX,
+            player_max_run_speed_bpf: DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED,
+            player_max_midair_speed: DEFAULT_PLAYER_MIDAIR_SOFT_MAX_SPEED,
             player_color_change_speed_threshold: magnitude(p(
-                DEFAULT_PLAYER_MAX_RUN_VX,
+                DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED,
                 DEFAULT_PLAYER_JUMP_DELTA_V,
             )),
             player_vel_bpf: Point::<f32>::new(0.0, 0.0),
             player_desired_direction: p(0, 0),
             player_jump_delta_v: DEFAULT_PLAYER_JUMP_DELTA_V,
             player_acceleration_from_gravity: DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
-            player_acceleration_from_traction: DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION_AX,
-            player_deceleration_from_air_friction: DEFAULT_PLAYER_AIR_FRICTION_DECELERATION_AX,
+            player_acceleration_from_traction: DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION,
+            player_deceleration_from_air_friction: DEFAULT_PLAYER_AIR_FRICTION_DECELERATION,
             player_remaining_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
             player_max_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
             num_positions_per_block_to_check_for_collisions:
                 NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS,
             is_bullet_time: false,
-            player_dash_vel: DEFAULT_PLAYER_DASH_VX,
+            player_dash_vel: DEFAULT_PLAYER_DASH_SPEED,
         }
     }
 
@@ -335,7 +335,8 @@ impl Game {
     fn tick_physics(&mut self) {
         self.apply_gravity_to_blocks();
         if self.player_alive {
-            self.apply_player_motion();
+            self.apply_forces_to_player();
+            self.apply_player_kinematics();
         }
     }
 
@@ -521,11 +522,10 @@ impl Game {
             .add_assign(p(0.0, -self.player_acceleration_from_gravity));
     }
 
-    fn apply_player_motion(&mut self) {
-        self.update_player_acceleration();
-
+    fn apply_player_kinematics(&mut self) {
         let start_point = self.player_pos;
-        let mut remaining_step: Point<f32> = self.player_vel_bpf;
+        let mut remaining_step: Point<f32> =
+            compensate_for_vertical_stretch(self.player_vel_bpf, VERTICAL_STRETCH_FACTOR);
         let mut current_start_point = start_point;
         let actual_endpoint: Point<f32>;
         let mut current_target = start_point + remaining_step;
@@ -581,7 +581,7 @@ impl Game {
         }
     }
 
-    fn update_player_acceleration(&mut self) {
+    fn apply_forces_to_player(&mut self) {
         if self.player_is_grabbing_wall() && self.player_vel_bpf.y() <= 0.0 {
             self.apply_player_wall_friction();
         } else {
@@ -1881,11 +1881,16 @@ mod tests {
         assert!(game.player_pos.y() < start_y_pos);
     }
 
-    #[ignore]
     // Dashing up looks way faster than dashing sideways.  Bad.
     #[test]
-    fn compensate_for_non_square_grid() {
-        let game = set_up_game();
-        assert!(game.player_dash_vel.x() * VERTICAL_STRETCH_FACTOR == game.player_dash_vel.y());
+    fn test_movement_compensates_for_non_square_grid() {
+        let mut game = set_up_just_player();
+        game.player_acceleration_from_gravity = 0.0;
+        let start_pos = game.player_pos;
+
+        game.player_vel_bpf = p(1.0, 1.0);
+        game.tick_physics();
+        let movement = game.player_pos - start_pos;
+        assert!(movement.x() == movement.y() * VERTICAL_STRETCH_FACTOR);
     }
 }
