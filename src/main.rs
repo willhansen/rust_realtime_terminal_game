@@ -39,17 +39,21 @@ const NUM_SAVED_PLAYER_POSES: i32 = 10;
 const NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS: f32 = 8.0;
 
 // a block every two ticks
-const DEFAULT_PLAYER_MAX_RUN_SPEED_BPF: f32 = 0.5;
-const DEFAULT_PLAYER_JUMP_DELTA_V: f32 = 1.0;
-const DEFAULT_PLAYER_DASH_V: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED_BPF * 3.0;
-const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
-const DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION: f32 = 1.0;
 const DEFAULT_PLAYER_COYOTE_TIME_DURATION_S: f32 = 0.1;
 const DEFAULT_PLAYER_MAX_COYOTE_FRAMES: i32 =
     ((DEFAULT_PLAYER_COYOTE_TIME_DURATION_S * MAX_FPS as f32) + 1.0) as i32;
 const PLAYER_SNAP_TO_GRID_ON_STOP: bool = false;
-const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
-const DEFAULT_PLAYER_MIDAIR_MAX_SPEED: f32 = 999.0;
+
+const DEFAULT_PLAYER_JUMP_DELTA_V: f32 = 1.0;
+
+const VERTICAL_STRETCH_FACTOR: f32 = 2.0; // because the grid is not really square
+
+const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
+const DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION_AX: f32 = 1.0;
+const DEFAULT_PLAYER_MAX_RUN_VX: f32 = 0.5;
+const DEFAULT_PLAYER_DASH_VX: f32 = DEFAULT_PLAYER_MAX_RUN_VX * 3.0;
+const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION_AX: f32 = 0.0;
+const DEFAULT_PLAYER_MIDAIR_MAX_SPEED_VX: f32 = 999.0;
 
 // These have no positional information
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -132,18 +136,18 @@ impl Game {
             player_alive: false,
             player_pos: p(0.0, 0.0),
             recent_player_poses: VecDeque::<Point<f32>>::new(),
-            player_max_run_speed_bpf: DEFAULT_PLAYER_MAX_RUN_SPEED_BPF,
-            player_max_midair_speed: DEFAULT_PLAYER_MIDAIR_MAX_SPEED,
+            player_max_run_speed_bpf: DEFAULT_PLAYER_MAX_RUN_VX,
+            player_max_midair_speed: DEFAULT_PLAYER_MIDAIR_MAX_SPEED_VX,
             player_color_change_speed_threshold: magnitude(p(
-                DEFAULT_PLAYER_MAX_RUN_SPEED_BPF,
+                DEFAULT_PLAYER_MAX_RUN_VX,
                 DEFAULT_PLAYER_JUMP_DELTA_V,
             )),
             player_vel_bpf: Point::<f32>::new(0.0, 0.0),
             player_desired_direction: p(0, 0),
             player_jump_delta_v: DEFAULT_PLAYER_JUMP_DELTA_V,
             player_acceleration_from_gravity: DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
-            player_acceleration_from_traction: DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION,
-            player_deceleration_from_air_friction: DEFAULT_PLAYER_AIR_FRICTION_DECELERATION,
+            player_acceleration_from_traction: DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION_AX,
+            player_deceleration_from_air_friction: DEFAULT_PLAYER_AIR_FRICTION_DECELERATION_AX,
             player_remaining_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
             player_max_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
             num_positions_per_block_to_check_for_collisions:
@@ -151,7 +155,7 @@ impl Game {
             is_bullet_time: false,
             device_state: None,
             held_keys: Vec::<Keycode>::new(),
-            player_dash_vel: DEFAULT_PLAYER_DASH_V,
+            player_dash_vel: DEFAULT_PLAYER_DASH_VX,
         }
     }
 
@@ -497,17 +501,21 @@ impl Game {
     }
 
     fn player_is_grabbing_wall(&self) -> bool {
-        self.player_is_pressing_against_wall()
+        self.player_is_pressing_against_wall_horizontally()
             && self.player_vel_bpf.y() <= 0.0
             && !self.player_is_standing_on_block()
     }
 
     fn player_is_running_up_wall(&self) -> bool {
-        self.player_is_pressing_against_wall() && self.player_vel_bpf.y() > 0.0
+        self.player_is_pressing_against_wall_horizontally() && self.player_vel_bpf.y() > 0.0
     }
 
-    fn player_is_pressing_against_wall(&self) -> bool {
-        if let Some(block) = self.get_block_relative_to_player(self.player_desired_direction) {
+    fn player_is_pressing_against_wall_horizontally(&self) -> bool {
+        if self.player_desired_direction.x() == 0 {
+            return false;
+        }
+        let horizontal_desired_direction = p(self.player_desired_direction.x(), 0);
+        if let Some(block) = self.get_block_relative_to_player(horizontal_desired_direction) {
             return block.wall_grabbable();
         }
         return false;
@@ -1909,7 +1917,6 @@ mod tests {
         assert!(end_vx < vx_one_frame_into_jump);
     }
 
-    // There's missing coolness here.  especially when jumping and immediately dashing down
     #[test]
     fn show_dash_visuals_even_if_hit_wall_in_first_frame() {
         let mut game = set_up_player_on_platform();
@@ -1923,13 +1930,21 @@ mod tests {
         assert!(game.get_player_color() == PLAYER_HIGH_SPEED_COLOR);
     }
 
-    #[ignore]
-    // Not yet at least
     #[test]
-    fn do_not_hang_onto_ceiling() {}
+    fn do_not_hang_onto_ceiling() {
+        let mut game = set_up_player_on_platform();
+        game.player_pos.add_assign(p(0.0, -2.0));
+        game.player_desired_direction = p(0, 1);
+        let start_y_pos = game.player_pos.y();
+        game.tick_physics();
+        assert!(game.player_pos.y() < start_y_pos);
+    }
 
     #[ignore]
     // Dashing up looks way faster than dashing sideways.  Bad.
     #[test]
-    fn compensate_for_non_square_grid() {}
+    fn compensate_for_non_square_grid() {
+        let game = set_up_game();
+        assert!(game.player_dash_vel.x() * VERTICAL_FACTOR == game.player_dash_vel.y());
+    }
 }

@@ -242,6 +242,10 @@ pub fn accelerate_within_max_speed(
     }
 }
 
+pub fn to_non_square(val: f32, multiplier: f32) -> Point<f32> {
+    p(val, val * multiplier)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,5 +500,10 @@ mod tests {
     #[test]
     fn test_accelerate_within_max_speed_negative_speeding_up() {
         assert!(accelerate_within_max_speed(-1.0, -1, 10.0, 0.5) == -1.5);
+    }
+
+    #[test]
+    fn test_to_non_square_simple() {
+        assert!(to_non_square(5.0, 2.0) == p(5.0, 10.0));
     }
 }
