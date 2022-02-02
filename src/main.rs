@@ -42,7 +42,6 @@ const NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS: f32 = 8.0;
 const DEFAULT_PLAYER_COYOTE_TIME_DURATION_S: f32 = 0.1;
 const DEFAULT_PLAYER_MAX_COYOTE_FRAMES: i32 =
     ((DEFAULT_PLAYER_COYOTE_TIME_DURATION_S * MAX_FPS as f32) + 1.0) as i32;
-const PLAYER_SNAP_TO_GRID_ON_STOP: bool = false;
 
 const DEFAULT_PLAYER_JUMP_DELTA_V: f32 = 1.0;
 
@@ -54,6 +53,8 @@ const DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED: f32 = 0.5;
 const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED * 3.0;
 const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
 const DEFAULT_PLAYER_MIDAIR_SOFT_MAX_SPEED: f32 = 999.0;
+
+const DEFAULT_BULLET_TIME_FACTOR: f32 = 0.1;
 
 // These have no positional information
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -118,6 +119,7 @@ struct Game {
     player_max_coyote_frames: i32,
     num_positions_per_block_to_check_for_collisions: f32,
     is_bullet_time: bool,
+    bullet_time_factor: f32,
     player_dash_vel: f32,
 }
 
@@ -151,6 +153,7 @@ impl Game {
             num_positions_per_block_to_check_for_collisions:
                 NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS,
             is_bullet_time: false,
+            bullet_time_factor: DEFAULT_BULLET_TIME_FACTOR,
             player_dash_vel: DEFAULT_PLAYER_DASH_SPEED,
         }
     }
@@ -332,12 +335,24 @@ impl Game {
         }
     }
 
-    fn tick_physics(&mut self) {
+    fn apply_physics(&mut self, dt_in_ticks: f32) {
         self.apply_gravity_to_blocks();
         if self.player_alive {
-            self.apply_forces_to_player();
-            self.apply_player_kinematics();
+            self.apply_forces_to_player(dt_in_ticks);
+            self.apply_player_kinematics(dt_in_ticks);
         }
+    }
+
+    fn get_time_factor(&self) -> f32 {
+        return if self.is_bullet_time {
+            self.bullet_time_factor
+        } else {
+            1.0
+        };
+    }
+
+    fn tick_physics(&mut self) {
+        self.apply_physics(self.get_time_factor());
     }
 
     fn get_player_color(&self) -> ColorName {
@@ -491,41 +506,42 @@ impl Game {
         return false;
     }
 
-    fn apply_player_wall_friction(&mut self) {
+    fn apply_player_wall_friction(&mut self, dt_in_ticks: f32) {
         self.player_vel_bpf.set_y(decelerate_linearly_to_cap(
             self.player_vel_bpf.y(),
             0.0,
-            self.player_acceleration_from_traction,
+            self.player_acceleration_from_traction * dt_in_ticks,
         ));
     }
 
-    fn apply_player_floor_traction(&mut self) {
+    fn apply_player_floor_traction(&mut self, dt_in_ticks: f32) {
         self.player_vel_bpf.set_x(accelerate_within_max_speed(
             self.player_vel_bpf.x(),
             self.player_desired_direction.x(),
             self.player_max_run_speed_bpf,
-            self.player_acceleration_from_traction,
+            self.player_acceleration_from_traction * dt_in_ticks,
         ));
     }
 
-    fn apply_player_air_traction(&mut self) {
+    fn apply_player_air_traction(&mut self, dt_in_ticks: f32) {
         self.player_vel_bpf.set_x(accelerate_within_max_speed(
             self.player_vel_bpf.x(),
             self.player_desired_direction.x(),
             self.player_max_run_speed_bpf,
-            self.player_acceleration_from_traction,
+            self.player_acceleration_from_traction * dt_in_ticks,
         ));
     }
 
-    fn apply_player_acceleration_from_gravity(&mut self) {
+    fn apply_player_acceleration_from_gravity(&mut self, dt_in_ticks: f32) {
         self.player_vel_bpf
-            .add_assign(p(0.0, -self.player_acceleration_from_gravity));
+            .add_assign(p(0.0, -self.player_acceleration_from_gravity * dt_in_ticks));
     }
 
-    fn apply_player_kinematics(&mut self) {
+    fn apply_player_kinematics(&mut self, dt_in_ticks: f32) {
         let start_point = self.player_pos;
         let mut remaining_step: Point<f32> =
-            compensate_for_vertical_stretch(self.player_vel_bpf, VERTICAL_STRETCH_FACTOR);
+            compensate_for_vertical_stretch(self.player_vel_bpf, VERTICAL_STRETCH_FACTOR)
+                * dt_in_ticks;
         let mut current_start_point = start_point;
         let actual_endpoint: Point<f32>;
         let mut current_target = start_point + remaining_step;
@@ -581,26 +597,26 @@ impl Game {
         }
     }
 
-    fn apply_forces_to_player(&mut self) {
+    fn apply_forces_to_player(&mut self, dt_in_ticks: f32) {
         if self.player_is_grabbing_wall() && self.player_vel_bpf.y() <= 0.0 {
-            self.apply_player_wall_friction();
+            self.apply_player_wall_friction(dt_in_ticks);
         } else {
             if !self.player_is_supported() {
-                self.apply_player_air_friction();
-                self.apply_player_air_traction();
-                self.apply_player_acceleration_from_gravity();
+                self.apply_player_air_friction(dt_in_ticks);
+                self.apply_player_air_traction(dt_in_ticks);
+                self.apply_player_acceleration_from_gravity(dt_in_ticks);
             } else {
-                self.apply_player_floor_friction();
-                self.apply_player_floor_traction();
+                self.apply_player_floor_friction(dt_in_ticks);
+                self.apply_player_floor_traction(dt_in_ticks);
             }
         }
     }
 
-    fn apply_player_air_friction(&mut self) {
+    fn apply_player_air_friction(&mut self, dt_in_ticks: f32) {
         self.player_vel_bpf.set_x(decelerate_linearly_to_cap(
             self.player_vel_bpf.x(),
             self.player_max_midair_speed,
-            self.player_deceleration_from_air_friction,
+            self.player_deceleration_from_air_friction * dt_in_ticks,
         ));
 
         self.player_vel_bpf.set_y(decelerate_linearly_to_cap(
@@ -610,11 +626,11 @@ impl Game {
         ));
     }
 
-    fn apply_player_floor_friction(&mut self) {
+    fn apply_player_floor_friction(&mut self, dt_in_ticks: f32) {
         self.player_vel_bpf.set_x(decelerate_linearly_to_cap(
             self.player_vel_bpf.x(),
             self.player_max_run_speed_bpf,
-            self.player_acceleration_from_traction,
+            self.player_acceleration_from_traction * dt_in_ticks,
         ));
     }
 
@@ -783,6 +799,12 @@ mod tests {
     fn set_up_just_player() -> Game {
         let mut game = set_up_game();
         game.place_player(15.0, 11.0);
+        return game;
+    }
+
+    fn set_up_player_in_zero_g() -> Game {
+        let mut game = set_up_just_player();
+        game.player_acceleration_from_gravity = 0.0;
         return game;
     }
 
@@ -1533,11 +1555,10 @@ mod tests {
 
     #[test]
     fn test_slow_down_to_exactly_max_speed_vertically_midair() {
-        let mut game = set_up_just_player();
+        let mut game = set_up_player_in_zero_g();
         game.player_desired_direction = p(0, 1);
         game.player_max_midair_speed = 10.0;
         game.player_deceleration_from_air_friction = 1.0;
-        game.player_acceleration_from_gravity = 0.0;
         let vy = game.player_max_midair_speed + game.player_deceleration_from_air_friction * 0.9;
         game.player_vel_bpf = p(0.0, vy);
         game.tick_physics();
@@ -1546,11 +1567,10 @@ mod tests {
 
     #[test]
     fn test_air_friction_has_no_slowdown_overshoot() {
-        let mut game = set_up_just_player();
+        let mut game = set_up_player_in_zero_g();
         game.player_desired_direction = p(1, 0);
         game.player_max_midair_speed = 10.0;
         game.player_deceleration_from_air_friction = 1.0;
-        game.player_acceleration_from_gravity = 0.0;
         game.player_acceleration_from_traction = 0.0;
         let start_vx =
             game.player_max_midair_speed + game.player_deceleration_from_air_friction * 0.9;
@@ -1812,6 +1832,32 @@ mod tests {
         assert!(!game.is_bullet_time);
     }
 
+    #[test]
+    fn test_bullet_time_slows_down_motion() {
+        let mut game = set_up_player_in_zero_g();
+        game.player_acceleration_from_traction = 0.0;
+        game.player_vel_bpf = p(1.0, 0.0);
+        let start_x = game.player_pos.x();
+        game.bullet_time_factor = 0.5;
+        game.toggle_bullet_time();
+        game.tick_physics();
+        let expected_end_x = game.player_vel_bpf.x() * game.bullet_time_factor + start_x;
+        assert!(game.player_pos.x() == expected_end_x);
+    }
+
+    #[test]
+    fn test_bullet_time_slows_down_acceleration_from_gravity() {
+        let mut game = set_up_just_player();
+        game.player_acceleration_from_gravity = 1.0;
+        let start_vy = game.player_vel_bpf.y();
+        game.bullet_time_factor = 0.5;
+        game.toggle_bullet_time();
+        game.tick_physics();
+        let expected_end_vy =
+            -game.player_acceleration_from_gravity * game.bullet_time_factor + start_vy;
+        assert!(game.player_vel_bpf.y() == expected_end_vy);
+    }
+
     #[ignore]
     // bounciness probably feels good
     #[test]
@@ -1883,13 +1929,16 @@ mod tests {
 
     #[test]
     fn test_movement_compensates_for_non_square_grid() {
-        let mut game = set_up_just_player();
-        game.player_acceleration_from_gravity = 0.0;
+        let mut game = set_up_player_in_zero_g();
         let start_pos = game.player_pos;
 
         game.player_vel_bpf = p(1.0, 1.0);
         game.tick_physics();
         let movement = game.player_pos - start_pos;
         assert!(movement.x() == movement.y() * VERTICAL_STRETCH_FACTOR);
+    }
+    #[test]
+    fn test_fps_display() {
+        let mut game = set_up_game();
     }
 }
