@@ -694,6 +694,7 @@ impl Game {
 
     fn player_is_standing_on_block(&self) -> bool {
         !matches!(self.get_block_below_player(), None | Some(Block::Air))
+            && offset_from_grid(self.player_pos).y() == 0.0
     }
 
     fn get_block_below_player(&self) -> Option<Block> {
@@ -1870,6 +1871,20 @@ mod tests {
         let expected_end_vy =
             -game.player_acceleration_from_gravity * game.bullet_time_factor + start_vy;
         assert!(game.player_vel_bpf.y() == expected_end_vy);
+    }
+
+    #[ignore]
+    // The real puzzler here is the accelerations that go exactly to a speed and no further.  They make it hard to factor things out.
+    #[test]
+    fn test_bullet_time_slows_down_traction_acceleration() {
+        let mut game1 = set_up_player_starting_to_move_right_on_platform();
+        let mut game2 = set_up_player_starting_to_move_right_on_platform();
+        game1.toggle_bullet_time();
+
+        game1.tick_physics();
+        game2.tick_physics();
+
+        assert!(game1.player_vel_bpf.x() < game2.player_vel_bpf.x());
     }
 
     #[ignore]
