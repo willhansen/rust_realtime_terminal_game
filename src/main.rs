@@ -118,8 +118,6 @@ struct Game {
     player_max_coyote_frames: i32,
     num_positions_per_block_to_check_for_collisions: f32,
     is_bullet_time: bool,
-    device_state: Option<DeviceState>,
-    held_keys: Vec<Keycode>,
     player_dash_vel: f32,
 }
 
@@ -153,8 +151,6 @@ impl Game {
             num_positions_per_block_to_check_for_collisions:
                 NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS,
             is_bullet_time: false,
-            device_state: None,
-            held_keys: Vec::<Keycode>::new(),
             player_dash_vel: DEFAULT_PLAYER_DASH_VX,
         }
     }
@@ -334,33 +330,6 @@ impl Game {
             },
             _ => {}
         }
-    }
-
-    fn update_held_keys(&mut self) {
-        if self.device_state.is_none() {
-            panic!("Device state not initialized");
-        }
-        self.held_keys = self.device_state.as_ref().unwrap().get_keys();
-    }
-
-    fn process_held_keys(&mut self) {
-        self.player_desired_direction = p(0, 0);
-        if self.held_keys.contains(&Keycode::Left) || self.held_keys.contains(&Keycode::A) {
-            self.player_desired_direction.add_assign(p(-1, 0));
-        }
-        if self.held_keys.contains(&Keycode::Right) || self.held_keys.contains(&Keycode::D) {
-            self.player_desired_direction.add_assign(p(1, 0));
-        }
-        if self.held_keys.contains(&Keycode::Up) || self.held_keys.contains(&Keycode::W) {
-            self.player_desired_direction.add_assign(p(0, 1));
-        }
-        if self.held_keys.contains(&Keycode::Down) || self.held_keys.contains(&Keycode::S) {
-            self.player_desired_direction.add_assign(p(0, -1));
-        }
-    }
-
-    fn init_device_state(&mut self, device_state: DeviceState) {
-        self.device_state = Some(device_state);
     }
 
     fn tick_physics(&mut self) {
@@ -762,8 +731,6 @@ fn main() {
     let (width, height) = termion::terminal_size().unwrap();
     let mut game = Game::new(width, height);
     let mut stdout = MouseTerminal::from(stdout().into_raw_mode().unwrap());
-
-    //game.init_device_state(DeviceState::new());
 
     write!(
         stdout,
@@ -1846,32 +1813,6 @@ mod tests {
     }
 
     #[ignore]
-    // Couldn't get the library working.  Also there is the elitism of playing over ssh
-    #[test]
-    fn test_movement_based_on_held_keys() {
-        let mut game = set_up_player_on_platform();
-        let start_desired_direction = game.player_desired_direction;
-        game.held_keys.clear();
-        game.held_keys.push(Keycode::Right);
-        game.process_held_keys();
-        assert!(game.player_desired_direction == p(1, 0));
-        game.held_keys.clear();
-        game.held_keys.push(Keycode::Left);
-        game.process_held_keys();
-        assert!(game.player_desired_direction == p(-1, 0));
-        game.held_keys.clear();
-        game.held_keys.push(Keycode::D);
-        game.held_keys.push(Keycode::Left);
-        game.process_held_keys();
-        assert!(game.player_desired_direction == p(0, 0));
-        game.held_keys.clear();
-        game.held_keys.push(Keycode::Right);
-        game.held_keys.push(Keycode::W);
-        game.process_held_keys();
-        assert!(game.player_desired_direction == p(1, 1));
-    }
-
-    #[ignore]
     // bounciness probably feels good
     #[test]
     fn test_player_compresses_like_a_spring_when_colliding_at_high_speed() {
@@ -1945,6 +1886,6 @@ mod tests {
     #[test]
     fn compensate_for_non_square_grid() {
         let game = set_up_game();
-        assert!(game.player_dash_vel.x() * VERTICAL_FACTOR == game.player_dash_vel.y());
+        assert!(game.player_dash_vel.x() * VERTICAL_STRETCH_FACTOR == game.player_dash_vel.y());
     }
 }
