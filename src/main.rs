@@ -1881,7 +1881,6 @@ mod tests {
         assert!(game.player_pos.y() < start_y_pos);
     }
 
-    // Dashing up looks way faster than dashing sideways.  Bad.
     #[test]
     fn test_movement_compensates_for_non_square_grid() {
         let mut game = set_up_just_player();
