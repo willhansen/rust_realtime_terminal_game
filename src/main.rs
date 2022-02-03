@@ -94,12 +94,24 @@ impl Block {
     }
 }
 
+struct Particle {
+    pos: Point<f32>,
+    ticks_to_expiry: f32,
+}
+
+impl Particle {
+    fn glyph(&self) -> Glyph {
+        Glyph::world_pos_to_colored_braille_glyph(self.pos, ColorName::Blue)
+    }
+}
+
 struct Game {
     grid: Vec<Vec<Block>>,             // (x,y), left to right, top to bottom
     output_buffer: Vec<Vec<Glyph>>,    // (x,y), left to right, top to bottom
     output_on_screen: Vec<Vec<Glyph>>, // (x,y), left to right, top to bottom
-    terminal_size: (u16, u16),         // (width, height)
-    prev_mouse_pos: (i32, i32),        // where mouse was last frame (if pressed)
+    particles: Vec<Particle>,
+    terminal_size: (u16, u16),  // (width, height)
+    prev_mouse_pos: (i32, i32), // where mouse was last frame (if pressed)
     // last_pressed_key: Option<termion::event::Key>,
     running: bool,         // set false to quit
     selected_block: Block, // What the mouse places
@@ -129,6 +141,7 @@ impl Game {
             grid: vec![vec![Block::Air; height as usize]; width as usize],
             output_buffer: vec![vec![Glyph::from_char(' '); height as usize]; width as usize],
             output_on_screen: vec![vec![Glyph::from_char('x'); height as usize]; width as usize],
+            particles: Vec::<Particle>::new(),
             terminal_size: (width, height),
             prev_mouse_pos: (1, 1),
             running: true,
@@ -213,6 +226,17 @@ impl Game {
 
     fn place_block(&mut self, pos: Point<i32>, block: Block) {
         self.grid[pos.x() as usize][pos.y() as usize] = block;
+    }
+
+    fn place_particle(&mut self, pos: Point<f32>) {
+        self.particles.push(Particle {
+            pos,
+            ticks_to_expiry: f32::INFINITY,
+        })
+    }
+
+    fn draw_visual_braille_point(&mut self, pos: Point<f32>, color: ColorName) {
+        self.draw_visual_braille_line(pos, pos, color);
     }
 
     fn draw_visual_braille_line(
@@ -390,6 +414,8 @@ impl Game {
             self.draw_speed_lines();
         }
 
+        self.draw_particles();
+
         let player_glyphs = self.get_player_glyphs();
         let grid_pos = snap_to_grid(self.player_pos);
 
@@ -404,6 +430,21 @@ impl Game {
                     }
                 }
             }
+        }
+    }
+
+    fn draw_particles(&mut self) {
+        for i in 0..self.particles.len() {
+            let particle_square = snap_to_grid(self.particles[i].pos);
+            let mut grid_glyph = self.get_buffered_glyph(particle_square).clone();
+            let particle_glyph = self.particles[i].glyph();
+            if Glyph::is_braille(grid_glyph.character) {
+                grid_glyph.character =
+                    Glyph::add_braille(particle_glyph.character, grid_glyph.character);
+            } else {
+                grid_glyph = particle_glyph;
+            }
+            self.set_buffered_glyph(particle_square, particle_glyph);
         }
     }
 
@@ -439,6 +480,9 @@ impl Game {
 
     fn get_buffered_glyph(&self, pos: Point<i32>) -> &Glyph {
         return &self.output_buffer[pos.x() as usize][pos.y() as usize];
+    }
+    fn set_buffered_glyph(&mut self, pos: Point<i32>, new_glyph: Glyph) {
+        self.output_buffer[pos.x() as usize][pos.y() as usize] = new_glyph;
     }
     fn get_glyph_on_screen(&self, pos: Point<i32>) -> &Glyph {
         return &self.output_on_screen[pos.x() as usize][pos.y() as usize];
@@ -1682,7 +1726,7 @@ mod tests {
 
     #[test]
     fn test_drawn_braille_adds_instead_of_overwrites() {
-        let mut game = Game::new(30, 30);
+        let mut game = set_up_game();
         let start_square = p(12, 5);
         let color = ColorName::Blue;
         let start_upper_line = floatify(start_square) + p(-0.1, 0.1);
@@ -1704,6 +1748,23 @@ mod tests {
         assert!(game.get_buffered_glyph(start_square + p(0, 0)).character == '\u{28D2}');
         assert!(game.get_buffered_glyph(start_square + p(1, 0)).character == '\u{28D2}');
         assert!(game.get_buffered_glyph(start_square + p(2, 0)).character == '\u{2842}');
+    }
+    #[test]
+    fn test_braille_point() {
+        let mut game = set_up_game();
+        // Expected braille:
+        // 00 01 00
+        // 00 00 00
+        // 00 00 00
+        // 00 00 00
+
+        // 00 00 00
+        // 00 00 00
+        // 00 00 00
+        // 00 00 00
+
+        game.draw_visual_braille_point(p(1.0, 1.4), ColorName::Blue);
+        assert!(game.get_buffered_glyph(p(1, 1)).character == '\u{2808}');
     }
 
     #[test]
@@ -1982,5 +2043,25 @@ mod tests {
         let mut game = set_up_player_on_platform();
         game.player_pos.add_assign(p(0.0, 0.1));
         assert!(!game.player_is_standing_on_block());
+    }
+
+    #[test]
+    fn test_place_particle() {
+        let mut game = set_up_game();
+        let pos = p(5.0, 5.0);
+        game.place_particle(pos);
+        assert!(game.particles.len() == 1);
+        assert!(game.particles[0].pos == pos);
+    }
+    #[test]
+    fn test_draw_placed_particle() {
+        let mut game = set_up_game();
+        let pos = p(5.0, 5.0);
+        game.place_particle(pos);
+        game.update_output_buffer();
+        assert!(
+            *game.get_buffered_glyph(snap_to_grid(pos))
+                == Glyph::world_pos_to_colored_braille_glyph(pos, ColorName::Blue)
+        );
     }
 }

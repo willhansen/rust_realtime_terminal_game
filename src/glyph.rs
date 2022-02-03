@@ -311,7 +311,7 @@ impl Glyph {
         Glyph::get_glyphs_for_colored_braille_line(start_pos, end_pos, ColorName::White)
     }
 
-    pub fn character_pos_to_braille_pos(pos: Point<f32>) -> Point<f32> {
+    pub fn world_pos_to_braille_pos(pos: Point<f32>) -> Point<f32> {
         p(pos.x() * 2.0 + 0.5, pos.y() * 4.0 + 1.5)
     }
 
@@ -333,9 +333,8 @@ impl Glyph {
     ) -> Vec<Vec<Option<Glyph>>> {
         let start_grid_square = snap_to_grid(start_pos);
         let end_grid_square = snap_to_grid(end_pos);
-        let start_braille_grid_square =
-            snap_to_grid(Glyph::character_pos_to_braille_pos(start_pos));
-        let end_braille_grid_square = snap_to_grid(Glyph::character_pos_to_braille_pos(end_pos));
+        let start_braille_grid_square = snap_to_grid(Glyph::world_pos_to_braille_pos(start_pos));
+        let end_braille_grid_square = snap_to_grid(Glyph::world_pos_to_braille_pos(end_pos));
 
         let grid_diagonal = end_grid_square - start_grid_square;
         let grid_width = grid_diagonal.x().abs() + 1;
@@ -354,16 +353,16 @@ impl Glyph {
         ) {
             let character_grid_square =
                 Glyph::braille_grid_to_character_grid(p(x, y)) - grid_origin_square;
-            let maybe_glyph = &mut output_grid[character_grid_square.x() as usize]
+            let glyph_in_grid = &mut output_grid[character_grid_square.x() as usize]
                 [character_grid_square.y() as usize];
-            if *maybe_glyph == None {
-                *maybe_glyph = Some(Glyph {
+            if *glyph_in_grid == None {
+                *glyph_in_grid = Some(Glyph {
                     character: Glyph::empty_braille(),
                     fg_color: color,
                     bg_color: ColorName::Black,
                 });
             }
-            let braille_character = &mut (*maybe_glyph).as_mut().unwrap().character;
+            let braille_character = &mut (*glyph_in_grid).as_mut().unwrap().character;
             *braille_character = Glyph::add_braille_dot(
                 *braille_character,
                 Glyph::braille_square_to_dot_in_character(p(x, y)),
@@ -371,7 +370,26 @@ impl Glyph {
         }
         return output_grid;
     }
+
+    pub fn world_pos_to_braille_char(world_pos: Point<f32>) -> char {
+        let character = Glyph::empty_braille();
+        Glyph::add_braille_dot(
+            character,
+            Glyph::braille_square_to_dot_in_character(snap_to_grid(
+                Glyph::world_pos_to_braille_pos(world_pos),
+            )),
+        )
+    }
+
+    pub fn world_pos_to_colored_braille_glyph(world_pos: Point<f32>, color: ColorName) -> Glyph {
+        Glyph {
+            character: Glyph::world_pos_to_braille_char(world_pos),
+            fg_color: color,
+            bg_color: ColorName::Black,
+        }
+    }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,9 +657,9 @@ mod tests {
 
     #[test]
     fn test_character_pos_to_braille_pos() {
-        assert!(Glyph::character_pos_to_braille_pos(p(0.0, 0.0)) == p(0.5, 1.5));
-        assert!(Glyph::character_pos_to_braille_pos(p(1.0, 0.0)) == p(2.5, 1.5));
-        assert!(Glyph::character_pos_to_braille_pos(p(0.25, 0.375)) == p(1.0, 3.0));
+        assert!(Glyph::world_pos_to_braille_pos(p(0.0, 0.0)) == p(0.5, 1.5));
+        assert!(Glyph::world_pos_to_braille_pos(p(1.0, 0.0)) == p(2.5, 1.5));
+        assert!(Glyph::world_pos_to_braille_pos(p(0.25, 0.375)) == p(1.0, 3.0));
     }
 
     #[test]
@@ -656,5 +674,23 @@ mod tests {
     fn test_combine_braille_character() {
         assert!(Glyph::add_braille('\u{2800}', '\u{2820}') == '\u{2820}');
         assert!(Glyph::add_braille('\u{2801}', '\u{28C0}') == '\u{28C1}');
+    }
+
+    #[test]
+    fn test_world_point_to_braille_char() {
+        assert!(Glyph::world_pos_to_braille_char(p(0.0, 0.0)) == '\u{2810}');
+        assert!(Glyph::world_pos_to_braille_char(p(-0.4, -0.4)) == '\u{2840}');
+        assert!(Glyph::world_pos_to_braille_char(p(0.2, 0.4)) == '\u{2808}');
+    }
+
+    #[test]
+    fn test_world_point_to_braille_glyph() {
+        let points = [p(0.0, 0.0), p(-0.4, -0.4), p(0.2, 0.4)];
+        for p1 in points {
+            assert!(
+                Glyph::world_pos_to_colored_braille_glyph(p1, ColorName::Black).character
+                    == Glyph::world_pos_to_braille_char(p1)
+            );
+        }
     }
 }
