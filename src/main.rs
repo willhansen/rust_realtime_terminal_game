@@ -228,6 +228,18 @@ impl Game {
         self.grid[pos.x() as usize][pos.y() as usize] = block;
     }
 
+    fn place_line_of_particles(&mut self, pos0: Point<f32>, pos1: Point<f32>) {
+        let braille_pos0 = Glyph::world_pos_to_braille_pos(pos0);
+        let braille_pos1 = Glyph::world_pos_to_braille_pos(pos1);
+        for (x, y) in line_drawing::Bresenham::new(
+            snap_to_grid(braille_pos0).x_y(),
+            snap_to_grid(braille_pos1).x_y(),
+        ) {
+            let particle_pos = Glyph::braille_pos_to_world_pos(p(x as f32, y as f32));
+            self.place_particle(particle_pos);
+        }
+    }
+
     fn place_particle(&mut self, pos: Point<f32>) {
         self.particles.push(Particle {
             pos,
@@ -368,6 +380,9 @@ impl Game {
         if self.player_alive {
             self.apply_forces_to_player(dt_in_ticks);
             self.apply_player_kinematics(dt_in_ticks);
+            if self.player_is_officially_fast() {
+                self.make_speed_lines();
+            }
         }
     }
 
@@ -410,10 +425,6 @@ impl Game {
             }
         }
 
-        if self.player_is_officially_fast() {
-            self.draw_speed_lines();
-        }
-
         self.draw_particles();
 
         let player_glyphs = self.get_player_glyphs();
@@ -448,7 +459,7 @@ impl Game {
         }
     }
 
-    fn draw_speed_lines(&mut self) {
+    fn make_speed_lines(&mut self) {
         if let Some(&last_pos) = self.recent_player_poses.get(0) {
             // draw all corners
             let mut offsets = Vec::<Point<f32>>::new();
@@ -465,11 +476,7 @@ impl Game {
                 }
             }
             for offset in offsets {
-                self.draw_visual_braille_line(
-                    last_pos + offset,
-                    self.player_pos + offset,
-                    self.get_player_color(),
-                );
+                self.place_line_of_particles(last_pos + offset, self.player_pos + offset);
             }
         }
     }
@@ -2026,10 +2033,10 @@ mod tests {
         let movement = game.player_pos - start_pos;
         assert!(movement.x() == movement.y() * VERTICAL_STRETCH_FACTOR);
     }
+
+    #[ignore]
     #[test]
-    fn test_fps_display() {
-        let mut game = set_up_game();
-    }
+    fn test_fps_display() {}
 
     #[test]
     fn test_no_jump_if_not_touching_floor() {
@@ -2063,5 +2070,15 @@ mod tests {
             *game.get_buffered_glyph(snap_to_grid(pos))
                 == Glyph::world_pos_to_colored_braille_glyph(pos, ColorName::Blue)
         );
+    }
+
+    #[test]
+    fn test_speed_lines_are_particles() {
+        let mut game = set_up_just_player();
+        game.player_desired_direction = p(1, 0);
+        let start_pos = game.player_pos;
+        game.player_dash();
+        game.tick_physics();
+        assert!(!game.particles.is_empty());
     }
 }

@@ -315,6 +315,10 @@ impl Glyph {
         p(pos.x() * 2.0 + 0.5, pos.y() * 4.0 + 1.5)
     }
 
+    pub fn braille_pos_to_world_pos(pos: Point<f32>) -> Point<f32> {
+        p((pos.x() - 0.5) / 2.0, (pos.y() - 1.5) / 4.0)
+    }
+
     pub fn braille_square_to_dot_in_character(pos: Point<i32>) -> Point<i32> {
         p((pos.x() % 2).abs(), (pos.y() % 4).abs())
     }
@@ -656,10 +660,17 @@ mod tests {
     }
 
     #[test]
-    fn test_character_pos_to_braille_pos() {
+    fn test_world_pos_to_braille_pos() {
         assert!(Glyph::world_pos_to_braille_pos(p(0.0, 0.0)) == p(0.5, 1.5));
         assert!(Glyph::world_pos_to_braille_pos(p(1.0, 0.0)) == p(2.5, 1.5));
         assert!(Glyph::world_pos_to_braille_pos(p(0.25, 0.375)) == p(1.0, 3.0));
+    }
+
+    #[test]
+    fn test_braille_pos_to_world_pos() {
+        assert!(Glyph::braille_pos_to_world_pos(p(0.5, 1.5)) == p(0.0, 0.0));
+        assert!(Glyph::braille_pos_to_world_pos(p(2.5, 1.5)) == p(1.0, 0.0));
+        assert!(Glyph::braille_pos_to_world_pos(p(1.0, 3.0)) == p(0.25, 0.375));
     }
 
     #[test]
