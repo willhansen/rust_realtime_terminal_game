@@ -50,9 +50,9 @@ const VERTICAL_STRETCH_FACTOR: f32 = 2.0; // because the grid is not really squa
 const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
 const DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION: f32 = 1.0;
 const DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED: f32 = 0.5;
-const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED * 3.0;
+const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED * 5.0;
 const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
-const DEFAULT_PLAYER_MIDAIR_SOFT_MAX_SPEED: f32 = 999.0;
+const DEFAULT_PLAYER_MIDAIR_SOFT_MAX_SPEED: f32 = 5.0;
 
 const DEFAULT_BULLET_TIME_FACTOR: f32 = 0.1;
 
@@ -94,6 +94,7 @@ impl Block {
     }
 }
 
+#[derive(PartialEq, Debug)]
 struct Particle {
     pos: Point<f32>,
     ticks_to_expiry: f32,
@@ -245,6 +246,21 @@ impl Game {
             pos,
             ticks_to_expiry: f32::INFINITY,
         })
+    }
+
+    fn get_particles_in_square(&self, square: Point<i32>) -> Vec<&Particle> {
+        self.particles
+            .iter()
+            .filter(|particle| snap_to_grid(particle.pos) == square)
+            .collect()
+    }
+
+    fn count_braille_dots_in_square(&self, square: Point<i32>) -> i32 {
+        return if self.in_world(square) {
+            Glyph::count_braille_dots(self.get_buffered_glyph(square).character)
+        } else {
+            0
+        };
     }
 
     fn draw_visual_braille_point(&mut self, pos: Point<f32>, color: ColorName) {
@@ -427,17 +443,19 @@ impl Game {
 
         self.draw_particles();
 
-        let player_glyphs = self.get_player_glyphs();
-        let grid_pos = snap_to_grid(self.player_pos);
+        if self.player_alive {
+            let player_glyphs = self.get_player_glyphs();
+            let grid_pos = snap_to_grid(self.player_pos);
 
-        for i in 0..player_glyphs.len() {
-            for j in 0..player_glyphs[i].len() {
-                if let Some(glyph) = player_glyphs[i][j] {
-                    let x = grid_pos.x() - 1 + i as i32;
-                    let y = grid_pos.y() - 1 + j as i32;
+            for i in 0..player_glyphs.len() {
+                for j in 0..player_glyphs[i].len() {
+                    if let Some(glyph) = player_glyphs[i][j] {
+                        let x = grid_pos.x() - 1 + i as i32;
+                        let y = grid_pos.y() - 1 + j as i32;
 
-                    if self.in_world(p(x, y)) {
-                        self.output_buffer[x as usize][y as usize] = glyph;
+                        if self.in_world(p(x, y)) {
+                            self.output_buffer[x as usize][y as usize] = glyph;
+                        }
                     }
                 }
             }
@@ -455,7 +473,7 @@ impl Game {
             } else {
                 grid_glyph = particle_glyph;
             }
-            self.set_buffered_glyph(particle_square, particle_glyph);
+            self.set_buffered_glyph(particle_square, grid_glyph);
         }
     }
 
@@ -2080,5 +2098,55 @@ mod tests {
         game.player_dash();
         game.tick_physics();
         assert!(!game.particles.is_empty());
+    }
+
+    #[test]
+    fn test_get_particles_in_square() {
+        let mut game = set_up_game();
+        game.place_particle(p(0.0, 0.0));
+        game.place_particle(p(5.0, 5.0));
+        game.place_particle(p(5.1, 5.0));
+        game.place_particle(p(6.5, 5.0));
+        game.place_particle(p(6.5, 5.0));
+        game.place_particle(p(6.5, 5.0));
+        game.place_particle(p(6.5, 5.0));
+
+        assert!(game.get_particles_in_square(p(10, 10)).len() == 0);
+        assert!(game.get_particles_in_square(p(0, 0)).len() == 1);
+        assert!(game.get_particles_in_square(p(5, 5)).len() == 2);
+        assert!(game.get_particles_in_square(p(6, 5)).len() == 0);
+        assert!(game.get_particles_in_square(p(7, 5)).len() == 4);
+        assert!(game.get_particles_in_square(p(-7, -5)).len() == 0);
+    }
+    #[test]
+    fn test_count_braille_dots_in_square() {
+        let mut game = set_up_game();
+        game.place_particle(p(0.0, 0.0));
+        game.place_particle(p(5.0, 5.0));
+        game.place_particle(p(5.1, 5.0));
+
+        game.place_particle(p(6.5, 5.0));
+        game.place_particle(p(6.5, 5.0));
+        game.place_particle(p(6.5, 5.0));
+        game.place_particle(p(6.5, 5.0));
+
+        game.update_output_buffer();
+
+        assert!(game.count_braille_dots_in_square(p(10, 10)) == 0);
+        assert!(game.count_braille_dots_in_square(p(0, 0)) == 1);
+        assert!(game.count_braille_dots_in_square(p(5, 5)) == 1);
+        assert!(game.count_braille_dots_in_square(p(6, 5)) == 0);
+        assert!(game.count_braille_dots_in_square(p(7, 5)) == 1);
+        assert!(game.count_braille_dots_in_square(p(-7, -5)) == 0);
+    }
+
+    #[test]
+    fn test_particle_lines_can_visually_fill_square() {
+        let mut game = set_up_game();
+        game.place_line_of_particles(p(5.1, 6.0), p(5.1, 4.0));
+        game.place_line_of_particles(p(4.9, 6.0), p(4.9, 4.0));
+        game.update_output_buffer();
+        assert!(game.get_particles_in_square(p(5, 5)).len() == 8);
+        assert!(game.count_braille_dots_in_square(p(5, 5)) == 8);
     }
 }

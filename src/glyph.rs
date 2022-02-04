@@ -300,6 +300,19 @@ impl Glyph {
         x >= 0x2800 && x <= 0x28FF
     }
 
+    pub fn count_braille_dots(character: char) -> i32 {
+        if !Glyph::is_braille(character) {
+            return 0;
+        }
+        let num_good_bits = 8;
+        let mut sum = 0;
+        let bits = character as u32;
+        for i in 0..num_good_bits {
+            sum += (bits >> i) & 1;
+        }
+        return sum as i32;
+    }
+
     pub fn add_braille(c1: char, c2: char) -> char {
         char::from_u32(c1 as u32 | c2 as u32).unwrap()
     }
@@ -703,5 +716,15 @@ mod tests {
                     == Glyph::world_pos_to_braille_char(p1)
             );
         }
+    }
+
+    #[test]
+    fn test_count_braille_dots() {
+        assert!(Glyph::count_braille_dots('\u{2800}') == 0);
+        assert!(Glyph::count_braille_dots('\u{2818}') == 2);
+        assert!(Glyph::count_braille_dots('\u{28C0}') == 2);
+        assert!(Glyph::count_braille_dots('\u{28FF}') == 8);
+        assert!(Glyph::count_braille_dots('A') == 0);
+        assert!(Glyph::count_braille_dots('#') == 0);
     }
 }
