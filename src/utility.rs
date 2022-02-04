@@ -1,10 +1,12 @@
 extern crate geo;
+extern crate rand;
 
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Point};
 use num::clamp;
 use num::traits::Pow;
+use rand::Rng;
 
 pub fn p<T: 'static>(x: T, y: T) -> Point<T>
 where
@@ -247,6 +249,16 @@ pub fn compensate_for_vertical_stretch(
     vertical_stretch_factor: f32,
 ) -> Point<f32> {
     p(before.x(), before.y() / vertical_stretch_factor)
+}
+
+pub fn random_direction() -> Point<f32> {
+    let mut rng = rand::thread_rng();
+    let dir = p(rng.gen::<f32>() - 0.5, rng.gen::<f32>() - 0.5) * 2.0;
+    if dir == p(0.0, 0.0) {
+        return p(1.0, 0.0);
+    } else {
+        return dir;
+    }
 }
 
 #[cfg(test)]

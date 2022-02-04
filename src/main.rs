@@ -50,11 +50,15 @@ const VERTICAL_STRETCH_FACTOR: f32 = 2.0; // because the grid is not really squa
 const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
 const DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION: f32 = 1.0;
 const DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED: f32 = 0.5;
-const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED * 5.0;
+const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED * 3.0;
 const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
 const DEFAULT_PLAYER_MIDAIR_SOFT_MAX_SPEED: f32 = 5.0;
 
 const DEFAULT_BULLET_TIME_FACTOR: f32 = 0.1;
+const DEFAULT_PARTICLE_LIFETIME_IN_SECONDS: f32 = 0.5;
+const DEFAULT_PARTICLE_LIFETIME_IN_TICKS: f32 =
+    DEFAULT_PARTICLE_LIFETIME_IN_SECONDS * MAX_FPS as f32;
+const DEFAULT_PARTICLE_STEP_PER_TICK: f32 = 0.03;
 
 // These have no positional information
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -65,7 +69,7 @@ enum Block {
 }
 
 impl Block {
-    fn glyph(&self) -> char {
+    fn character(&self) -> char {
         match self {
             Block::Air => ' ',
             Block::Wall => '█',
@@ -242,9 +246,13 @@ impl Game {
     }
 
     fn place_particle(&mut self, pos: Point<f32>) {
+        self.place_particle_with_lifespan(pos, DEFAULT_PARTICLE_LIFETIME_IN_TICKS)
+    }
+
+    fn place_particle_with_lifespan(&mut self, pos: Point<f32>, lifespan_in_ticks: f32) {
         self.particles.push(Particle {
             pos,
-            ticks_to_expiry: f32::INFINITY,
+            ticks_to_expiry: lifespan_in_ticks,
         })
     }
 
@@ -400,6 +408,7 @@ impl Game {
                 self.make_speed_lines();
             }
         }
+        self.apply_particle_physics(dt_in_ticks);
     }
 
     fn get_time_factor(&self) -> f32 {
@@ -412,6 +421,42 @@ impl Game {
 
     fn tick_physics(&mut self) {
         self.apply_physics(self.get_time_factor());
+    }
+
+    fn tick_particles(&mut self) {
+        self.apply_particle_physics(self.get_time_factor());
+    }
+
+    fn apply_particle_physics(&mut self, dt_in_ticks: f32) {
+        self.particles.iter_mut().for_each(|particle| {
+            particle.ticks_to_expiry -= dt_in_ticks;
+            particle.pos.add_assign(
+                direction(random_direction()) * DEFAULT_PARTICLE_STEP_PER_TICK * dt_in_ticks,
+            );
+        });
+
+        self.particles
+            .retain(|particle| particle.ticks_to_expiry > 0.0);
+
+        self.delete_particles_out_of_world();
+    }
+
+    fn delete_particles_out_of_world(&mut self) {
+        let particles_are_in_world: Vec<bool> = self
+            .particles
+            .iter()
+            .map(|particle| self.in_world(snap_to_grid(particle.pos)))
+            .collect();
+
+        particles_are_in_world
+            .into_iter()
+            .enumerate()
+            .filter(|(i, is_in_world)| !*is_in_world)
+            .map(|(i, _)| i)
+            .rev()
+            .for_each(|i| {
+                self.particles.remove(i);
+            });
     }
 
     fn get_player_color(&self) -> ColorName {
@@ -437,7 +482,7 @@ impl Game {
         let height = self.grid[0].len();
         for x in 0..width {
             for y in 0..height {
-                self.output_buffer[x][y] = Glyph::from_char(self.grid[x][y].glyph());
+                self.output_buffer[x][y] = Glyph::from_char(self.grid[x][y].character());
             }
         }
 
@@ -1337,7 +1382,7 @@ mod tests {
         assert!(
             game.get_buffered_glyph(snap_to_grid(game.player_pos + p(0.0, -1.0)))
                 .character
-                == Block::Wall.glyph()
+                == Block::Wall.character()
         );
     }
 
@@ -2148,5 +2193,69 @@ mod tests {
         game.update_output_buffer();
         assert!(game.get_particles_in_square(p(5, 5)).len() == 8);
         assert!(game.count_braille_dots_in_square(p(5, 5)) == 8);
+    }
+    #[test]
+    fn test_particles_can_expire() {
+        let point = p(5.0, 5.0);
+        let mut game = set_up_game();
+        game.place_particle_with_lifespan(point, 1.0);
+        game.place_particle_with_lifespan(point, 2.0);
+        assert!(game.particles.len() == 2);
+        game.tick_particles();
+        assert!(game.particles.len() == 1);
+        game.tick_particles();
+        assert!(game.particles.is_empty());
+    }
+
+    #[test]
+    fn test_dead_particles_are_not_drawn() {
+        let point = p(5.0, 5.0);
+        let mut game = set_up_game();
+        game.place_particle_with_lifespan(point, 1.0);
+        game.update_output_buffer();
+        game.tick_particles();
+        game.update_output_buffer();
+        assert!(game.get_buffered_glyph(snap_to_grid(point)).character == Block::Air.character());
+    }
+    #[test]
+    fn test_particles_move_around() {
+        let point = p(5.0, 5.0);
+        let mut game = set_up_game();
+        game.place_particle(point);
+        let start_pos = game.particles[0].pos;
+        game.tick_particles();
+        let end_pos = game.particles[0].pos;
+        assert!(start_pos != end_pos);
+    }
+
+    #[test]
+    fn test_particles_die_when_out_of_map() {
+        let mut game = set_up_game();
+        let point = p(50.0, 50.0);
+        game.place_particle(point);
+        game.delete_particles_out_of_world();
+        assert!(game.particles.is_empty());
+    }
+
+    #[test]
+    fn test_particle_movement_slowed_by_bullet_time() {
+        let mut game1 = set_up_game();
+        let mut game2 = set_up_game();
+        game1.toggle_bullet_time();
+        let start_pos = p(5.0, 5.0);
+        game1.place_particle(start_pos);
+        game2.place_particle(start_pos);
+
+        game1.tick_particles();
+        game2.tick_particles();
+
+        let end_pos_1 = game1.particles[0].pos;
+        let end_pos_2 = game2.particles[0].pos;
+        let diff1 = end_pos_1 - start_pos;
+        let diff2 = end_pos_2 - start_pos;
+
+        dbg!(magnitude(diff1));
+        dbg!(magnitude(diff2));
+        assert!((magnitude(diff1) / game1.bullet_time_factor - magnitude(diff2)).abs() < 0.000001);
     }
 }
