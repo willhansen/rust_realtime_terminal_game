@@ -570,24 +570,32 @@ impl Game {
     }
 
     fn get_player_glyphs(&self) -> Vec<Vec<Option<Glyph>>> {
-        let player_compression = self.get_player_compression();
-        if player_compression == 1.0 {
-            return Glyph::get_glyphs_for_colored_floating_square(
-                self.player_pos,
-                self.get_player_color(),
-            );
+        if self.get_player_compression() == 1.0 {
+            Glyph::get_glyphs_for_colored_floating_square(self.player_pos, self.get_player_color())
         } else {
-            return vec![
+            vec![
                 vec![None, None, None],
-                vec![
-                    None,
-                    Some(Glyph::from_char(
-                        EIGHTH_BLOCKS_FROM_BOTTOM[(player_compression * 8.0) as usize],
-                    )),
-                    None,
-                ],
+                vec![None, Some(self.get_compressed_player_glyph()), None],
                 vec![None, None, None],
-            ];
+            ]
+        }
+    }
+
+    fn get_compressed_player_glyph(&self) -> Glyph {
+        let player_compression = self.get_player_compression();
+        let collision_normal = self.player_normal_of_last_collision.unwrap();
+        if collision_normal.x() != 0 {
+            Glyph::colored_square_with_horizontal_offset(
+                -collision_normal.x().sign() as f32 * player_compression,
+                self.get_player_color(),
+            )
+        } else if collision_normal.y() != 0 {
+            Glyph::colored_square_with_vertical_offset(
+                -collision_normal.y().sign() as f32 * player_compression,
+                self.get_player_color(),
+            )
+        } else {
+            panic!("There was a collision with no normal.  What?");
         }
     }
 
@@ -2333,7 +2341,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collision_tracking_accounts_for_bullet_time() {
+    fn test_last_collision_tracking_accounts_for_bullet_time() {
         let mut game = set_up_player_on_platform();
         game.player_vel_bpf = p(0.0, -1.0);
         game.tick_physics();
@@ -2362,6 +2370,28 @@ mod tests {
         game.player_normal_of_last_collision = Some(p(0, 1));
         let player_glyphs = game.get_player_glyphs();
         assert!(EIGHTH_BLOCKS_FROM_BOTTOM[1..8].contains(&player_glyphs[1][1].unwrap().character));
+    }
+
+    #[test]
+    fn test_compress_horizontally_on_wall_collision() {
+        let mut game = set_up_just_player();
+        game.player_ticks_from_last_collision = Some(DEFAULT_TICKS_TO_MAX_COMPRESSION / 2.0);
+        game.player_normal_of_last_collision = Some(p(1, 0));
+        let player_glyphs = game.get_player_glyphs();
+        assert!(EIGHTH_BLOCKS_FROM_LEFT[1..8].contains(&player_glyphs[1][1].unwrap().character));
+    }
+
+    #[test]
+    fn test_player_compression_characters_appear_in_correct_sequence_for_floor_collisions() {
+        let mut game = set_up_just_player();
+        game.player_normal_of_last_collision = Some(p(0, 1));
+
+        let mut chars_in_compression_start = Vec::<char>::new();
+        for t in 0..=DEFAULT_TICKS_TO_MAX_COMPRESSION as i32 {
+            game.player_ticks_from_last_collision = Some(t as f32);
+            chars_in_compression_start.push(game.get_compressed_player_glyph().character);
+        }
+        assert!(chars_in_compression_start.is_sorted());
     }
 
     #[ignore]
