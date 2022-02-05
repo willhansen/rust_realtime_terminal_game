@@ -712,6 +712,15 @@ impl Game {
                 collision_occurred = true;
                 remaining_step.add_assign(-(collision.pos - current_start_point));
 
+                let collision_speed = self
+                    .player_vel_bpf
+                    .dot(direction(floatify(collision.normal)))
+                    .abs();
+
+                self.player_normal_of_last_collision = Some(collision.normal);
+                self.player_ticks_from_last_collision = Some(0.0);
+                self.player_speed_of_last_collision = Some(collision_speed);
+
                 if collision.normal.x() != 0 {
                     self.player_vel_bpf.set_x(0.0);
                     remaining_step = project(remaining_step, p(0.0, 1.0));
@@ -721,8 +730,6 @@ impl Game {
                     remaining_step = project(remaining_step, p(1.0, 0.0));
                 }
 
-                self.player_normal_of_last_collision = Some(collision.normal);
-                self.player_ticks_from_last_collision = Some(0.0);
                 current_start_point = collision.pos;
                 current_target = current_start_point + remaining_step;
             } else {
@@ -2302,20 +2309,27 @@ mod tests {
     #[test]
     fn test_track_last_collision() {
         let mut game = set_up_player_in_corner_of_big_L();
+        game.player_acceleration_from_gravity = 0.0;
+        game.player_acceleration_from_traction = 0.0;
         game.player_pos.add_assign(p(0.01, 0.01));
         assert!(game.player_ticks_from_last_collision == None);
         assert!(game.player_normal_of_last_collision == None);
-        game.player_vel_bpf = p(0.0, -1.0);
+        let collision_speed = 5.0;
+        game.player_vel_bpf = p(0.0, -collision_speed);
         game.tick_physics();
         assert!(game.player_ticks_from_last_collision == Some(0.0));
         assert!(game.player_normal_of_last_collision == Some(p(0, 1)));
+        assert!(game.player_speed_of_last_collision == Some(collision_speed));
         game.tick_physics();
         assert!(game.player_ticks_from_last_collision == Some(1.0));
         assert!(game.player_normal_of_last_collision == Some(p(0, 1)));
-        game.player_vel_bpf = p(-10.0, 0.0);
+        assert!(game.player_speed_of_last_collision == Some(collision_speed));
+        let collision_speed = 10.0;
+        game.player_vel_bpf = p(-collision_speed, 0.0);
         game.tick_physics();
         assert!(game.player_ticks_from_last_collision == Some(0.0));
         assert!(game.player_normal_of_last_collision == Some(p(1, 0)));
+        assert!(game.player_speed_of_last_collision == Some(collision_speed));
     }
 
     #[test]
