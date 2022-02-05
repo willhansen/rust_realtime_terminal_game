@@ -1,3 +1,4 @@
+#![feature(is_sorted)]
 mod glyph;
 mod utility;
 
@@ -142,7 +143,7 @@ struct Game {
     player_dash_vel: f32,
     player_ticks_from_last_collision: Option<f32>,
     player_normal_of_last_collision: Option<Point<i32>>,
-    player_speed_of_last_collision: Option<f32>,
+    player_velocity_of_last_collision: Option<Point<f32>>,
 }
 
 impl Game {
@@ -180,7 +181,7 @@ impl Game {
             player_dash_vel: DEFAULT_PLAYER_DASH_SPEED,
             player_ticks_from_last_collision: None,
             player_normal_of_last_collision: None,
-            player_speed_of_last_collision: None,
+            player_velocity_of_last_collision: None,
         }
     }
 
@@ -586,12 +587,12 @@ impl Game {
         let collision_normal = self.player_normal_of_last_collision.unwrap();
         if collision_normal.x() != 0 {
             Glyph::colored_square_with_horizontal_offset(
-                -collision_normal.x().sign() as f32 * player_compression,
+                -collision_normal.x().sign() as f32 * (1.0 - player_compression),
                 self.get_player_color(),
             )
         } else if collision_normal.y() != 0 {
             Glyph::colored_square_with_vertical_offset(
-                -collision_normal.y().sign() as f32 * player_compression,
+                -collision_normal.y().sign() as f32 * (1.0 - player_compression),
                 self.get_player_color(),
             )
         } else {
@@ -720,14 +721,9 @@ impl Game {
                 collision_occurred = true;
                 remaining_step.add_assign(-(collision.pos - current_start_point));
 
-                let collision_speed = self
-                    .player_vel_bpf
-                    .dot(direction(floatify(collision.normal)))
-                    .abs();
-
                 self.player_normal_of_last_collision = Some(collision.normal);
                 self.player_ticks_from_last_collision = Some(0.0);
-                self.player_speed_of_last_collision = Some(collision_speed);
+                self.player_velocity_of_last_collision = Some(self.player_vel_bpf);
 
                 if collision.normal.x() != 0 {
                     self.player_vel_bpf.set_x(0.0);
@@ -2322,22 +2318,22 @@ mod tests {
         game.player_pos.add_assign(p(0.01, 0.01));
         assert!(game.player_ticks_from_last_collision == None);
         assert!(game.player_normal_of_last_collision == None);
-        let collision_speed = 5.0;
-        game.player_vel_bpf = p(0.0, -collision_speed);
+        let collision_velocity = p(0.0, -5.0);
+        game.player_vel_bpf = collision_velocity;
         game.tick_physics();
         assert!(game.player_ticks_from_last_collision == Some(0.0));
         assert!(game.player_normal_of_last_collision == Some(p(0, 1)));
-        assert!(game.player_speed_of_last_collision == Some(collision_speed));
+        assert!(game.player_velocity_of_last_collision == Some(collision_velocity));
         game.tick_physics();
         assert!(game.player_ticks_from_last_collision == Some(1.0));
         assert!(game.player_normal_of_last_collision == Some(p(0, 1)));
-        assert!(game.player_speed_of_last_collision == Some(collision_speed));
-        let collision_speed = 10.0;
-        game.player_vel_bpf = p(-collision_speed, 0.0);
+        assert!(game.player_velocity_of_last_collision == Some(collision_velocity));
+        let collision_velocity = p(-10.0, 0.0);
+        game.player_vel_bpf = collision_velocity;
         game.tick_physics();
         assert!(game.player_ticks_from_last_collision == Some(0.0));
         assert!(game.player_normal_of_last_collision == Some(p(1, 0)));
-        assert!(game.player_speed_of_last_collision == Some(collision_speed));
+        assert!(game.player_velocity_of_last_collision == Some(collision_velocity));
     }
 
     #[test]
@@ -2382,7 +2378,7 @@ mod tests {
     }
 
     #[test]
-    fn test_player_compression_characters_appear_in_correct_sequence_for_floor_collisions() {
+    fn test_player_compression_characters_for_floor_collision_appear_in_correct_sequence() {
         let mut game = set_up_just_player();
         game.player_normal_of_last_collision = Some(p(0, 1));
 
@@ -2391,7 +2387,24 @@ mod tests {
             game.player_ticks_from_last_collision = Some(t as f32);
             chars_in_compression_start.push(game.get_compressed_player_glyph().character);
         }
+
+        let mut chars_in_compression_end = Vec::<char>::new();
+        for t in DEFAULT_TICKS_TO_MAX_COMPRESSION as i32..=DEFAULT_TICKS_TO_END_COMPRESSION as i32 {
+            game.player_ticks_from_last_collision = Some(t as f32);
+            chars_in_compression_end.push(game.get_compressed_player_glyph().character);
+        }
+        dbg!(&chars_in_compression_start, &chars_in_compression_end);
+
+        assert!(*chars_in_compression_start.first().unwrap() == EIGHTH_BLOCKS_FROM_BOTTOM[8]);
+        assert!(*chars_in_compression_end.last().unwrap() == EIGHTH_BLOCKS_FROM_BOTTOM[8]);
+        assert!(
+            chars_in_compression_start.last().unwrap() == chars_in_compression_end.first().unwrap()
+        );
+
+        // reverse because of unicode char ordering
+        chars_in_compression_start.reverse();
         assert!(chars_in_compression_start.is_sorted());
+        assert!(chars_in_compression_end.is_sorted());
     }
 
     #[ignore]
