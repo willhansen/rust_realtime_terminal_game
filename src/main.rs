@@ -2365,7 +2365,9 @@ mod tests {
         game.player_ticks_from_last_collision = Some(DEFAULT_TICKS_TO_MAX_COMPRESSION / 2.0);
         game.player_normal_of_last_collision = Some(p(0, 1));
         let player_glyphs = game.get_player_glyphs();
-        assert!(EIGHTH_BLOCKS_FROM_BOTTOM[1..8].contains(&player_glyphs[1][1].unwrap().character));
+        assert!(
+            EIGHTH_BLOCKS_FROM_BOTTOM[1..8].contains(&game.get_compressed_player_glyph().character)
+        );
     }
 
     #[test]
@@ -2374,7 +2376,9 @@ mod tests {
         game.player_ticks_from_last_collision = Some(DEFAULT_TICKS_TO_MAX_COMPRESSION / 2.0);
         game.player_normal_of_last_collision = Some(p(1, 0));
         let player_glyphs = game.get_player_glyphs();
-        assert!(EIGHTH_BLOCKS_FROM_LEFT[1..8].contains(&player_glyphs[1][1].unwrap().character));
+        assert!(
+            EIGHTH_BLOCKS_FROM_LEFT[1..8].contains(&game.get_compressed_player_glyph().character)
+        );
     }
 
     #[test]
@@ -2406,6 +2410,40 @@ mod tests {
         assert!(chars_in_compression_start.is_sorted());
         assert!(chars_in_compression_end.is_sorted());
     }
+    #[ignore]
+    // maybe not a good idea?
+    #[test]
+    fn test_collision_compression_direction_based_on_collision_velocity_rather_than_collision_normal_on_ground(
+    ) {
+        let mut game = set_up_just_player();
+        game.player_normal_of_last_collision = Some(p(0, 1));
+        game.player_ticks_from_last_collision = Some(DEFAULT_TICKS_TO_MAX_COMPRESSION / 2.0);
+        game.player_velocity_of_last_collision = Some(p(10.0, -5.0));
+        let chars_for_horizontal_compression = &EIGHTH_BLOCKS_FROM_LEFT[1..8];
+        let char_of_compressed_player = game.get_compressed_player_glyph().character;
+        assert!(chars_for_horizontal_compression.contains(&char_of_compressed_player));
+    }
+
+    #[ignore]
+    // maybe not a good idea?
+    #[test]
+    fn test_collision_compression_direction_based_on_collision_velocity_rather_than_collision_normal_on_wall(
+    ) {
+        let mut game = set_up_just_player();
+        game.player_normal_of_last_collision = Some(p(-1, 0));
+        game.player_ticks_from_last_collision = Some(DEFAULT_TICKS_TO_MAX_COMPRESSION / 2.0);
+        game.player_velocity_of_last_collision = Some(p(4.0, -5.0));
+        let chars_for_vertical_compression = &EIGHTH_BLOCKS_FROM_BOTTOM[1..8];
+        let char_of_compressed_player = game.get_compressed_player_glyph().character;
+        assert!(chars_for_vertical_compression.contains(&char_of_compressed_player));
+    }
+
+    #[test]
+    fn test_leaving_floor_cancels_vertical_compression() {}
+    #[test]
+    fn test_leaving_ceiling_cancels_vertical_compression() {}
+    #[test]
+    fn test_leaving_wall_cancels_horizontal_compression() {}
 
     #[ignore]
     // like a spring
