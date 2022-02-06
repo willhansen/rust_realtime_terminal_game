@@ -52,6 +52,8 @@ const VERTICAL_STRETCH_FACTOR: f32 = 2.0; // because the grid is not really squa
 
 const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
 const DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION: f32 = 1.0;
+const DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION: f32 =
+    DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION / 5.0;
 const DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED: f32 = 0.5;
 const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED * 3.0;
 const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
@@ -137,6 +139,7 @@ struct Player {
     acceleration_from_gravity: f32,
     acceleration_from_traction: f32,
     deceleration_from_air_friction: f32,
+    deceleration_from_ground_friction: f32,
     remaining_coyote_frames: i32,
     max_coyote_frames: i32,
     dash_vel: f32,
@@ -161,6 +164,7 @@ impl Player {
             acceleration_from_gravity: DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
             acceleration_from_traction: DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION,
             deceleration_from_air_friction: DEFAULT_PLAYER_AIR_FRICTION_DECELERATION,
+            deceleration_from_ground_friction: DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION,
             remaining_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
             max_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
             dash_vel: DEFAULT_PLAYER_DASH_SPEED,
@@ -549,30 +553,49 @@ impl Game {
     }
 
     fn update_output_buffer(&mut self) {
+        self.fill_output_buffer_with_black();
+        self.draw_particles();
+        self.draw_non_air_blocks();
+
+        if self.player.alive {
+            self.draw_player();
+        }
+    }
+
+    fn draw_player(&mut self) {
+        let player_glyphs = self.get_player_glyphs();
+        let grid_pos = snap_to_grid(self.player.pos);
+
+        for i in 0..player_glyphs.len() {
+            for j in 0..player_glyphs[i].len() {
+                if let Some(glyph) = player_glyphs[i][j] {
+                    let x = grid_pos.x() - 1 + i as i32;
+                    let y = grid_pos.y() - 1 + j as i32;
+
+                    if self.in_world(p(x, y)) {
+                        self.output_buffer[x as usize][y as usize] = glyph;
+                    }
+                }
+            }
+        }
+    }
+    fn fill_output_buffer_with_black(&mut self) {
         let width = self.grid.len();
         let height = self.grid[0].len();
         for x in 0..width {
             for y in 0..height {
-                self.output_buffer[x][y] = Glyph::from_char(self.grid[x][y].character());
+                self.output_buffer[x][y] = Glyph::from_char(Block::Air.character());
             }
         }
+    }
 
-        self.draw_particles();
-
-        if self.player.alive {
-            let player_glyphs = self.get_player_glyphs();
-            let grid_pos = snap_to_grid(self.player.pos);
-
-            for i in 0..player_glyphs.len() {
-                for j in 0..player_glyphs[i].len() {
-                    if let Some(glyph) = player_glyphs[i][j] {
-                        let x = grid_pos.x() - 1 + i as i32;
-                        let y = grid_pos.y() - 1 + j as i32;
-
-                        if self.in_world(p(x, y)) {
-                            self.output_buffer[x as usize][y as usize] = glyph;
-                        }
-                    }
+    fn draw_non_air_blocks(&mut self) {
+        let width = self.grid.len();
+        let height = self.grid[0].len();
+        for x in 0..width {
+            for y in 0..height {
+                if self.grid[x][y] != Block::Air {
+                    self.output_buffer[x][y] = Glyph::from_char(self.grid[x][y].character());
                 }
             }
         }
@@ -856,7 +879,7 @@ impl Game {
         self.player.vel_bpf.set_x(decelerate_linearly_to_cap(
             self.player.vel_bpf.x(),
             self.player.max_run_speed_bpf,
-            self.player.acceleration_from_traction * dt_in_ticks,
+            self.player.deceleration_from_ground_friction * dt_in_ticks,
         ));
     }
 
@@ -2015,16 +2038,6 @@ mod tests {
         assert!(game.player.vel_bpf.x() > 0.0);
     }
 
-    #[ignore]
-    #[test]
-    // slomo is cool
-    fn test_bullet_time() {}
-
-    #[ignore]
-    // most visible in tunnels
-    #[test]
-    fn test_speed_lines_do_not_cover_blocks() {}
-
     #[test]
     fn test_prevent_clip_into_wall_when_colliding_with_internal_block_edge() {
         // data comes from observed bug reproduction
@@ -2376,7 +2389,7 @@ mod tests {
     fn test_track_last_collision() {
         let mut game = set_up_player_in_corner_of_big_L();
         game.player.acceleration_from_gravity = 0.0;
-        game.player.acceleration_from_traction = 0.0;
+        game.player.deceleration_from_ground_friction = 0.0;
         game.player.pos.add_assign(p(0.01, 0.01));
         assert!(&game.player.last_collision.is_none());
         let collision_velocity = p(0.0, -5.0);
@@ -2481,25 +2494,23 @@ mod tests {
 
     #[test]
     fn test_player_compression_characters_for_floor_collision_appear_in_correct_sequence() {
-        let mut game = set_up_just_player();
-        game.player.last_collision = Some(CollisionWithBlock {
-            time_in_ticks: game.time_in_ticks(),
-            normal: p(0, 1),
-            collider_velocity: p(0.0, -3.0),
-            collider_pos: p(5.0, 5.0),
-            collided_block_square: p(5, 4),
-        });
+        let mut game = set_up_player_on_platform();
+        game.player.vel_bpf = p(0.0, -10.0);
+        game.tick_physics();
+        assert!(game.player.last_collision.is_some());
+        assert!(game.time_since_last_player_collision().unwrap() == 0.0);
 
         let mut chars_in_compression_start = Vec::<char>::new();
-        for t in 0..=DEFAULT_TICKS_TO_MAX_COMPRESSION as i32 {
+        for t in 0..DEFAULT_TICKS_TO_MAX_COMPRESSION as i32 {
             chars_in_compression_start.push(game.get_compressed_player_glyph().character);
-            game.time_from_start_in_ticks += 1.0;
+            game.tick_physics();
         }
+        chars_in_compression_start.push(game.get_compressed_player_glyph().character);
 
         let mut chars_in_compression_end = Vec::<char>::new();
         for t in DEFAULT_TICKS_TO_MAX_COMPRESSION as i32..=DEFAULT_TICKS_TO_END_COMPRESSION as i32 {
             chars_in_compression_end.push(game.get_compressed_player_glyph().character);
-            game.time_from_start_in_ticks += 1.0;
+            game.tick_physics();
         }
         dbg!(&chars_in_compression_start, &chars_in_compression_end);
 
@@ -2595,6 +2606,20 @@ mod tests {
 
         // Assertion
         assert!(game.get_player_compression_fraction() == 1.0);
+    }
+
+    #[test]
+    fn test_particle_visuals_do_not_cover_blocks() {
+        let mut game = set_up_game();
+        let square = p(5, 5);
+
+        game.place_particle(floatify(square));
+        game.place_block(square, Block::Wall);
+        game.update_output_buffer();
+
+        let drawn_char = game.get_buffered_glyph(square).character;
+
+        assert!(drawn_char == Block::Wall.character());
     }
 
     #[ignore]
