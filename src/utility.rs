@@ -17,8 +17,9 @@ where
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub struct MovecastCollision {
-    pub pos: Point<f32>,
+    pub collider_pos: Point<f32>,
     pub normal: Point<i32>,
+    pub collided_block_square: Point<i32>,
 }
 
 pub fn single_block_movecast(
@@ -72,8 +73,9 @@ where
         collision_point - floatify(grid_square_center),
     ));
     return Some(MovecastCollision {
-        pos: collision_point,
+        collider_pos: collision_point,
         normal: collision_normal,
+        collided_block_square: grid_square_center,
     });
 }
 
@@ -261,6 +263,10 @@ pub fn random_direction() -> Point<f32> {
     }
 }
 
+pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a * (1.0 - t) + b * t
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,7 +280,7 @@ mod tests {
         let result = single_block_movecast(start, end, wall);
 
         assert!(result != None);
-        assert!(result.unwrap().pos == floatify(wall - p(1, 0)));
+        assert!(result.unwrap().collider_pos == floatify(wall - p(1, 0)));
         assert!(result.unwrap().normal == p(-1, 0));
     }
 
@@ -394,7 +400,7 @@ mod tests {
         assert!(
             single_block_movecast(start_point, end_point, block_center)
                 .unwrap()
-                .pos
+                .collider_pos
                 == p(2.0, 0.0)
         );
     }
@@ -407,7 +413,7 @@ mod tests {
         assert!(
             single_block_movecast(start_point, end_point, block_center)
                 .unwrap()
-                .pos
+                .collider_pos
                 == p(start_point.x(), 4.0)
         );
     }
@@ -420,7 +426,7 @@ mod tests {
         assert!(
             single_block_movecast(start_point, end_point, block_center)
                 .unwrap()
-                .pos
+                .collider_pos
                 == p(6.0, 1.0)
         );
     }
@@ -520,5 +526,26 @@ mod tests {
     #[test]
     fn test_compensate_for_vertical_stretch() {
         assert!(compensate_for_vertical_stretch(p(5.0, 2.0), 2.0) == p(5.0, 1.0));
+    }
+
+    #[test]
+    fn test_lerp_halfway() {
+        assert_relative_eq!(lerp(0.0, 10.0, 0.5), 5.0);
+    }
+    #[test]
+    fn test_lerp_low_bound() {
+        assert_relative_eq!(lerp(0.0, 10.0, 0.0), 0.0);
+    }
+    #[test]
+    fn test_lerp_high_bound() {
+        assert_relative_eq!(lerp(0.0, 10.0, 1.0), 10.0);
+    }
+    #[test]
+    fn test_lerp_past_low_negative_bound() {
+        assert_relative_eq!(lerp(-5.0, 5.0, -0.5), -10.0);
+    }
+    #[test]
+    fn test_lerp_within_reversed_bounds() {
+        assert_relative_eq!(lerp(100.0, 0.0, 0.2), 80.0);
     }
 }

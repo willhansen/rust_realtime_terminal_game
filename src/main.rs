@@ -8,6 +8,8 @@ extern crate line_drawing;
 extern crate num;
 extern crate std;
 extern crate termion;
+#[macro_use]
+extern crate approx;
 
 // use assert2::{assert, check};
 use crate::num::traits::Pow;
@@ -60,6 +62,7 @@ const DEFAULT_PARTICLE_LIFETIME_IN_SECONDS: f32 = 0.5;
 const DEFAULT_PARTICLE_LIFETIME_IN_TICKS: f32 =
     DEFAULT_PARTICLE_LIFETIME_IN_SECONDS * MAX_FPS as f32;
 const DEFAULT_PARTICLE_STEP_PER_TICK: f32 = 0.1;
+const DEFAULT_MAX_COMPRESSION: f32 = 0.2;
 const DEFAULT_TICKS_TO_MAX_COMPRESSION: f32 = 5.0;
 const DEFAULT_TICKS_TO_END_COMPRESSION: f32 = 10.0;
 
@@ -113,6 +116,14 @@ impl Particle {
     }
 }
 
+struct CollisionWithBlock {
+    time_in_ticks: f32,
+    normal: Point<i32>,
+    collider_velocity: Point<f32>,
+    collider_pos: Point<f32>,
+    collided_block_square: Point<i32>,
+}
+
 struct Player {
     alive: bool,
     pos: Point<f32>,
@@ -129,9 +140,7 @@ struct Player {
     remaining_coyote_frames: i32,
     max_coyote_frames: i32,
     dash_vel: f32,
-    ticks_from_last_collision: Option<f32>,
-    normal_of_last_collision: Option<Point<i32>>,
-    velocity_of_last_collision: Option<Point<f32>>,
+    last_collision: Option<CollisionWithBlock>,
 }
 
 impl Player {
@@ -155,23 +164,21 @@ impl Player {
             remaining_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
             max_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
             dash_vel: DEFAULT_PLAYER_DASH_SPEED,
-            ticks_from_last_collision: None,
-            normal_of_last_collision: None,
-            velocity_of_last_collision: None,
+            last_collision: None,
         }
     }
 }
 
 struct Game {
+    time_from_start_in_ticks: f32,
     grid: Vec<Vec<Block>>,             // (x,y), left to right, top to bottom
     output_buffer: Vec<Vec<Glyph>>,    // (x,y), left to right, top to bottom
     output_on_screen: Vec<Vec<Glyph>>, // (x,y), left to right, top to bottom
     particles: Vec<Particle>,
     terminal_size: (u16, u16),  // (width, height)
     prev_mouse_pos: (i32, i32), // where mouse was last frame (if pressed)
-    // last_pressed_key: Option<termion::event::Key>,
-    running: bool,         // set false to quit
-    selected_block: Block, // What the mouse places
+    running: bool,              // set false to quit
+    selected_block: Block,      // What the mouse places
     num_positions_per_block_to_check_for_collisions: f32,
     is_bullet_time: bool,
     bullet_time_factor: f32,
@@ -181,6 +188,7 @@ struct Game {
 impl Game {
     fn new(width: u16, height: u16) -> Game {
         Game {
+            time_from_start_in_ticks: 0.0,
             grid: vec![vec![Block::Air; height as usize]; width as usize],
             output_buffer: vec![vec![Glyph::from_char(' '); height as usize]; width as usize],
             output_on_screen: vec![vec![Glyph::from_char('x'); height as usize]; width as usize],
@@ -194,6 +202,22 @@ impl Game {
             is_bullet_time: false,
             bullet_time_factor: DEFAULT_BULLET_TIME_FACTOR,
             player: Player::new(),
+        }
+    }
+
+    fn time_in_ticks(&self) -> f32 {
+        return self.time_from_start_in_ticks;
+    }
+
+    fn time_since(&self, t: f32) -> f32 {
+        return self.time_in_ticks() - t;
+    }
+
+    fn time_since_last_player_collision(&self) -> Option<f32> {
+        if self.player.last_collision.is_some() {
+            Some(self.time_since(self.player.last_collision.as_ref().unwrap().time_in_ticks))
+        } else {
+            None
         }
     }
 
@@ -442,7 +466,9 @@ impl Game {
     }
 
     fn tick_physics(&mut self) {
-        self.apply_physics(self.get_time_factor());
+        let dt = self.get_time_factor();
+        self.time_from_start_in_ticks += dt;
+        self.apply_physics(dt);
     }
 
     fn tick_particles(&mut self) {
@@ -490,15 +516,21 @@ impl Game {
         }
     }
 
-    fn get_player_compression(&self) -> f32 {
-        if let Some(ticks_from_collision) = self.player.ticks_from_last_collision {
+    fn get_player_compression_fraction(&self) -> f32 {
+        if let Some(ticks_from_collision) = self.time_since_last_player_collision() {
             return if ticks_from_collision < DEFAULT_TICKS_TO_MAX_COMPRESSION {
-                1.0 - ticks_from_collision / 2.0 / DEFAULT_TICKS_TO_MAX_COMPRESSION
+                lerp(
+                    1.0,
+                    DEFAULT_MAX_COMPRESSION,
+                    ticks_from_collision / DEFAULT_TICKS_TO_MAX_COMPRESSION,
+                )
             } else if ticks_from_collision < DEFAULT_TICKS_TO_END_COMPRESSION {
-                (ticks_from_collision - DEFAULT_TICKS_TO_MAX_COMPRESSION)
-                    / 2.0
-                    / (DEFAULT_TICKS_TO_END_COMPRESSION - DEFAULT_TICKS_TO_MAX_COMPRESSION)
-                    + 0.5
+                lerp(
+                    DEFAULT_MAX_COMPRESSION,
+                    1.0,
+                    (ticks_from_collision - DEFAULT_TICKS_TO_MAX_COMPRESSION)
+                        / (DEFAULT_TICKS_TO_END_COMPRESSION - DEFAULT_TICKS_TO_MAX_COMPRESSION),
+                )
             } else {
                 1.0
             };
@@ -584,7 +616,7 @@ impl Game {
     }
 
     fn get_player_glyphs(&self) -> Vec<Vec<Option<Glyph>>> {
-        if self.get_player_compression() == 1.0 {
+        if self.get_player_compression_fraction() == 1.0 {
             Glyph::get_glyphs_for_colored_floating_square(self.player.pos, self.get_player_color())
         } else {
             vec![
@@ -596,8 +628,8 @@ impl Game {
     }
 
     fn get_compressed_player_glyph(&self) -> Glyph {
-        let player_compression = self.get_player_compression();
-        let collision_normal = self.player.normal_of_last_collision.unwrap();
+        let player_compression = self.get_player_compression_fraction();
+        let collision_normal = self.player.last_collision.as_ref().unwrap().normal;
         if collision_normal.x() != 0 {
             Glyph::colored_square_with_horizontal_offset(
                 -collision_normal.x().sign() as f32 * (1.0 - player_compression),
@@ -733,11 +765,15 @@ impl Game {
         loop {
             if let Some(collision) = self.movecast(current_start_point, current_target) {
                 collision_occurred = true;
-                remaining_step.add_assign(-(collision.pos - current_start_point));
+                remaining_step.add_assign(-(collision.collider_pos - current_start_point));
 
-                self.player.normal_of_last_collision = Some(collision.normal);
-                self.player.ticks_from_last_collision = Some(0.0);
-                self.player.velocity_of_last_collision = Some(self.player.vel_bpf);
+                self.player.last_collision = Some(CollisionWithBlock {
+                    time_in_ticks: self.time_in_ticks(),
+                    normal: collision.normal,
+                    collider_velocity: self.player.vel_bpf,
+                    collider_pos: collision.collider_pos,
+                    collided_block_square: collision.collided_block_square,
+                });
 
                 if collision.normal.x() != 0 {
                     self.player.vel_bpf.set_x(0.0);
@@ -748,7 +784,7 @@ impl Game {
                     remaining_step = project(remaining_step, p(1.0, 0.0));
                 }
 
-                current_start_point = collision.pos;
+                current_start_point = collision.collider_pos;
                 current_target = current_start_point + remaining_step;
             } else {
                 // should exit loop after this else
@@ -767,10 +803,6 @@ impl Game {
             step_taken = actual_endpoint - self.player.pos;
             self.save_recent_player_pose(self.player.pos);
             self.player.pos = actual_endpoint;
-        }
-
-        if !collision_occurred && self.player.ticks_from_last_collision.is_some() {
-            *self.player.ticks_from_last_collision.as_mut().unwrap() += dt_in_ticks;
         }
 
         // moved vertically => instant empty charge
@@ -867,8 +899,8 @@ impl Game {
             }
             if !collisions.is_empty() {
                 collisions.sort_by(|a, b| {
-                    let a_dist = a.pos.euclidean_distance(&start_pos);
-                    let b_dist = b.pos.euclidean_distance(&start_pos);
+                    let a_dist = a.collider_pos.euclidean_distance(&start_pos);
+                    let b_dist = b.collider_pos.euclidean_distance(&start_pos);
                     a_dist.partial_cmp(&b_dist).unwrap()
                 });
                 let closest_collision_to_start = collisions[0];
@@ -1009,7 +1041,21 @@ mod tests {
 
     fn set_up_player_on_platform() -> Game {
         let mut game = set_up_just_player();
-        game.place_line_of_blocks((10, 10), (20, 10), Block::Wall);
+        let platform_y = game.player.pos.y() as i32 - 1;
+        game.place_line_of_blocks((10, platform_y), (20, platform_y), Block::Wall);
+        return game;
+    }
+    fn set_up_player_under_platform() -> Game {
+        let mut game = set_up_just_player();
+        let platform_y = game.player.pos.y() as i32 + 1;
+        game.place_line_of_blocks((10, platform_y), (20, platform_y), Block::Wall);
+        return game;
+    }
+
+    fn set_up_player_left_of_wall() -> Game {
+        let mut game = set_up_just_player();
+        let wall_x = game.player.pos.x() as i32 + 1;
+        game.place_line_of_blocks((wall_x, 0), (wall_x, 20), Block::Wall);
         return game;
     }
 
@@ -1108,7 +1154,7 @@ mod tests {
         let result = game.movecast(p1, p2);
 
         assert!(result != None);
-        assert!(result.unwrap().pos == floatify(p_wall) + p(-1.0, 0.0));
+        assert!(result.unwrap().collider_pos == floatify(p_wall) + p(-1.0, 0.0));
         assert!(result.unwrap().normal == p(-1, 0));
     }
 
@@ -1123,7 +1169,7 @@ mod tests {
         let result = game.movecast(p1, p2);
 
         assert!(result != None);
-        assert!(result.unwrap().pos == floatify(p_wall) + p(0.0, -1.0));
+        assert!(result.unwrap().collider_pos == floatify(p_wall) + p(0.0, -1.0));
         assert!(result.unwrap().normal == p(0, -1));
     }
 
@@ -1138,7 +1184,7 @@ mod tests {
         let result = game.movecast(p1, p2);
 
         assert!(result != None);
-        assert!(result.unwrap().pos == floatify(p_wall) + p(0.0, 1.0));
+        assert!(result.unwrap().collider_pos == floatify(p_wall) + p(0.0, 1.0));
         assert!(result.unwrap().normal == p(0, 1));
     }
 
@@ -1150,15 +1196,17 @@ mod tests {
         assert!(
             game.movecast(p(15.0, 9.0), p(17.0, 11.0))
                 == Some(MovecastCollision {
-                    pos: p(15.0, 9.0),
-                    normal: p(0, -1)
+                    collider_pos: p(15.0, 9.0),
+                    normal: p(0, -1),
+                    collided_block_square: p(15, 10),
                 })
         );
         assert!(
             game.movecast(p(15.0, 9.0), p(17.0, 110.0))
                 == Some(MovecastCollision {
-                    pos: p(15.0, 9.0),
-                    normal: p(0, -1)
+                    collider_pos: p(15.0, 9.0),
+                    normal: p(0, -1),
+                    collided_block_square: p(15, 10),
                 })
         );
         assert!(game.movecast(p(1.0, 9.0), p(-17.0, 9.0)) == None);
@@ -2330,24 +2378,44 @@ mod tests {
         game.player.acceleration_from_gravity = 0.0;
         game.player.acceleration_from_traction = 0.0;
         game.player.pos.add_assign(p(0.01, 0.01));
-        assert!(game.player.ticks_from_last_collision == None);
-        assert!(game.player.normal_of_last_collision == None);
+        assert!(&game.player.last_collision.is_none());
         let collision_velocity = p(0.0, -5.0);
         game.player.vel_bpf = collision_velocity;
         game.tick_physics();
-        assert!(game.player.ticks_from_last_collision == Some(0.0));
-        assert!(game.player.normal_of_last_collision == Some(p(0, 1)));
-        assert!(game.player.velocity_of_last_collision == Some(collision_velocity));
+        assert!(game.time_since_last_player_collision() == Some(0.0));
+        assert!(game.player.last_collision.as_ref().unwrap().normal == p(0, 1));
+        assert!(
+            game.player
+                .last_collision
+                .as_ref()
+                .unwrap()
+                .collider_velocity
+                == collision_velocity
+        );
         game.tick_physics();
-        assert!(game.player.ticks_from_last_collision == Some(1.0));
-        assert!(game.player.normal_of_last_collision == Some(p(0, 1)));
-        assert!(game.player.velocity_of_last_collision == Some(collision_velocity));
+        assert!(game.time_since_last_player_collision() == Some(1.0));
+        assert!(game.player.last_collision.as_ref().unwrap().normal == p(0, 1));
+        assert!(
+            game.player
+                .last_collision
+                .as_ref()
+                .unwrap()
+                .collider_velocity
+                == collision_velocity
+        );
         let collision_velocity = p(-10.0, 0.0);
         game.player.vel_bpf = collision_velocity;
         game.tick_physics();
-        assert!(game.player.ticks_from_last_collision == Some(0.0));
-        assert!(game.player.normal_of_last_collision == Some(p(1, 0)));
-        assert!(game.player.velocity_of_last_collision == Some(collision_velocity));
+        assert!(game.time_since_last_player_collision() == Some(0.0));
+        assert!(game.player.last_collision.as_ref().unwrap().normal == p(1, 0));
+        assert!(
+            game.player
+                .last_collision
+                .as_ref()
+                .unwrap()
+                .collider_velocity
+                == collision_velocity
+        );
     }
 
     #[test]
@@ -2355,12 +2423,18 @@ mod tests {
         let mut game = set_up_player_on_platform();
         game.player.vel_bpf = p(0.0, -1.0);
         game.tick_physics();
-        assert!(game.player.ticks_from_last_collision == Some(0.0));
+        assert_relative_eq!(game.time_since_last_player_collision().unwrap(), 0.0);
         game.toggle_bullet_time();
         game.tick_physics();
-        assert!(game.player.ticks_from_last_collision == Some(game.bullet_time_factor));
+        assert_relative_eq!(
+            game.time_since_last_player_collision().unwrap(),
+            game.bullet_time_factor
+        );
         game.tick_physics();
-        assert!(game.player.ticks_from_last_collision == Some(game.bullet_time_factor * 2.0));
+        assert_relative_eq!(
+            game.time_since_last_player_collision().unwrap(),
+            game.bullet_time_factor * 2.0
+        );
     }
 
     #[test]
@@ -2369,15 +2443,20 @@ mod tests {
         game.player.vel_bpf = p(0.0, -10.0);
         game.tick_physics();
         game.tick_physics();
-        assert!(game.get_player_compression() < 1.0);
-        assert!(game.get_player_compression() > 0.0);
+        assert!(game.get_player_compression_fraction() < 1.0);
+        assert!(game.get_player_compression_fraction() > 0.0);
     }
 
     #[test]
     fn test_player_compression_overrides_visuals() {
         let mut game = set_up_just_player();
-        game.player.ticks_from_last_collision = Some(DEFAULT_TICKS_TO_MAX_COMPRESSION / 2.0);
-        game.player.normal_of_last_collision = Some(p(0, 1));
+        game.player.last_collision = Some(CollisionWithBlock {
+            time_in_ticks: game.time_in_ticks() - DEFAULT_TICKS_TO_MAX_COMPRESSION / 2.0,
+            normal: p(0, 1),
+            collider_velocity: p(0.0, -3.0),
+            collider_pos: p(5.0, 5.0),
+            collided_block_square: p(5, 4),
+        });
         let player_glyphs = game.get_player_glyphs();
         assert!(
             EIGHTH_BLOCKS_FROM_BOTTOM[1..8].contains(&game.get_compressed_player_glyph().character)
@@ -2387,8 +2466,13 @@ mod tests {
     #[test]
     fn test_compress_horizontally_on_wall_collision() {
         let mut game = set_up_just_player();
-        game.player.ticks_from_last_collision = Some(DEFAULT_TICKS_TO_MAX_COMPRESSION / 2.0);
-        game.player.normal_of_last_collision = Some(p(1, 0));
+        game.player.last_collision = Some(CollisionWithBlock {
+            time_in_ticks: game.time_in_ticks() - DEFAULT_TICKS_TO_MAX_COMPRESSION / 2.0,
+            normal: p(1, 0),
+            collider_velocity: p(0.0, -3.0),
+            collider_pos: p(5.0, 5.0),
+            collided_block_square: p(5, 4),
+        }); // parts of this don't add up, but they shouldn't need to
         let player_glyphs = game.get_player_glyphs();
         assert!(
             EIGHTH_BLOCKS_FROM_LEFT[1..8].contains(&game.get_compressed_player_glyph().character)
@@ -2398,18 +2482,24 @@ mod tests {
     #[test]
     fn test_player_compression_characters_for_floor_collision_appear_in_correct_sequence() {
         let mut game = set_up_just_player();
-        game.player.normal_of_last_collision = Some(p(0, 1));
+        game.player.last_collision = Some(CollisionWithBlock {
+            time_in_ticks: game.time_in_ticks(),
+            normal: p(0, 1),
+            collider_velocity: p(0.0, -3.0),
+            collider_pos: p(5.0, 5.0),
+            collided_block_square: p(5, 4),
+        });
 
         let mut chars_in_compression_start = Vec::<char>::new();
         for t in 0..=DEFAULT_TICKS_TO_MAX_COMPRESSION as i32 {
-            game.player.ticks_from_last_collision = Some(t as f32);
             chars_in_compression_start.push(game.get_compressed_player_glyph().character);
+            game.time_from_start_in_ticks += 1.0;
         }
 
         let mut chars_in_compression_end = Vec::<char>::new();
         for t in DEFAULT_TICKS_TO_MAX_COMPRESSION as i32..=DEFAULT_TICKS_TO_END_COMPRESSION as i32 {
-            game.player.ticks_from_last_collision = Some(t as f32);
             chars_in_compression_end.push(game.get_compressed_player_glyph().character);
+            game.time_from_start_in_ticks += 1.0;
         }
         dbg!(&chars_in_compression_start, &chars_in_compression_end);
 
@@ -2430,9 +2520,9 @@ mod tests {
     fn test_collision_compression_direction_based_on_collision_velocity_rather_than_collision_normal_on_ground(
     ) {
         let mut game = set_up_just_player();
-        game.player.normal_of_last_collision = Some(p(0, 1));
-        game.player.ticks_from_last_collision = Some(DEFAULT_TICKS_TO_MAX_COMPRESSION / 2.0);
-        game.player.velocity_of_last_collision = Some(p(10.0, -5.0));
+        //game.player.normal_of_last_collision = Some(p(0, 1));
+        //game.player.ticks_from_last_collision = Some(DEFAULT_TICKS_TO_MAX_COMPRESSION / 2.0);
+        //game.player.velocity_of_last_collision = Some(p(10.0, -5.0));
         let chars_for_horizontal_compression = &EIGHTH_BLOCKS_FROM_LEFT[1..8];
         let char_of_compressed_player = game.get_compressed_player_glyph().character;
         assert!(chars_for_horizontal_compression.contains(&char_of_compressed_player));
@@ -2444,20 +2534,68 @@ mod tests {
     fn test_collision_compression_direction_based_on_collision_velocity_rather_than_collision_normal_on_wall(
     ) {
         let mut game = set_up_just_player();
-        game.player.normal_of_last_collision = Some(p(-1, 0));
-        game.player.ticks_from_last_collision = Some(DEFAULT_TICKS_TO_MAX_COMPRESSION / 2.0);
-        game.player.velocity_of_last_collision = Some(p(4.0, -5.0));
+        //game.player.normal_of_last_collision = Some(p(-1, 0));
+        //game.player.ticks_from_last_collision = Some(DEFAULT_TICKS_TO_MAX_COMPRESSION / 2.0);
+        //game.player.velocity_of_last_collision = Some(p(4.0, -5.0));
         let chars_for_vertical_compression = &EIGHTH_BLOCKS_FROM_BOTTOM[1..8];
         let char_of_compressed_player = game.get_compressed_player_glyph().character;
         assert!(chars_for_vertical_compression.contains(&char_of_compressed_player));
     }
 
+    #[ignore]
     #[test]
-    fn test_leaving_floor_cancels_vertical_compression() {}
+    fn test_leaving_floor_cancels_vertical_compression() {
+        // Assignment
+        let mut game = set_up_player_on_platform();
+        //game.player.pos.add_assign(p(0.0, 0.1));
+        game.player.vel_bpf = p(0.0, -10.0);
+        game.tick_physics();
+        game.tick_physics();
+        assert!(game.time_since_last_player_collision() == Some(1.0));
+        assert!(game.get_player_compression_fraction() < 1.0);
+
+        // Action
+        game.player_jump_if_possible();
+        game.tick_physics();
+
+        // Assertion
+        assert!(game.get_player_compression_fraction() == 1.0);
+    }
+    #[ignore]
     #[test]
-    fn test_leaving_ceiling_cancels_vertical_compression() {}
+    fn test_leaving_ceiling_cancels_vertical_compression() {
+        // Assignment
+        let mut game = set_up_player_under_platform();
+        //game.player.pos.add_assign(p(0.0, 0.1));
+        game.player.vel_bpf = p(0.0, 10.0);
+        game.tick_physics();
+        assert!(game.time_since_last_player_collision() == Some(0.0));
+
+        // Action
+        game.tick_physics();
+
+        // Assertion
+        assert!(game.get_player_compression_fraction() == 1.0);
+    }
+    #[ignore]
     #[test]
-    fn test_leaving_wall_cancels_horizontal_compression() {}
+    fn test_leaving_wall_cancels_horizontal_compression() {
+        // Assignment
+        let mut game = set_up_player_left_of_wall();
+        //game.player.pos.add_assign(p(0.0, 0.1));
+        game.player.vel_bpf = p(10.0, 0.0);
+        game.tick_physics();
+        game.tick_physics();
+        assert!(game.time_since_last_player_collision() == Some(1.0));
+        assert!(game.get_player_compression_fraction() < 1.0);
+
+        // Action
+        game.player.vel_bpf = p(-0.1, 0.0);
+        game.tick_physics();
+
+        // Assertion
+        assert!(game.get_player_compression_fraction() == 1.0);
+    }
 
     #[ignore]
     // like a spring
