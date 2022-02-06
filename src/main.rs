@@ -43,8 +43,8 @@ const NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS: f32 = 8.0;
 
 // a block every two ticks
 const DEFAULT_PLAYER_COYOTE_TIME_DURATION_S: f32 = 0.1;
-const DEFAULT_PLAYER_MAX_COYOTE_FRAMES: i32 =
-    ((DEFAULT_PLAYER_COYOTE_TIME_DURATION_S * MAX_FPS as f32) + 1.0) as i32;
+const DEFAULT_PLAYER_MAX_COYOTE_TIME: f32 =
+    (DEFAULT_PLAYER_COYOTE_TIME_DURATION_S * MAX_FPS as f32) + 1.0;
 
 const DEFAULT_PLAYER_JUMP_DELTA_V: f32 = 1.0;
 
@@ -141,8 +141,8 @@ struct Player {
     acceleration_from_traction: f32,
     deceleration_from_air_friction: f32,
     deceleration_from_ground_friction: f32,
-    remaining_coyote_frames: i32,
-    max_coyote_frames: i32,
+    remaining_coyote_time: f32,
+    max_coyote_time: f32,
     dash_vel: f32,
     last_collision: Option<CollisionWithBlock>,
     moved_normal_to_collision_since_collision: bool,
@@ -167,8 +167,8 @@ impl Player {
             acceleration_from_traction: DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION,
             deceleration_from_air_friction: DEFAULT_PLAYER_AIR_FRICTION_DECELERATION,
             deceleration_from_ground_friction: DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION,
-            remaining_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
-            max_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
+            remaining_coyote_time: DEFAULT_PLAYER_MAX_COYOTE_TIME,
+            max_coyote_time: DEFAULT_PLAYER_MAX_COYOTE_TIME,
             dash_vel: DEFAULT_PLAYER_DASH_SPEED,
             last_collision: None,
             moved_normal_to_collision_since_collision: false,
@@ -376,7 +376,7 @@ impl Game {
         self.player.desired_direction = p(0, 0);
         self.player.pos = p(x, y);
         self.player.alive = true;
-        self.player.remaining_coyote_frames = 0;
+        self.player.remaining_coyote_time = 0.0;
     }
     fn player_jump(&mut self) {
         if self.player_is_grabbing_wall() || self.player_is_running_up_wall() {
@@ -845,12 +845,16 @@ impl Game {
 
         // moved vertically => instant empty charge
         if step_taken.y() != 0.0 {
-            self.player.remaining_coyote_frames = 0;
+            self.player.remaining_coyote_time = 0.0;
         }
         if self.player_is_standing_on_block() {
-            self.player.remaining_coyote_frames = self.player.max_coyote_frames;
-        } else if self.player.remaining_coyote_frames > 0 {
-            self.player.remaining_coyote_frames -= 1;
+            self.player.remaining_coyote_time = self.player.max_coyote_time;
+        } else if self.player.remaining_coyote_time > 0.0 {
+            if self.player.remaining_coyote_time > dt_in_ticks {
+                self.player.remaining_coyote_time -= dt_in_ticks;
+            } else {
+                self.player.remaining_coyote_time = 0.0;
+            }
         }
     }
 
@@ -947,7 +951,7 @@ impl Game {
     }
 
     fn player_is_supported(&self) -> bool {
-        return self.player_is_standing_on_block() || self.player.remaining_coyote_frames > 0;
+        return self.player_is_standing_on_block() || self.player.remaining_coyote_time > 0.0;
     }
 
     fn player_is_standing_on_block(&self) -> bool {
@@ -1062,6 +1066,12 @@ mod tests {
         return game;
     }
 
+    fn set_up_player_supported_by_coyote_frames() -> Game {
+        let mut game = set_up_just_player();
+        game.player.remaining_coyote_time = game.player.max_coyote_time;
+        return game;
+    }
+
     fn set_up_player_in_zero_g() -> Game {
         let mut game = set_up_just_player();
         game.player.acceleration_from_gravity = 0.0;
@@ -1167,7 +1177,7 @@ mod tests {
         let mut game = Game::new(30, 30);
         game.place_player(15.0, 0.0);
         game.player.acceleration_from_gravity = 1.0;
-        game.player.remaining_coyote_frames = 0;
+        game.player.remaining_coyote_time = 0.0;
         game.tick_physics();
         assert!(game.player.alive == false);
     }
@@ -1381,7 +1391,7 @@ mod tests {
         let mut game = Game::new(30, 30);
         game.place_player(15.0, 11.0);
         game.player.acceleration_from_gravity = 1.0;
-        game.player.remaining_coyote_frames = 0;
+        game.player.remaining_coyote_time = 0.0;
 
         game.tick_physics();
 
@@ -1502,8 +1512,8 @@ mod tests {
         let mut game = set_up_just_player();
         let start_pos = game.player.pos;
         game.player.acceleration_from_gravity = 1.0;
-        game.player.max_coyote_frames = 1;
-        game.player.remaining_coyote_frames = 1;
+        game.player.max_coyote_time = 1.0;
+        game.player.remaining_coyote_time = 1.0;
         game.tick_physics();
         assert!(game.player.pos.y() == start_pos.y());
         game.tick_physics();
@@ -1515,7 +1525,7 @@ mod tests {
         let mut game1 = set_up_player_on_platform();
         let mut game2 = set_up_player_on_platform();
 
-        game1.player.remaining_coyote_frames = 0;
+        game1.player.remaining_coyote_time = 0.0;
         game1.player_jump_if_possible();
         game2.player_jump_if_possible();
         game1.tick_physics();
@@ -2687,5 +2697,11 @@ mod tests {
     }
 
     #[test]
-    fn test_coyote_frames_respect_bullet_time() {}
+    fn test_coyote_frames_respect_bullet_time() {
+        let mut game = set_up_player_supported_by_coyote_frames();
+        assert!(game.player.remaining_coyote_time == game.player.max_coyote_time);
+        game.toggle_bullet_time();
+        game.tick_physics();
+        assert!(game.player.remaining_coyote_time + 1.0 > game.player.max_coyote_time);
+    }
 }
