@@ -108,8 +108,9 @@ impl Block {
 
 #[derive(PartialEq, Debug)]
 struct Particle {
-    pos: Point<f32>,
     ticks_to_expiry: f32,
+    pos: Point<f32>,
+    //vel: Point<f32>,
 }
 
 impl Particle {
@@ -144,6 +145,7 @@ struct Player {
     max_coyote_frames: i32,
     dash_vel: f32,
     last_collision: Option<CollisionWithBlock>,
+    moved_normal_to_collision_since_collision: bool,
 }
 
 impl Player {
@@ -169,6 +171,7 @@ impl Player {
             max_coyote_frames: DEFAULT_PLAYER_MAX_COYOTE_FRAMES,
             dash_vel: DEFAULT_PLAYER_DASH_SPEED,
             last_collision: None,
+            moved_normal_to_collision_since_collision: false,
         }
     }
 }
@@ -521,6 +524,10 @@ impl Game {
     }
 
     fn get_player_compression_fraction(&self) -> f32 {
+        if self.player.moved_normal_to_collision_since_collision {
+            return 1.0;
+        }
+
         if let Some(ticks_from_collision) = self.time_since_last_player_collision() {
             return if ticks_from_collision < DEFAULT_TICKS_TO_MAX_COMPRESSION {
                 lerp(
@@ -816,16 +823,24 @@ impl Game {
             }
         }
 
-        let step_taken: Point<f32>;
-
         if !self.in_world(snap_to_grid(actual_endpoint)) {
             // Player went out of bounds and died
             self.kill_player();
             return;
-        } else {
-            step_taken = actual_endpoint - self.player.pos;
-            self.save_recent_player_pose(self.player.pos);
-            self.player.pos = actual_endpoint;
+        }
+
+        let step_taken = actual_endpoint - self.player.pos;
+        self.save_recent_player_pose(self.player.pos);
+        self.player.pos = actual_endpoint;
+
+        if collision_occurred {
+            self.player.moved_normal_to_collision_since_collision = false;
+        } else if self.player.last_collision.is_some()
+            && step_taken.dot(floatify(
+                self.player.last_collision.as_ref().unwrap().normal,
+            )) != 0.0
+        {
+            self.player.moved_normal_to_collision_since_collision = true;
         }
 
         // moved vertically => instant empty charge
@@ -849,15 +864,13 @@ impl Game {
     fn apply_forces_to_player(&mut self, dt_in_ticks: f32) {
         if self.player_is_grabbing_wall() && self.player.vel_bpf.y() <= 0.0 {
             self.apply_player_wall_friction(dt_in_ticks);
+        } else if !self.player_is_supported() {
+            self.apply_player_air_friction(dt_in_ticks);
+            self.apply_player_air_traction(dt_in_ticks);
+            self.apply_player_acceleration_from_gravity(dt_in_ticks);
         } else {
-            if !self.player_is_supported() {
-                self.apply_player_air_friction(dt_in_ticks);
-                self.apply_player_air_traction(dt_in_ticks);
-                self.apply_player_acceleration_from_gravity(dt_in_ticks);
-            } else {
-                self.apply_player_floor_friction(dt_in_ticks);
-                self.apply_player_floor_traction(dt_in_ticks);
-            }
+            self.apply_player_floor_friction(dt_in_ticks);
+            self.apply_player_floor_traction(dt_in_ticks);
         }
     }
 
@@ -1058,6 +1071,7 @@ mod tests {
     fn set_up_player_in_zero_g_frictionless_vacuum() -> Game {
         let mut game = set_up_player_in_zero_g();
         game.player.acceleration_from_traction = 0.0;
+        game.player.deceleration_from_ground_friction = 0.0;
         game.player.deceleration_from_air_friction = 0.0;
         return game;
     }
@@ -1068,6 +1082,14 @@ mod tests {
         game.place_line_of_blocks((10, platform_y), (20, platform_y), Block::Wall);
         return game;
     }
+
+    fn set_up_player_on_platform_in_frictionless_vacuum() -> Game {
+        let mut game = set_up_player_on_platform();
+        game.player.acceleration_from_traction = 0.0;
+        game.player.deceleration_from_air_friction = 0.0;
+        return game;
+    }
+
     fn set_up_player_under_platform() -> Game {
         let mut game = set_up_just_player();
         let platform_y = game.player.pos.y() as i32 + 1;
@@ -2553,7 +2575,6 @@ mod tests {
         assert!(chars_for_vertical_compression.contains(&char_of_compressed_player));
     }
 
-    #[ignore]
     #[test]
     fn test_leaving_floor_cancels_vertical_compression() {
         // Assignment
@@ -2572,7 +2593,6 @@ mod tests {
         // Assertion
         assert!(game.get_player_compression_fraction() == 1.0);
     }
-    #[ignore]
     #[test]
     fn test_leaving_ceiling_cancels_vertical_compression() {
         // Assignment
@@ -2588,11 +2608,12 @@ mod tests {
         // Assertion
         assert!(game.get_player_compression_fraction() == 1.0);
     }
-    #[ignore]
     #[test]
     fn test_leaving_wall_cancels_horizontal_compression() {
         // Assignment
         let mut game = set_up_player_left_of_wall();
+        game.player.acceleration_from_gravity = 0.0;
+        game.player.acceleration_from_traction = 0.0;
         //game.player.pos.add_assign(p(0.0, 0.1));
         game.player.vel_bpf = p(10.0, 0.0);
         game.tick_physics();
@@ -2631,4 +2652,40 @@ mod tests {
     // just as the spring giveth, so doth the spring taketh away(-eth)
     #[test]
     fn test_jump_penalty_if_jump_when_entering_compression() {}
+
+    #[test]
+    fn test_player_remembers_movement_normal_to_last_collision__vertical_collision() {
+        let mut game = set_up_player_on_platform();
+        game.player.vel_bpf = p(0.0, -1.0);
+        game.tick_physics();
+        assert!(game.time_since_last_player_collision() == Some(0.0));
+        assert!(game.player.moved_normal_to_collision_since_collision == false);
+        game.player_jump_if_possible();
+        game.tick_physics();
+        assert!(game.player.moved_normal_to_collision_since_collision == true);
+    }
+
+    #[test]
+    fn test_player_remembers_movement_normal_to_last_collision__horizontal_collision() {
+        let mut game = set_up_player_left_of_wall();
+        game.player.vel_bpf = p(1.0, 0.0);
+        game.tick_physics();
+        assert!(game.time_since_last_player_collision() == Some(0.0));
+        assert!(game.player.moved_normal_to_collision_since_collision == false);
+        game.player.vel_bpf = p(-1.0, 0.0);
+        game.tick_physics();
+        assert!(game.player.moved_normal_to_collision_since_collision == true);
+    }
+
+    #[test]
+    fn test_player_forgets_normal_movement_to_collision_upon_new_collision() {
+        let mut game = set_up_player_on_platform_in_frictionless_vacuum();
+        game.player.moved_normal_to_collision_since_collision = true;
+        game.player.vel_bpf = p(0.0, -1.0);
+        game.tick_physics();
+        assert!(game.player.moved_normal_to_collision_since_collision == false);
+    }
+
+    #[test]
+    fn test_coyote_frames_respect_bullet_time() {}
 }
