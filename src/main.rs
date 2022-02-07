@@ -110,12 +110,22 @@ impl Block {
 struct Particle {
     ticks_to_expiry: f32,
     pos: Point<f32>,
-    //vel: Point<f32>,
+    vel: Point<f32>,
+    random_walk_speed: f32,
 }
 
 impl Particle {
     fn glyph(&self) -> Glyph {
         Glyph::world_pos_to_colored_braille_glyph(self.pos, ColorName::Blue)
+    }
+
+    fn new_at(pos: Point<f32>) -> Particle {
+        Particle {
+            ticks_to_expiry: f32::INFINITY,
+            pos,
+            vel: p(0.0, 0.0),
+            random_walk_speed: 0.0,
+        }
     }
 }
 
@@ -302,10 +312,9 @@ impl Game {
     }
 
     fn place_particle_with_lifespan(&mut self, pos: Point<f32>, lifespan_in_ticks: f32) {
-        self.particles.push(Particle {
-            pos,
-            ticks_to_expiry: lifespan_in_ticks,
-        })
+        let mut particle = Particle::new_at(pos);
+        particle.ticks_to_expiry = lifespan_in_ticks;
+        self.particles.push(particle);
     }
 
     fn get_particles_in_square(&self, square: Point<i32>) -> Vec<&Particle> {
@@ -483,21 +492,39 @@ impl Game {
     }
 
     fn apply_particle_physics(&mut self, dt_in_ticks: f32) {
+        self.apply_particle_lifetimes(dt_in_ticks);
+
+        self.apply_particle_linear_velocities(dt_in_ticks);
+        self.apply_particle_random_walks(dt_in_ticks);
+
+        self.delete_out_of_bounds_particles();
+    }
+
+    fn apply_particle_linear_velocities(&mut self, dt_in_ticks: f32) {
         self.particles.iter_mut().for_each(|particle| {
-            particle.ticks_to_expiry -= dt_in_ticks;
+            particle.pos.add_assign(particle.vel * dt_in_ticks);
+        });
+    }
+
+    fn apply_particle_random_walks(&mut self, dt_in_ticks: f32) {
+        self.particles.iter_mut().for_each(|particle| {
             // sqrt because 2d random walk (maybe not quite right)
             particle.pos.add_assign(
-                direction(random_direction()) * DEFAULT_PARTICLE_STEP_PER_TICK * dt_in_ticks.sqrt(),
+                direction(random_direction()) * particle.random_walk_speed * dt_in_ticks.sqrt(),
             );
+        });
+    }
+
+    fn apply_particle_lifetimes(&mut self, dt_in_ticks: f32) {
+        self.particles.iter_mut().for_each(|particle| {
+            particle.ticks_to_expiry -= dt_in_ticks;
         });
 
         self.particles
             .retain(|particle| particle.ticks_to_expiry > 0.0);
-
-        self.delete_particles_out_of_world();
     }
 
-    fn delete_particles_out_of_world(&mut self) {
+    fn delete_out_of_bounds_particles(&mut self) {
         let particles_are_in_world: Vec<bool> = self
             .particles
             .iter()
@@ -1815,26 +1842,6 @@ mod tests {
         assert!(offset_from_grid(game.player.pos).x() != 0.0);
     }
 
-    #[ignore]
-    #[test]
-    // The general case of this is pressing jump any time before landing causing an instant jump when possible
-    fn test_allow_early_jump() {}
-
-    #[ignore]
-    #[test]
-    // The general case of this is allowing a single jump anytime while falling after walking (not jumping!) off a platform
-    fn test_allow_late_jump() {}
-
-    #[ignore]
-    #[test]
-    // This should allow high skill to lead to really fast wall climbing (like in N+)
-    fn test_wall_jump_adds_velocity_instead_of_sets_it() {}
-
-    #[ignore]
-    #[test]
-    // Once we have vertical subsquare positioning up and running, a slow slide down will look cool.
-    fn test_slowly_slide_down_when_grabbing_wall() {}
-
     #[test]
     fn test_dash_no_direction_does_nothing() {
         let mut game = set_up_player_on_platform();
@@ -2127,22 +2134,6 @@ mod tests {
         assert!(!game.player_is_officially_fast());
     }
 
-    #[ignore]
-    // ignore because midair max speed may be higher than running max speed
-    #[test]
-    fn test_be_fastest_at_very_start_of_jump() {
-        let mut game = set_up_player_on_platform();
-        game.player.vel_bpf = p(game.player.max_run_speed_bpf, 0.0);
-        game.player.desired_direction = p(1, 0);
-        game.player_jump();
-        let vel_at_start_of_jump = game.player.vel_bpf;
-        game.tick_physics();
-        game.tick_physics();
-        game.tick_physics();
-
-        assert!(magnitude(game.player.vel_bpf) <= magnitude(vel_at_start_of_jump));
-    }
-
     #[test]
     fn test_toggle_bullet_time() {
         let mut game = set_up_player_on_platform();
@@ -2177,20 +2168,6 @@ mod tests {
         let expected_end_vy =
             -game.player.acceleration_from_gravity * game.bullet_time_factor + start_vy;
         assert!(game.player.vel_bpf.y() == expected_end_vy);
-    }
-
-    #[ignore]
-    // The real puzzler here is the accelerations that go exactly to a speed and no further.  They make it hard to factor things out.
-    #[test]
-    fn test_bullet_time_slows_down_traction_acceleration() {
-        let mut game1 = set_up_player_starting_to_move_right_on_platform();
-        let mut game2 = set_up_player_starting_to_move_right_on_platform();
-        game1.toggle_bullet_time();
-
-        game1.tick_physics();
-        game2.tick_physics();
-
-        assert!(game1.player.vel_bpf.x() < game2.player.vel_bpf.x());
     }
 
     #[test]
@@ -2254,10 +2231,6 @@ mod tests {
         let movement = game.player.pos - start_pos;
         assert!(movement.x() == movement.y() * VERTICAL_STRETCH_FACTOR);
     }
-
-    #[ignore]
-    #[test]
-    fn test_fps_display() {}
 
     #[test]
     fn test_no_jump_if_not_touching_floor() {
@@ -2379,7 +2352,9 @@ mod tests {
     fn test_particles_move_around() {
         let point = p(5.0, 5.0);
         let mut game = set_up_game();
-        game.place_particle(point);
+        let mut particle = Particle::new_at(point);
+        particle.random_walk_speed = DEFAULT_PARTICLE_STEP_PER_TICK;
+        game.particles.push(particle);
         let start_pos = game.particles[0].pos;
         game.tick_particles();
         let end_pos = game.particles[0].pos;
@@ -2391,7 +2366,7 @@ mod tests {
         let mut game = set_up_game();
         let point = p(50.0, 50.0);
         game.place_particle(point);
-        game.delete_particles_out_of_world();
+        game.delete_out_of_bounds_particles();
         assert!(game.particles.is_empty());
     }
 
@@ -2402,7 +2377,9 @@ mod tests {
         game1.toggle_bullet_time();
         let start_pos = p(5.0, 5.0);
         game1.place_particle(start_pos);
+        game1.particles[0].random_walk_speed = DEFAULT_PARTICLE_STEP_PER_TICK;
         game2.place_particle(start_pos);
+        game2.particles[0].random_walk_speed = DEFAULT_PARTICLE_STEP_PER_TICK;
 
         game1.tick_particles();
         game2.tick_particles();
@@ -2557,33 +2534,6 @@ mod tests {
         assert!(chars_in_compression_start.is_sorted());
         assert!(chars_in_compression_end.is_sorted());
     }
-    #[ignore]
-    // maybe not a good idea?
-    #[test]
-    fn test_collision_compression_direction_based_on_collision_velocity_rather_than_collision_normal_on_ground(
-    ) {
-        let mut game = set_up_just_player();
-        //game.player.normal_of_last_collision = Some(p(0, 1));
-        //game.player.ticks_from_last_collision = Some(DEFAULT_TICKS_TO_MAX_COMPRESSION / 2.0);
-        //game.player.velocity_of_last_collision = Some(p(10.0, -5.0));
-        let chars_for_horizontal_compression = &EIGHTH_BLOCKS_FROM_LEFT[1..8];
-        let char_of_compressed_player = game.get_compressed_player_glyph().character;
-        assert!(chars_for_horizontal_compression.contains(&char_of_compressed_player));
-    }
-
-    #[ignore]
-    // maybe not a good idea?
-    #[test]
-    fn test_collision_compression_direction_based_on_collision_velocity_rather_than_collision_normal_on_wall(
-    ) {
-        let mut game = set_up_just_player();
-        //game.player.normal_of_last_collision = Some(p(-1, 0));
-        //game.player.ticks_from_last_collision = Some(DEFAULT_TICKS_TO_MAX_COMPRESSION / 2.0);
-        //game.player.velocity_of_last_collision = Some(p(4.0, -5.0));
-        let chars_for_vertical_compression = &EIGHTH_BLOCKS_FROM_BOTTOM[1..8];
-        let char_of_compressed_player = game.get_compressed_player_glyph().character;
-        assert!(chars_for_vertical_compression.contains(&char_of_compressed_player));
-    }
 
     #[test]
     fn test_leaving_floor_cancels_vertical_compression() {
@@ -2653,16 +2603,6 @@ mod tests {
         assert!(drawn_char == Block::Wall.character());
     }
 
-    #[ignore]
-    // like a spring
-    #[test]
-    fn test_jump_bonus_if_jump_when_coming_out_of_compression() {}
-
-    #[ignore]
-    // just as the spring giveth, so doth the spring taketh away(-eth)
-    #[test]
-    fn test_jump_penalty_if_jump_when_entering_compression() {}
-
     #[test]
     fn test_player_remembers_movement_normal_to_last_collision__vertical_collision() {
         let mut game = set_up_player_on_platform();
@@ -2704,4 +2644,89 @@ mod tests {
         game.tick_physics();
         assert!(game.player.remaining_coyote_time + 1.0 > game.player.max_coyote_time);
     }
+
+    #[test]
+    fn test_particle_velocity() {
+        let mut game = set_up_game();
+        let start_pos = p(5.0, 5.0);
+        let mut particle = Particle::new_at(start_pos);
+        let vel = p(1.0, 0.0);
+        particle.vel = vel;
+        game.particles.push(particle);
+        game.tick_physics();
+        game.tick_physics();
+        assert!(game.particles[0].pos == start_pos + vel * 2.0);
+    }
+
+    #[test]
+    fn test_player_compresses_when_sliding_up_wall() {
+        let mut game = set_up_player_left_of_wall();
+        game.player.desired_direction = p(1, 0);
+        game.player.vel_bpf = p(10.0, 10.0);
+        game.tick_physics();
+        assert!(game.player.last_collision.is_some());
+        game.tick_physics();
+        assert!(game.get_player_compression_fraction() < 1.0);
+    }
+
+    #[ignore]
+    #[test]
+    // The general case of this is pressing jump any time before landing causing an instant jump when possible
+    fn test_allow_early_jump() {}
+
+    #[ignore]
+    #[test]
+    // The general case of this is allowing a single jump anytime while falling after walking (not jumping!) off a platform
+    fn test_allow_late_jump() {}
+
+    #[ignore]
+    #[test]
+    // This should allow high skill to lead to really fast wall climbing (like in N+)
+    fn test_wall_jump_adds_velocity_instead_of_sets_it() {}
+
+    #[ignore]
+    #[test]
+    // Once we have vertical subsquare positioning up and running, a slow slide down will look cool.
+    fn test_slowly_slide_down_when_grabbing_wall() {}
+
+    #[ignore]
+    // The real puzzler here is the accelerations that go exactly to a speed and no further.  They make it hard to factor things out.
+    #[test]
+    fn test_bullet_time_slows_down_traction_acceleration() {
+        let mut game1 = set_up_player_starting_to_move_right_on_platform();
+        let mut game2 = set_up_player_starting_to_move_right_on_platform();
+        game1.toggle_bullet_time();
+
+        game1.tick_physics();
+        game2.tick_physics();
+
+        assert!(game1.player.vel_bpf.x() < game2.player.vel_bpf.x());
+    }
+    #[ignore]
+    // ignore because midair max speed may be higher than running max speed
+    #[test]
+    fn test_be_fastest_at_very_start_of_jump() {
+        let mut game = set_up_player_on_platform();
+        game.player.vel_bpf = p(game.player.max_run_speed_bpf, 0.0);
+        game.player.desired_direction = p(1, 0);
+        game.player_jump();
+        let vel_at_start_of_jump = game.player.vel_bpf;
+        game.tick_physics();
+        game.tick_physics();
+        game.tick_physics();
+
+        assert!(magnitude(game.player.vel_bpf) <= magnitude(vel_at_start_of_jump));
+    }
+    #[ignore]
+    #[test]
+    fn test_fps_display() {}
+    #[ignore]
+    // like a spring
+    #[test]
+    fn test_jump_bonus_if_jump_when_coming_out_of_compression() {}
+
+    #[ignore]
+    // just as the spring giveth, so doth the spring taketh away(-eth)
+    #[test]
+    fn test_jump_penalty_if_jump_when_entering_compression() {}
 }

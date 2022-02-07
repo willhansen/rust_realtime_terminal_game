@@ -26,9 +26,7 @@ pub fn single_block_movecast(
     start_point: Point<f32>,
     end_point: Point<f32>,
     grid_square_center: Point<i32>,
-) -> Option<MovecastCollision>
-where
-{
+) -> Option<MovecastCollision> {
     // formulates the problem as a point crossing the boundary of an r=1 square
     let movement_line = geo::Line::new(start_point, end_point);
     //println!("movement_line: {:?}", movement_line);
