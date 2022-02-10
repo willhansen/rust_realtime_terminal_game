@@ -827,6 +827,7 @@ impl Game {
         let mut remaining_step: Point<f32> =
             compensate_for_vertical_stretch(self.player.vel_bpf, VERTICAL_STRETCH_FACTOR)
                 * dt_in_ticks;
+        let mut fraction_of_movement_remaining = 1.0;
         let mut current_start_point = start_point;
         let actual_endpoint: Point<f32>;
         let mut current_target = start_point + remaining_step;
@@ -834,10 +835,17 @@ impl Game {
         loop {
             if let Some(collision) = self.movecast(current_start_point, current_target) {
                 collision_occurred = true;
-                remaining_step.add_assign(-(collision.collider_pos - current_start_point));
+                let step_taken_to_this_collision = collision.collider_pos - current_start_point;
+                let fraction_through_remaining_movement_just_moved =
+                    magnitude(step_taken_to_this_collision) / magnitude(remaining_step);
+                fraction_of_movement_remaining -=
+                    fraction_of_movement_remaining * fraction_through_remaining_movement_just_moved;
+
+                remaining_step.add_assign(-step_taken_to_this_collision);
 
                 self.player.last_collision = Some(CollisionWithBlock {
-                    time_in_ticks: self.time_in_ticks(),
+                    time_in_ticks: self.time_in_ticks()
+                        - dt_in_ticks * fraction_of_movement_remaining,
                     normal: collision.normal,
                     collider_velocity: self.player.vel_bpf,
                     collider_pos: collision.collider_pos,
@@ -1154,6 +1162,12 @@ mod tests {
         return game;
     }
 
+    fn set_up_player_almost_on_platform() -> Game {
+        let mut game = set_up_player_on_platform();
+        game.player.pos.add_assign(p(0.0, 0.001));
+        return game;
+    }
+
     fn set_up_player_on_platform_in_frictionless_vacuum() -> Game {
         let mut game = set_up_player_on_platform();
         be_in_vacuum(&mut game);
@@ -1165,6 +1179,12 @@ mod tests {
         let mut game = set_up_just_player();
         let platform_y = game.player.pos.y() as i32 + 1;
         game.place_line_of_blocks((10, platform_y), (20, platform_y), Block::Wall);
+        return game;
+    }
+
+    fn set_up_player_one_tick_from_platform_impact() -> Game {
+        let mut game = set_up_player_almost_on_platform();
+        game.player.vel_bpf = p(0.0, -10.0);
         return game;
     }
 
@@ -1367,7 +1387,7 @@ mod tests {
     }
 
     #[test]
-    fn test_movecast_ignore_player() {
+    fn test_movecast_skips_player() {
         let game = set_up_player_on_platform();
 
         assert!(game.movecast(p(15.0, 11.0), p(15.0, 13.0)) == None);
@@ -2468,14 +2488,12 @@ mod tests {
     #[test]
     fn test_track_last_collision() {
         let mut game = set_up_player_in_corner_of_big_L();
-        game.player.acceleration_from_gravity = 0.0;
-        game.player.deceleration_from_ground_friction = 0.0;
-        game.player.pos.add_assign(p(0.01, 0.01));
+        be_in_frictionless_space(&mut game);
         assert!(&game.player.last_collision.is_none());
         let collision_velocity = p(0.0, -5.0);
         game.player.vel_bpf = collision_velocity;
         game.tick_physics();
-        assert!(game.time_since_last_player_collision() == Some(0.0));
+        assert!(game.time_since_last_player_collision() == Some(1.0));
         assert!(game.player.last_collision.as_ref().unwrap().normal == p(0, 1));
         assert!(
             game.player
@@ -2486,7 +2504,7 @@ mod tests {
                 == collision_velocity
         );
         game.tick_physics();
-        assert!(game.time_since_last_player_collision() == Some(1.0));
+        assert!(game.time_since_last_player_collision() == Some(2.0));
         assert!(game.player.last_collision.as_ref().unwrap().normal == p(0, 1));
         assert!(
             game.player
@@ -2499,7 +2517,7 @@ mod tests {
         let collision_velocity = p(-10.0, 0.0);
         game.player.vel_bpf = collision_velocity;
         game.tick_physics();
-        assert!(game.time_since_last_player_collision() == Some(0.0));
+        assert!(game.time_since_last_player_collision() == Some(1.0));
         assert!(game.player.last_collision.as_ref().unwrap().normal == p(1, 0));
         assert!(
             game.player
@@ -2516,17 +2534,21 @@ mod tests {
         let mut game = set_up_player_on_platform();
         game.player.vel_bpf = p(0.0, -1.0);
         game.tick_physics();
-        assert_relative_eq!(game.time_since_last_player_collision().unwrap(), 0.0);
+        let ticks_before_bullet_time = 1.0;
+        assert_relative_eq!(
+            game.time_since_last_player_collision().unwrap(),
+            ticks_before_bullet_time
+        );
         game.toggle_bullet_time();
         game.tick_physics();
         assert_relative_eq!(
             game.time_since_last_player_collision().unwrap(),
-            game.bullet_time_factor
+            game.bullet_time_factor + ticks_before_bullet_time
         );
         game.tick_physics();
         assert_relative_eq!(
             game.time_since_last_player_collision().unwrap(),
-            game.bullet_time_factor * 2.0
+            game.bullet_time_factor * 2.0 + ticks_before_bullet_time
         );
     }
 
@@ -2642,11 +2664,9 @@ mod tests {
     #[test]
     fn test_leaving_wall_cancels_horizontal_compression() {
         // Assignment
-        let mut game = set_up_player_almost_touching_wall_on_right();
+        let mut game = set_up_player_touching_wall_on_right();
         be_in_frictionless_space(&mut game);
-        //game.player.pos.add_assign(p(0.0, 0.1));
         game.player.vel_bpf = p(10.0, 0.0);
-        game.tick_physics();
         game.tick_physics();
         assert!(game.time_since_last_player_collision() == Some(1.0));
         assert!(game.get_player_compression_fraction() < 1.0);
@@ -2783,14 +2803,57 @@ mod tests {
         assert!(game.player_exactly_touching_wall_in_direction(p(1, 0)));
     }
 
-    #[ignore]
     #[test]
-    fn test_collision_compression_starts_on_tick_of_collision() {}
+    fn test_bullet_time_slows_down_traction_acceleration() {
+        let mut game1 = set_up_player_starting_to_move_right_on_platform();
+        let mut game2 = set_up_player_starting_to_move_right_on_platform();
+        game1.toggle_bullet_time();
 
-    #[ignore]
+        game1.tick_physics();
+        game2.tick_physics();
+
+        assert!(game1.player.vel_bpf.x() < game2.player.vel_bpf.x());
+    }
+
     #[test]
-    fn test_collision_compression_subtick_precision_on_starting_compression_based_on_remaining_distance_to_move(
-    ) {
+    fn test_collision_compression_starts_on_first_tick_of_collision() {
+        let mut game = set_up_player_one_tick_from_platform_impact();
+        assert!(game.get_player_compression_fraction() == 1.0);
+        game.tick_physics();
+        assert!(game.get_player_compression_fraction() < 1.0);
+    }
+
+    #[test]
+    fn test_moment_of_collision_has_subtick_precision() {
+        let mut game = set_up_player_on_platform();
+        be_in_frictionless_space(&mut game);
+        game.player.pos.add_assign(p(0.0, 1.0));
+        game.player.vel_bpf = p(0.0, -4.0);
+
+        game.tick_physics();
+
+        assert!(game.time_since_last_player_collision() == Some(0.5));
+    }
+
+    #[test]
+    fn test_moment_of_collision_with_subtick_precision_accounts_for_non_square_grid() {
+        let mut game1 = set_up_player_on_platform();
+        let mut game2 = set_up_player_touching_wall_on_right();
+        be_in_frictionless_space(&mut game1);
+        be_in_frictionless_space(&mut game2);
+        let dist_from_impact = 1.0;
+        game1.player.pos.add_assign(p(0.0, dist_from_impact));
+        game2.player.pos.add_assign(p(-dist_from_impact, 0.0));
+        let vel_of_impact = 4.0;
+        game1.player.vel_bpf = p(0.0, -vel_of_impact);
+        game2.player.vel_bpf = p(vel_of_impact, 0.0);
+
+        game1.tick_physics();
+        game2.tick_physics();
+
+        let game1_time_before_impact = 1.0 - game1.time_since_last_player_collision().unwrap();
+        let game2_time_before_impact = 1.0 - game2.time_since_last_player_collision().unwrap();
+        assert!(game1_time_before_impact == game2_time_before_impact * VERTICAL_STRETCH_FACTOR);
     }
 
     #[ignore]
@@ -2813,19 +2876,6 @@ mod tests {
     // Once we have vertical subsquare positioning up and running, a slow slide down will look cool.
     fn test_slowly_slide_down_when_grabbing_wall() {}
 
-    #[ignore]
-    // The real puzzler here is the accelerations that go exactly to a speed and no further.  They make it hard to factor things out.
-    #[test]
-    fn test_bullet_time_slows_down_traction_acceleration() {
-        let mut game1 = set_up_player_starting_to_move_right_on_platform();
-        let mut game2 = set_up_player_starting_to_move_right_on_platform();
-        game1.toggle_bullet_time();
-
-        game1.tick_physics();
-        game2.tick_physics();
-
-        assert!(game1.player.vel_bpf.x() < game2.player.vel_bpf.x());
-    }
     #[ignore]
     // ignore because midair max speed may be higher than running max speed
     #[test]
