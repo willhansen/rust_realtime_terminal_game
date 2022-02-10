@@ -51,9 +51,11 @@ const DEFAULT_PLAYER_JUMP_DELTA_V: f32 = 1.0;
 const VERTICAL_STRETCH_FACTOR: f32 = 2.0; // because the grid is not really square
 
 const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
-const DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION: f32 = 1.0;
+const DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION: f32 = 1.0;
+const DEFAULT_PLAYER_ACCELERATION_FROM_AIR_TRACTION: f32 =
+    DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION;
 const DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION: f32 =
-    DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION / 5.0;
+    DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION / 5.0;
 const DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED: f32 = 0.5;
 const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED * 3.0;
 const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
@@ -129,6 +131,7 @@ impl Particle {
     }
 }
 
+#[derive(Debug)]
 struct CollisionWithBlock {
     time_in_ticks: f32,
     normal: Point<i32>,
@@ -148,7 +151,8 @@ struct Player {
     desired_direction: Point<i32>,
     jump_delta_v: f32,
     acceleration_from_gravity: f32,
-    acceleration_from_traction: f32,
+    acceleration_from_floor_traction: f32,
+    acceleration_from_air_traction: f32,
     deceleration_from_air_friction: f32,
     deceleration_from_ground_friction: f32,
     remaining_coyote_time: f32,
@@ -174,7 +178,8 @@ impl Player {
             desired_direction: p(0, 0),
             jump_delta_v: DEFAULT_PLAYER_JUMP_DELTA_V,
             acceleration_from_gravity: DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
-            acceleration_from_traction: DEFAULT_PLAYER_ACCELERATION_FROM_TRACTION,
+            acceleration_from_floor_traction: DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION,
+            acceleration_from_air_traction: DEFAULT_PLAYER_ACCELERATION_FROM_AIR_TRACTION,
             deceleration_from_air_friction: DEFAULT_PLAYER_AIR_FRICTION_DECELERATION,
             deceleration_from_ground_friction: DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION,
             remaining_coyote_time: DEFAULT_PLAYER_MAX_COYOTE_TIME,
@@ -293,6 +298,10 @@ impl Game {
 
     fn place_block(&mut self, pos: Point<i32>, block: Block) {
         self.grid[pos.x() as usize][pos.y() as usize] = block;
+    }
+
+    fn place_wall(&mut self, pos: Point<i32>) {
+        self.place_block(pos, Block::Wall);
     }
 
     fn place_line_of_particles(&mut self, pos0: Point<f32>, pos1: Point<f32>) {
@@ -772,35 +781,38 @@ impl Game {
             return false;
         }
         let horizontal_desired_direction = p(self.player.desired_direction.x(), 0);
-        if let Some(block) = self.get_block_relative_to_player(horizontal_desired_direction) {
-            return block.wall_grabbable();
-        }
-        return false;
+        return self.player_exactly_touching_wall_in_direction(horizontal_desired_direction);
     }
 
     fn apply_player_wall_friction(&mut self, dt_in_ticks: f32) {
         self.player.vel_bpf.set_y(decelerate_linearly_to_cap(
             self.player.vel_bpf.y(),
             0.0,
-            self.player.acceleration_from_traction * dt_in_ticks,
+            self.player.acceleration_from_floor_traction * dt_in_ticks,
         ));
     }
 
     fn apply_player_floor_traction(&mut self, dt_in_ticks: f32) {
+        if self.player_is_pressing_against_wall_horizontally() {
+            return;
+        }
         self.player.vel_bpf.set_x(accelerate_within_max_speed(
             self.player.vel_bpf.x(),
             self.player.desired_direction.x(),
             self.player.max_run_speed_bpf,
-            self.player.acceleration_from_traction * dt_in_ticks,
+            self.player.acceleration_from_floor_traction * dt_in_ticks,
         ));
     }
 
     fn apply_player_air_traction(&mut self, dt_in_ticks: f32) {
+        if self.player_is_pressing_against_wall_horizontally() {
+            return;
+        }
         self.player.vel_bpf.set_x(accelerate_within_max_speed(
             self.player.vel_bpf.x(),
             self.player.desired_direction.x(),
             self.player.max_run_speed_bpf,
-            self.player.acceleration_from_traction * dt_in_ticks,
+            self.player.acceleration_from_air_traction * dt_in_ticks,
         ));
     }
 
@@ -998,16 +1010,38 @@ impl Game {
         return None;
     }
 
+    fn player_exactly_touching_wall_in_direction(&self, direction: Point<i32>) -> bool {
+        for rel_x in -1..=1 {
+            for rel_y in -1..=1 {
+                let rel_square = p(rel_x, rel_y);
+                if rel_square != p(0, 0) && direction.dot(rel_square) > 0 {
+                    let target_square = snap_to_grid(self.player.pos) + rel_square;
+                    if let Some(block) = self.get_block_relative_to_player(rel_square) {
+                        if block == Block::Wall
+                            && floating_square_exactly_touching_fixed_square(
+                                self.player.pos,
+                                target_square,
+                            )
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
     fn in_world(&self, pos: Point<i32>) -> bool {
-        return pos.x() >= 0
+        pos.x() >= 0
             && pos.x() < self.terminal_size.0 as i32
             && pos.y() >= 0
-            && pos.y() < self.terminal_size.1 as i32;
+            && pos.y() < self.terminal_size.1 as i32
     }
     fn init_world(&mut self) {
         self.set_player_jump_delta_v(1.0);
         self.player.acceleration_from_gravity = 0.05;
-        self.player.acceleration_from_traction = 0.6;
+        self.player.acceleration_from_floor_traction = 0.6;
         self.set_player_max_run_speed(0.7);
 
         self.place_boundary_wall();
@@ -1107,7 +1141,7 @@ mod tests {
 
     fn set_up_player_in_zero_g_frictionless_vacuum() -> Game {
         let mut game = set_up_player_in_zero_g();
-        game.player.acceleration_from_traction = 0.0;
+        game.player.acceleration_from_floor_traction = 0.0;
         game.player.deceleration_from_ground_friction = 0.0;
         game.player.deceleration_from_air_friction = 0.0;
         return game;
@@ -1122,8 +1156,8 @@ mod tests {
 
     fn set_up_player_on_platform_in_frictionless_vacuum() -> Game {
         let mut game = set_up_player_on_platform();
-        game.player.acceleration_from_traction = 0.0;
-        game.player.deceleration_from_air_friction = 0.0;
+        be_in_vacuum(&mut game);
+        be_frictionless(&mut game);
         return game;
     }
 
@@ -1134,16 +1168,33 @@ mod tests {
         return game;
     }
 
-    fn set_up_player_left_of_wall() -> Game {
+    fn set_up_player_touching_wall_on_right() -> Game {
         let mut game = set_up_just_player();
         let wall_x = game.player.pos.x() as i32 + 1;
         game.place_line_of_blocks((wall_x, 0), (wall_x, 20), Block::Wall);
         return game;
     }
 
+    fn set_up_player_almost_touching_wall_on_right() -> Game {
+        let mut game = set_up_player_touching_wall_on_right();
+        game.player.pos.add_assign(p(-0.1, 0.0));
+        return game;
+    }
+
     fn set_up_player_in_corner_of_big_L() -> Game {
         let mut game = set_up_player_on_platform();
         game.place_line_of_blocks((14, 10), (14, 20), Block::Wall);
+        return game;
+    }
+
+    fn set_up_player_in_corner_of_backward_L() -> Game {
+        let mut game = set_up_player_on_platform();
+        let wall_x = game.player.pos.x() as i32 + 1;
+        game.place_line_of_blocks(
+            (wall_x, game.player.pos.y() as i32 - 1),
+            (wall_x, game.player.pos.y() as i32 + 5),
+            Block::Wall,
+        );
         return game;
     }
 
@@ -1164,6 +1215,26 @@ mod tests {
         game.place_line_of_blocks((14, 0), (14, 20), Block::Wall);
         game.player.desired_direction.set_x(-1);
         return game;
+    }
+
+    fn be_frictionless(game: &mut Game) {
+        game.player.acceleration_from_floor_traction = 0.0;
+        game.player.deceleration_from_ground_friction = 0.0;
+    }
+    fn be_in_vacuum(game: &mut Game) {
+        game.player.acceleration_from_air_traction = 0.0;
+        game.player.deceleration_from_air_friction = 0.0;
+    }
+    fn be_in_zero_g(game: &mut Game) {
+        game.player.acceleration_from_gravity = 0.0
+    }
+    fn be_in_space(game: &mut Game) {
+        be_in_zero_g(game);
+        be_in_vacuum(game);
+    }
+    fn be_in_frictionless_space(game: &mut Game) {
+        be_frictionless(game);
+        be_in_space(game);
     }
 
     #[test]
@@ -1363,7 +1434,7 @@ mod tests {
     fn test_move_player_slowly() {
         let mut game = set_up_player_on_platform();
         game.player.max_run_speed_bpf = 0.49;
-        game.player.acceleration_from_traction = 999.9; // rilly fast
+        game.player.acceleration_from_floor_traction = 999.9; // rilly fast
         game.player.desired_direction.set_x(1);
 
         game.tick_physics();
@@ -1834,7 +1905,7 @@ mod tests {
         let mut game = set_up_player_on_platform();
         game.player.pos.add_assign(p(0.1, 0.0));
         game.player.vel_bpf = p(0.1, 0.0);
-        game.player.acceleration_from_traction = 0.1;
+        game.player.acceleration_from_floor_traction = 0.1;
         game.player.desired_direction = p(0, 0);
 
         game.tick_physics();
@@ -1867,7 +1938,7 @@ mod tests {
         game.player.desired_direction = p(1, 0);
         game.player.max_midair_speed = 10.0;
         game.player.deceleration_from_air_friction = 1.0;
-        game.player.acceleration_from_traction = 0.0;
+        game.player.acceleration_from_floor_traction = 0.0;
         let vx = game.player.max_midair_speed + game.player.deceleration_from_air_friction * 0.9;
         game.player.vel_bpf = p(vx, 0.0);
         game.tick_physics();
@@ -1892,7 +1963,7 @@ mod tests {
         game.player.desired_direction = p(1, 0);
         game.player.max_midair_speed = 10.0;
         game.player.deceleration_from_air_friction = 1.0;
-        game.player.acceleration_from_traction = 0.0;
+        game.player.acceleration_from_floor_traction = 0.0;
         let start_vx =
             game.player.max_midair_speed + game.player.deceleration_from_air_friction * 0.9;
         game.player.vel_bpf = p(start_vx, 0.0);
@@ -2147,7 +2218,7 @@ mod tests {
     #[test]
     fn test_bullet_time_slows_down_motion() {
         let mut game = set_up_player_in_zero_g();
-        game.player.acceleration_from_traction = 0.0;
+        game.player.acceleration_from_floor_traction = 0.0;
         game.player.vel_bpf = p(1.0, 0.0);
         let start_x = game.player.pos.x();
         game.bullet_time_factor = 0.5;
@@ -2571,9 +2642,8 @@ mod tests {
     #[test]
     fn test_leaving_wall_cancels_horizontal_compression() {
         // Assignment
-        let mut game = set_up_player_left_of_wall();
-        game.player.acceleration_from_gravity = 0.0;
-        game.player.acceleration_from_traction = 0.0;
+        let mut game = set_up_player_almost_touching_wall_on_right();
+        be_in_frictionless_space(&mut game);
         //game.player.pos.add_assign(p(0.0, 0.1));
         game.player.vel_bpf = p(10.0, 0.0);
         game.tick_physics();
@@ -2617,7 +2687,7 @@ mod tests {
 
     #[test]
     fn test_player_remembers_movement_normal_to_last_collision__horizontal_collision() {
-        let mut game = set_up_player_left_of_wall();
+        let mut game = set_up_player_touching_wall_on_right();
         game.player.vel_bpf = p(1.0, 0.0);
         game.tick_physics();
         assert!(game.time_since_last_player_collision() == Some(0.0));
@@ -2660,13 +2730,67 @@ mod tests {
 
     #[test]
     fn test_player_compresses_when_sliding_up_wall() {
-        let mut game = set_up_player_left_of_wall();
+        let mut game = set_up_player_almost_touching_wall_on_right();
         game.player.desired_direction = p(1, 0);
         game.player.vel_bpf = p(10.0, 10.0);
         game.tick_physics();
         assert!(game.player.last_collision.is_some());
         game.tick_physics();
         assert!(game.get_player_compression_fraction() < 1.0);
+    }
+
+    #[test]
+    fn test_pushing_into_a_wall_is_not_a_collision() {
+        let mut game = set_up_player_in_corner_of_backward_L();
+        assert!(game.player.last_collision.is_none());
+        game.player.desired_direction = p(1, 0);
+        game.tick_physics();
+        assert!(game.player.last_collision.is_none());
+    }
+
+    #[test]
+    fn test_player_exactly_touching_block_down_straight() {
+        let mut game = set_up_just_player();
+        let rel_wall_pos = p(0, -1);
+        game.place_wall(snap_to_grid(game.player.pos) + rel_wall_pos);
+
+        assert!(game.player_exactly_touching_wall_in_direction(p(0, -1)));
+    }
+
+    #[test]
+    fn test_player_exactly_not_touching_block_down_left_diagonal() {
+        let mut game = set_up_just_player();
+        let rel_wall_pos = p(-1, -1);
+        game.place_wall(snap_to_grid(game.player.pos) + rel_wall_pos);
+
+        assert!(!game.player_exactly_touching_wall_in_direction(p(0, -1)));
+    }
+    #[test]
+    fn test_player_exactly_touching_block_down_left_supported() {
+        let mut game = set_up_just_player();
+        game.player.pos.add_assign(p(-0.01, 0.0));
+        let rel_wall_pos = p(-1, -1);
+        game.place_wall(snap_to_grid(game.player.pos) + rel_wall_pos);
+
+        assert!(game.player_exactly_touching_wall_in_direction(p(0, -1)));
+    }
+    #[test]
+    fn test_player_exactly_touching_block_on_right() {
+        let mut game = set_up_just_player();
+        let rel_wall_pos = p(1, 0);
+        game.place_wall(snap_to_grid(game.player.pos) + rel_wall_pos);
+
+        assert!(game.player_exactly_touching_wall_in_direction(p(1, 0)));
+    }
+
+    #[ignore]
+    #[test]
+    fn test_collision_compression_starts_on_tick_of_collision() {}
+
+    #[ignore]
+    #[test]
+    fn test_collision_compression_subtick_precision_on_starting_compression_based_on_remaining_distance_to_move(
+    ) {
     }
 
     #[ignore]

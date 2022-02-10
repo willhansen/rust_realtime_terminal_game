@@ -265,6 +265,24 @@ pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a * (1.0 - t) + b * t
 }
 
+pub fn floating_square_exactly_touching_fixed_square(
+    float_square_pos: Point<f32>,
+    fixed_square_pos: Point<i32>,
+) -> bool {
+    let diff = float_square_pos - floatify(fixed_square_pos);
+    let (x, y) = diff.x_y();
+    let on_x_bound = x.abs() == 1.0;
+    let on_y_bound = y.abs() == 1.0;
+    let within_x_bounds = x.abs() <= 1.0;
+    let within_y_bounds = y.abs() <= 1.0;
+
+    let on_perfect_diagonal = on_x_bound && on_y_bound;
+    let on_x_side = on_x_bound && within_y_bounds;
+    let on_y_side = on_y_bound && within_x_bounds;
+
+    !on_perfect_diagonal && (on_x_side || on_y_side)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -545,5 +563,55 @@ mod tests {
     #[test]
     fn test_lerp_within_reversed_bounds() {
         assert_relative_eq!(lerp(100.0, 0.0, 0.2), 80.0);
+    }
+
+    #[test]
+    fn test_square_exactly_touching_square_below() {
+        assert!(floating_square_exactly_touching_fixed_square(
+            p(1.0, 0.0),
+            p(1, -1)
+        ));
+    }
+    #[test]
+    fn test_square_exactly_touching_square_below_with_small_horizontal_shift() {
+        assert!(floating_square_exactly_touching_fixed_square(
+            p(1.2, 0.0),
+            p(1, -1)
+        ));
+    }
+    #[test]
+    fn test_square_exactly_touching_square_below_with_larger_horizontal_shift() {
+        assert!(floating_square_exactly_touching_fixed_square(
+            p(1.9, 0.0),
+            p(1, -1)
+        ));
+    }
+    #[test]
+    fn test_square_not_exactly_touching_square_below_with_way_too_big_horizontal_shift() {
+        assert!(!floating_square_exactly_touching_fixed_square(
+            p(19.0, 0.0),
+            p(1, -1)
+        ));
+    }
+    #[test]
+    fn test_square_not_exactly_touching_square_below_with_slight_gap() {
+        assert!(!floating_square_exactly_touching_fixed_square(
+            p(1.0, 0.0001),
+            p(1, -1)
+        ));
+    }
+    #[test]
+    fn test_square_not_exactly_touching_square_below_with_slight_overlap() {
+        assert!(!floating_square_exactly_touching_fixed_square(
+            p(1.0, -0.0001),
+            p(1, -1)
+        ));
+    }
+    #[test]
+    fn test_square_not_exactly_touching_square_on_perfect_diagonal() {
+        assert!(!floating_square_exactly_touching_fixed_square(
+            p(0.0, 0.0),
+            p(1, -1)
+        ));
     }
 }
