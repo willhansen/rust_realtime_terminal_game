@@ -300,7 +300,7 @@ impl Game {
         self.grid[pos.x() as usize][pos.y() as usize] = block;
     }
 
-    fn place_wall(&mut self, pos: Point<i32>) {
+    fn place_wall_block(&mut self, pos: Point<i32>) {
         self.place_block(pos, Block::Wall);
     }
 
@@ -1002,12 +1002,7 @@ impl Game {
     }
 
     fn player_is_standing_on_block(&self) -> bool {
-        !matches!(self.get_block_below_player(), None | Some(Block::Air))
-            && offset_from_grid(self.player.pos).y() == 0.0
-    }
-
-    fn get_block_below_player(&self) -> Option<Block> {
-        return self.get_block_relative_to_player(p(0, -1));
+        self.player_exactly_touching_wall_in_direction(p(0, -1))
     }
 
     fn get_block_relative_to_player(&self, rel_pos: Point<i32>) -> Option<Block> {
@@ -1162,7 +1157,7 @@ mod tests {
         return game;
     }
 
-    fn set_up_player_almost_on_platform() -> Game {
+    fn set_up_player_very_slightly_above_platform() -> Game {
         let mut game = set_up_player_on_platform();
         game.player.pos.add_assign(p(0.0, 0.001));
         return game;
@@ -1175,6 +1170,19 @@ mod tests {
         return game;
     }
 
+    fn set_up_player_on_block() -> Game {
+        let mut game = set_up_just_player();
+        let block_pos = snap_to_grid(game.player.pos) + p(0, -1);
+        game.place_wall_block(block_pos);
+        return game;
+    }
+
+    fn set_up_player_on_block_more_overhanging_than_not_on_right() -> Game {
+        let mut game = set_up_player_on_block();
+        game.player.pos.add_assign(p(0.7, 0.0));
+        return game;
+    }
+
     fn set_up_player_under_platform() -> Game {
         let mut game = set_up_just_player();
         let platform_y = game.player.pos.y() as i32 + 1;
@@ -1183,7 +1191,7 @@ mod tests {
     }
 
     fn set_up_player_one_tick_from_platform_impact() -> Game {
-        let mut game = set_up_player_almost_on_platform();
+        let mut game = set_up_player_very_slightly_above_platform();
         game.player.vel_bpf = p(0.0, -10.0);
         return game;
     }
@@ -2600,27 +2608,22 @@ mod tests {
         game.player.vel_bpf = p(0.0, -10.0);
         game.tick_physics();
         assert!(game.player.last_collision.is_some());
-        assert!(game.time_since_last_player_collision().unwrap() == 0.0);
+        assert!(game.time_since_last_player_collision().unwrap() == 1.0);
 
         let mut chars_in_compression_start = Vec::<char>::new();
-        for t in 0..DEFAULT_TICKS_TO_MAX_COMPRESSION as i32 {
+        for _ in 0..DEFAULT_TICKS_TO_MAX_COMPRESSION as i32 {
             chars_in_compression_start.push(game.get_compressed_player_glyph().character);
             game.tick_physics();
         }
-        chars_in_compression_start.push(game.get_compressed_player_glyph().character);
 
         let mut chars_in_compression_end = Vec::<char>::new();
-        for t in DEFAULT_TICKS_TO_MAX_COMPRESSION as i32..=DEFAULT_TICKS_TO_END_COMPRESSION as i32 {
+        for _ in DEFAULT_TICKS_TO_MAX_COMPRESSION as i32..=DEFAULT_TICKS_TO_END_COMPRESSION as i32 {
             chars_in_compression_end.push(game.get_compressed_player_glyph().character);
             game.tick_physics();
         }
         dbg!(&chars_in_compression_start, &chars_in_compression_end);
 
-        assert!(*chars_in_compression_start.first().unwrap() == EIGHTH_BLOCKS_FROM_BOTTOM[8]);
         assert!(*chars_in_compression_end.last().unwrap() == EIGHTH_BLOCKS_FROM_BOTTOM[8]);
-        assert!(
-            chars_in_compression_start.last().unwrap() == chars_in_compression_end.first().unwrap()
-        );
 
         // reverse because of unicode char ordering
         chars_in_compression_start.reverse();
@@ -2634,7 +2637,6 @@ mod tests {
         let mut game = set_up_player_on_platform();
         //game.player.pos.add_assign(p(0.0, 0.1));
         game.player.vel_bpf = p(0.0, -10.0);
-        game.tick_physics();
         game.tick_physics();
         assert!(game.time_since_last_player_collision() == Some(1.0));
         assert!(game.get_player_compression_fraction() < 1.0);
@@ -2653,7 +2655,7 @@ mod tests {
         //game.player.pos.add_assign(p(0.0, 0.1));
         game.player.vel_bpf = p(0.0, 10.0);
         game.tick_physics();
-        assert!(game.time_since_last_player_collision() == Some(0.0));
+        assert!(game.time_since_last_player_collision() == Some(1.0));
 
         // Action
         game.tick_physics();
@@ -2698,7 +2700,7 @@ mod tests {
         let mut game = set_up_player_on_platform();
         game.player.vel_bpf = p(0.0, -1.0);
         game.tick_physics();
-        assert!(game.time_since_last_player_collision() == Some(0.0));
+        assert!(game.time_since_last_player_collision() == Some(1.0));
         assert!(game.player.moved_normal_to_collision_since_collision == false);
         game.player_jump_if_possible();
         game.tick_physics();
@@ -2710,7 +2712,7 @@ mod tests {
         let mut game = set_up_player_touching_wall_on_right();
         game.player.vel_bpf = p(1.0, 0.0);
         game.tick_physics();
-        assert!(game.time_since_last_player_collision() == Some(0.0));
+        assert!(game.time_since_last_player_collision() == Some(1.0));
         assert!(game.player.moved_normal_to_collision_since_collision == false);
         game.player.vel_bpf = p(-1.0, 0.0);
         game.tick_physics();
@@ -2772,7 +2774,7 @@ mod tests {
     fn test_player_exactly_touching_block_down_straight() {
         let mut game = set_up_just_player();
         let rel_wall_pos = p(0, -1);
-        game.place_wall(snap_to_grid(game.player.pos) + rel_wall_pos);
+        game.place_wall_block(snap_to_grid(game.player.pos) + rel_wall_pos);
 
         assert!(game.player_exactly_touching_wall_in_direction(p(0, -1)));
     }
@@ -2781,7 +2783,7 @@ mod tests {
     fn test_player_exactly_not_touching_block_down_left_diagonal() {
         let mut game = set_up_just_player();
         let rel_wall_pos = p(-1, -1);
-        game.place_wall(snap_to_grid(game.player.pos) + rel_wall_pos);
+        game.place_wall_block(snap_to_grid(game.player.pos) + rel_wall_pos);
 
         assert!(!game.player_exactly_touching_wall_in_direction(p(0, -1)));
     }
@@ -2790,7 +2792,7 @@ mod tests {
         let mut game = set_up_just_player();
         game.player.pos.add_assign(p(-0.01, 0.0));
         let rel_wall_pos = p(-1, -1);
-        game.place_wall(snap_to_grid(game.player.pos) + rel_wall_pos);
+        game.place_wall_block(snap_to_grid(game.player.pos) + rel_wall_pos);
 
         assert!(game.player_exactly_touching_wall_in_direction(p(0, -1)));
     }
@@ -2798,7 +2800,7 @@ mod tests {
     fn test_player_exactly_touching_block_on_right() {
         let mut game = set_up_just_player();
         let rel_wall_pos = p(1, 0);
-        game.place_wall(snap_to_grid(game.player.pos) + rel_wall_pos);
+        game.place_wall_block(snap_to_grid(game.player.pos) + rel_wall_pos);
 
         assert!(game.player_exactly_touching_wall_in_direction(p(1, 0)));
     }
@@ -2854,6 +2856,14 @@ mod tests {
         let game1_time_before_impact = 1.0 - game1.time_since_last_player_collision().unwrap();
         let game2_time_before_impact = 1.0 - game2.time_since_last_player_collision().unwrap();
         assert!(game1_time_before_impact == game2_time_before_impact * VERTICAL_STRETCH_FACTOR);
+    }
+
+    #[test]
+    fn test_player_supported_by_block_if_mostly_off_edge() {
+        let mut game = set_up_player_on_block_more_overhanging_than_not_on_right();
+        game.player.remaining_coyote_time = 0.0;
+        assert!(game.player_is_supported());
+        assert!(game.player_is_standing_on_block());
     }
 
     #[ignore]
