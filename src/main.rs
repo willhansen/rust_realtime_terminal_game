@@ -404,7 +404,9 @@ impl Game {
                 .add_assign(floatify(-wall_direction) * self.player.max_run_speed_bpf);
             self.player.desired_direction = -wall_direction;
         }
-        self.player.vel_bpf.set_y(self.player.jump_delta_v);
+        self.player
+            .vel_bpf
+            .add_assign(p(0.0, self.player.jump_delta_v));
     }
 
     fn player_can_jump(&self) -> bool {
@@ -1240,7 +1242,8 @@ mod tests {
 
     fn set_up_player_hanging_on_wall_on_left() -> Game {
         let mut game = set_up_just_player();
-        game.place_line_of_blocks((14, 0), (14, 20), Block::Wall);
+        let wall_x = game.player.pos.x() as i32 - 1;
+        game.place_line_of_blocks((wall_x, 0), (wall_x, 20), Block::Wall);
         game.player.desired_direction.set_x(-1);
         return game;
     }
@@ -2876,10 +2879,18 @@ mod tests {
     // The general case of this is allowing a single jump anytime while falling after walking (not jumping!) off a platform
     fn test_allow_late_jump() {}
 
-    #[ignore]
     #[test]
     // This should allow high skill to lead to really fast wall climbing (like in N+)
-    fn test_wall_jump_adds_velocity_instead_of_sets_it() {}
+    fn test_wall_jump_adds_velocity_instead_of_sets_it() {
+        let mut game1 = set_up_player_hanging_on_wall_on_left();
+        let mut game2 = set_up_player_hanging_on_wall_on_left();
+        let up_vel = 1.0;
+        game1.player.vel_bpf = p(0.0, up_vel);
+        game1.player_jump_if_possible();
+        game2.player_jump_if_possible();
+
+        assert!(game1.player.vel_bpf.y() == game2.player.vel_bpf.y() + up_vel);
+    }
 
     #[ignore]
     #[test]
