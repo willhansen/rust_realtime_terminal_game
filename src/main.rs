@@ -158,6 +158,7 @@ struct Player {
     remaining_coyote_time: f32,
     max_coyote_time: f32,
     dash_vel: f32,
+    dash_adds_to_vel: bool,
     last_collision: Option<CollisionWithBlock>,
     moved_normal_to_collision_since_collision: bool,
 }
@@ -185,6 +186,7 @@ impl Player {
             remaining_coyote_time: DEFAULT_PLAYER_MAX_COYOTE_TIME,
             max_coyote_time: DEFAULT_PLAYER_MAX_COYOTE_TIME,
             dash_vel: DEFAULT_PLAYER_DASH_SPEED,
+            dash_adds_to_vel: true,
             last_collision: None,
             moved_normal_to_collision_since_collision: false,
         }
@@ -435,7 +437,12 @@ impl Game {
 
     fn player_dash(&mut self) {
         if self.player.desired_direction != p(0, 0) {
-            self.player.vel_bpf = floatify(self.player.desired_direction) * self.player.dash_vel;
+            let dash_vel = floatify(self.player.desired_direction) * self.player.dash_vel;
+            if self.player.dash_adds_to_vel {
+                self.player.vel_bpf.add_assign(dash_vel);
+            } else {
+                self.player.vel_bpf = dash_vel;
+            }
         }
     }
     fn toggle_bullet_time(&mut self) {
@@ -2211,12 +2218,23 @@ mod tests {
     }
 
     #[test]
-    fn test_dash_sets_velocity_rather_than_adds_to_it() {
+    fn test_dash_sets_velocity_rather_than_adds_to_it_if_set() {
         let mut game = set_up_just_player();
+        game.player.dash_adds_to_vel = false;
         game.player.vel_bpf = p(-game.player.dash_vel * 4.0, 0.0);
         game.player.desired_direction = p(1, 0);
         game.player_dash();
         assert!(game.player.vel_bpf.x() > 0.0);
+    }
+
+    #[test]
+    fn test_dash_adds_velocity_rather_than_sets_it_if_set() {
+        let mut game = set_up_just_player();
+        game.player.dash_adds_to_vel = true;
+        game.player.vel_bpf = p(-game.player.dash_vel * 4.0, 0.0);
+        game.player.desired_direction = p(1, 0);
+        game.player_dash();
+        assert!(game.player.vel_bpf.x() == -game.player.dash_vel * 3.0);
     }
 
     #[test]
