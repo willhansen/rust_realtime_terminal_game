@@ -15,6 +15,10 @@ where
     return point!(x: x, y: y);
 }
 
+pub fn radial(r: f32, radians: f32) -> Point<f32> {
+    p(r * radians.cos(), r * radians.sin())
+}
+
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub struct MovecastCollision {
     pub collider_pos: Point<f32>,
@@ -281,6 +285,26 @@ pub fn floating_square_exactly_touching_fixed_square(
     let on_y_side = on_y_bound && within_x_bounds;
 
     !on_perfect_diagonal && (on_x_side || on_y_side)
+}
+
+pub fn points_in_line_with_max_gap(
+    start: Point<f32>,
+    end: Point<f32>,
+    max_gap: f32,
+) -> Vec<Point<f32>> {
+    let blocks = magnitude(end - start);
+    let num_inner_points: i32 = (blocks * max_gap).ceil() as i32 - 1;
+    let mut output = vec![];
+    output.push(start);
+    for i in 1..num_inner_points {
+        output.push(lerp_2d(start, end, i as f32 / num_inner_points as f32));
+    }
+    output.push(end);
+    return output;
+}
+
+pub fn lerp_2d(a: Point<f32>, b: Point<f32>, t: f32) -> Point<f32> {
+    p(lerp(a.x(), b.x(), t), lerp(a.y(), b.y(), t))
 }
 
 #[cfg(test)]
@@ -613,5 +637,57 @@ mod tests {
             p(0.0, 0.0),
             p(1, -1)
         ));
+    }
+
+    #[test]
+    fn test_lerp_2d_quarter_to_end() {
+        let y = 5.0;
+        assert!(lerp_2d(p(4.0, y), p(8.0, y), 0.75) == p(7.0, y));
+    }
+
+    #[test]
+    fn test_lerp_2d_at_end_of_diagonal() {
+        assert!(lerp_2d(p(1.0, 8.0), p(5.0, -7.0), 1.0) == p(5.0, -7.0));
+    }
+    #[test]
+    fn test_lerp_2d_at_start_of_diagonal() {
+        assert!(lerp_2d(p(-1.0, -8.0), p(5.0, 7777.0), 0.0) == p(-1.0, -8.0));
+    }
+
+    #[test]
+    fn test_line_of_points__no_intermediates() {
+        assert!(points_in_line_with_max_gap(p(1.0, 0.0), p(2.0, 0.0), 1.0).len() == 2);
+    }
+
+    #[test]
+    fn test_line_of_points__vertical() {
+        let y = 6.9;
+        let density = 9.0;
+        assert!(
+            points_in_line_with_max_gap(p(0.0, 0.0), p(0.0, y), density).len()
+                == ((density * y).ceil() as usize)
+        );
+    }
+    #[test]
+    fn test_line_of_points__exact_endpoints() {
+        let start = p(0.12309, 4.234); //arbitrary
+        let end = p(-0.12309, 45.28374); //arbitrary
+        let density = 1.1234;
+        let points = points_in_line_with_max_gap(start, end, density);
+        assert!(*points.first().unwrap() == start);
+        assert!(*points.last().unwrap() == end);
+    }
+    #[test]
+    fn test_line_of_points__symmetric() {
+        let start = p(0.1209, 1.234); //arbitrary
+        let end = p(1.12309, 1.28374); //arbitrary
+        let density = 2.0;
+        let points = points_in_line_with_max_gap(start, end, density);
+        assert!(points.len() == 3);
+        let midpoint = points[1];
+        let d1 = magnitude(start - midpoint);
+        let d2 = magnitude(end - midpoint);
+
+        assert_relative_eq!(d1, d2);
     }
 }

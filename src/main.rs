@@ -17,6 +17,7 @@ use device_query::{DeviceQuery, DeviceState, Keycode};
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Point};
+use num::traits::FloatConst;
 use std::char;
 use std::cmp::min;
 use std::collections::{HashSet, VecDeque};
@@ -61,7 +62,6 @@ const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED * 3.0;
 const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
 const DEFAULT_PLAYER_MIDAIR_SOFT_MAX_SPEED: f32 = 5.0;
 
-const DEFAULT_BULLET_TIME_FACTOR: f32 = 0.1;
 const DEFAULT_PARTICLE_LIFETIME_IN_SECONDS: f32 = 0.5;
 const DEFAULT_PARTICLE_LIFETIME_IN_TICKS: f32 =
     DEFAULT_PARTICLE_LIFETIME_IN_SECONDS * MAX_FPS as f32;
@@ -222,7 +222,7 @@ impl Game {
             num_positions_per_block_to_check_for_collisions:
                 NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS,
             is_bullet_time: false,
-            bullet_time_factor: DEFAULT_BULLET_TIME_FACTOR,
+            bullet_time_factor: 0.1,
             player: Player::new(),
         }
     }
@@ -318,6 +318,18 @@ impl Game {
 
     fn place_particle(&mut self, pos: Point<f32>) {
         self.place_particle_with_lifespan(pos, DEFAULT_PARTICLE_LIFETIME_IN_TICKS)
+    }
+
+    fn place_particle_with_velocity_and_lifetime(
+        &mut self,
+        pos: Point<f32>,
+        vel: Point<f32>,
+        life_duration: f32,
+    ) {
+        let mut particle = Particle::new_at(pos);
+        particle.vel = vel;
+        particle.ticks_to_expiry = life_duration;
+        self.particles.push(particle);
     }
 
     fn place_particle_with_lifespan(&mut self, pos: Point<f32>, lifespan_in_ticks: f32) {
@@ -478,7 +490,7 @@ impl Game {
             self.apply_forces_to_player(dt_in_ticks);
             self.apply_player_kinematics(dt_in_ticks);
             if self.player_is_officially_fast() {
-                self.make_speed_lines();
+                self.generate_speed_particles();
             }
         }
         self.apply_particle_physics(dt_in_ticks);
@@ -658,6 +670,32 @@ impl Game {
                 grid_glyph = particle_glyph;
             }
             self.set_buffered_glyph(particle_square, grid_glyph);
+        }
+    }
+
+    fn generate_speed_particles(&mut self) {
+        if let Some(&last_pos) = self.player.recent_poses.get(0) {
+            self.place_particle_burst_speed_line(last_pos, self.player.pos, 1.0);
+        }
+    }
+
+    fn place_particle_burst(&mut self, pos: Point<f32>, num_particles: i32, speed: f32) {
+        for i in 0..num_particles {
+            let dir = radial(1.0, (i as f32 / num_particles as f32) * f32::TAU());
+            self.place_particle_with_velocity_and_lifetime(pos, dir * speed, 30.0);
+        }
+    }
+
+    fn place_particle_burst_speed_line(
+        &mut self,
+        start_pos: Point<f32>,
+        end_pos: Point<f32>,
+        min_linear_density: f32,
+    ) {
+        let num_particles_per_burst = 16;
+        let particle_speed = 0.05;
+        for pos in points_in_line_with_max_gap(start_pos, end_pos, min_linear_density) {
+            self.place_particle_burst(pos, num_particles_per_burst, particle_speed);
         }
     }
 
@@ -2039,6 +2077,8 @@ mod tests {
         assert!(game.player.desired_direction == p(0, 1));
     }
 
+    #[ignore]
+    // switching to particle bursts
     #[test]
     fn test_different_color_when_go_fast() {
         let mut game = set_up_player_on_platform();
@@ -2132,7 +2172,7 @@ mod tests {
     }
 
     #[test]
-    fn test_braille_speed_lines_when_go_fast() {
+    fn test_braille_left_behind_when_go_fast() {
         let mut game = set_up_player_on_platform_in_box();
         game.player.vel_bpf = p(game.player.color_change_speed_threshold * 5.0, 0.0);
         let start_pos = game.player.pos;
@@ -2890,6 +2930,21 @@ mod tests {
         game2.player_jump_if_possible();
 
         assert!(game1.player.vel_bpf.y() == game2.player.vel_bpf.y() + up_vel);
+    }
+
+    #[test]
+    fn test_speed_line_particles_have_velocity() {
+        let mut game = set_up_just_player();
+        be_in_space(&mut game);
+        game.player.vel_bpf = p(game.player.color_change_speed_threshold * 2.0, 0.0);
+        assert!(game.particles.is_empty());
+
+        game.tick_physics();
+
+        assert!(!game.particles.is_empty());
+        for particle in game.particles {
+            assert!(magnitude(particle.vel) != 0.0);
+        }
     }
 
     #[ignore]
