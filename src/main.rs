@@ -30,6 +30,7 @@ use termion::event::{Event, Key, MouseButton, MouseEvent};
 use termion::input::{MouseTerminal, TermRead};
 use termion::raw::IntoRawMode;
 
+use crate::SpeedLineType::perpendicular_lines;
 use glyph::*;
 use utility::*;
 
@@ -142,6 +143,13 @@ struct CollisionWithBlock {
     collided_block_square: Point<i32>,
 }
 
+enum SpeedLineType {
+    still_line,
+    burst_chain,
+    burst_on_dash,
+    perpendicular_lines,
+}
+
 struct Player {
     alive: bool,
     pos: Point<f32>,
@@ -166,6 +174,7 @@ struct Player {
     last_collision: Option<CollisionWithBlock>,
     moved_normal_to_collision_since_collision: bool,
     speed_line_lifetime_in_ticks: f32,
+    speed_line_behavior: SpeedLineType,
 }
 
 impl Player {
@@ -197,6 +206,7 @@ impl Player {
             last_collision: None,
             moved_normal_to_collision_since_collision: false,
             speed_line_lifetime_in_ticks: 0.5 * MAX_FPS as f32,
+            speed_line_behavior: SpeedLineType::still_line,
         }
     }
 }
@@ -314,20 +324,48 @@ impl Game {
         self.place_block(pos, Block::Wall);
     }
 
-    fn place_line_of_particles(&mut self, pos0: Point<f32>, pos1: Point<f32>) {
+    fn place_line_of_particles_with_velocity(
+        &mut self,
+        start: Point<f32>,
+        end: Point<f32>,
+        vel: Point<f32>,
+    ) {
+        let mut line = self.make_line_of_particles(start, end);
+        for mut p in &mut line {
+            p.vel = vel;
+        }
+        self.add_particles(line);
+    }
+
+    fn place_line_of_particles(&mut self, start: Point<f32>, end: Point<f32>) {
+        let line = self.make_line_of_particles(start, end);
+        self.add_particles(line);
+    }
+
+    fn make_line_of_particles(&mut self, pos0: Point<f32>, pos1: Point<f32>) -> Vec<Particle> {
         let braille_pos0 = Glyph::world_pos_to_braille_pos(pos0);
         let braille_pos1 = Glyph::world_pos_to_braille_pos(pos1);
+        let mut new_particles = Vec::<Particle>::new();
         for (x, y) in line_drawing::Bresenham::new(
             snap_to_grid(braille_pos0).x_y(),
             snap_to_grid(braille_pos1).x_y(),
         ) {
             let particle_pos = Glyph::braille_pos_to_world_pos(p(x as f32, y as f32));
-            self.place_particle(particle_pos);
+            new_particles.push(Particle::new_at(particle_pos));
         }
+        new_particles
     }
 
     fn place_particle(&mut self, pos: Point<f32>) {
         self.place_particle_with_lifespan(pos, DEFAULT_PARTICLE_LIFETIME_IN_TICKS)
+    }
+
+    fn add_particle(&mut self, p: Particle) {
+        self.particles.push(p);
+    }
+
+    fn add_particles(&mut self, mut ps: Vec<Particle>) {
+        self.particles.append(&mut ps);
     }
 
     fn place_particle_with_velocity_and_lifetime(
@@ -691,7 +729,18 @@ impl Game {
 
     fn generate_speed_particles(&mut self) {
         if let Some(&last_pos) = self.player.recent_poses.get(0) {
-            self.place_particle_burst_speed_line(last_pos, self.player.pos, 1.0);
+            match &self.player.speed_line_behavior {
+                SpeedLineType::still_line => {
+                    self.place_static_speed_lines(last_pos, self.player.pos)
+                }
+                SpeedLineType::perpendicular_lines => {
+                    self.place_perpendicular_moving_speed_lines(last_pos, self.player.pos)
+                }
+                SpeedLineType::burst_chain => {
+                    self.place_particle_burst_speed_line(last_pos, self.player.pos, 1.0)
+                }
+                _ => {}
+            }
         }
     }
 
@@ -719,25 +768,25 @@ impl Game {
         }
     }
 
-    fn make_speed_lines(&mut self) {
-        if let Some(&last_pos) = self.player.recent_poses.get(0) {
-            // draw all corners
-            let mut offsets = Vec::<Point<f32>>::new();
-            let n = 1;
-            let r = 0.3;
-            for i in -n..=n {
-                for j in -n..=n {
-                    if i == 0 || j == 0 {
-                        continue;
-                    }
-                    let x = i as f32 * r / n as f32;
-                    let y = j as f32 * r / n as f32;
-                    offsets.push(p(x, y));
+    fn place_perpendicular_moving_speed_lines(&mut self, start: Point<f32>, end: Point<f32>) {}
+
+    fn place_static_speed_lines(&mut self, start: Point<f32>, end: Point<f32>) {
+        // draw all corners
+        let mut offsets = Vec::<Point<f32>>::new();
+        let n = 1;
+        let r = 0.3;
+        for i in -n..=n {
+            for j in -n..=n {
+                if i == 0 || j == 0 {
+                    continue;
                 }
+                let x = i as f32 * r / n as f32;
+                let y = j as f32 * r / n as f32;
+                offsets.push(p(x, y));
             }
-            for offset in offsets {
-                self.place_line_of_particles(last_pos + offset, self.player.pos + offset);
-            }
+        }
+        for offset in offsets {
+            self.place_line_of_particles(start + offset, end + offset);
         }
     }
 
@@ -2979,17 +3028,26 @@ mod tests {
     }
 
     #[test]
-    fn test_speed_line_particles_have_velocity() {
-        let mut game = set_up_just_player();
-        be_in_space(&mut game);
-        game.player.vel = p(game.player.color_change_speed_threshold * 2.0, 0.0);
-        assert!(game.particles.is_empty());
-
+    fn test_burst_speed_line_particles_have_velocity() {
+        let mut game = set_up_player_just_dashed_right_in_zero_g();
+        game.player.speed_line_behavior = SpeedLineType::burst_chain;
         game.tick_physics();
 
         assert!(!game.particles.is_empty());
         for particle in game.particles {
             assert!(magnitude(particle.vel) != 0.0);
+        }
+    }
+
+    #[test]
+    fn test_stationary_speed_line_particles_have_no_velocity() {
+        let mut game = set_up_player_just_dashed_right_in_zero_g();
+        game.player.speed_line_behavior = SpeedLineType::still_line;
+        game.tick_physics();
+
+        assert!(!game.particles.is_empty());
+        for particle in game.particles {
+            assert!(magnitude(particle.vel) == 0.0);
         }
     }
 
@@ -3009,7 +3067,6 @@ mod tests {
     // Once we have vertical subsquare positioning up and running, a slow slide down will look cool.
     fn test_slowly_slide_down_when_grabbing_wall() {}
 
-    // ignore because midair max speed may be higher than running max speed
     #[test]
     fn test_be_fastest_at_very_start_of_jump() {
         let mut game = set_up_player_running_full_speed_to_right_on_platform();
@@ -3035,4 +3092,7 @@ mod tests {
     // just as the spring giveth, so doth the spring taketh away(-eth)
     #[test]
     fn test_jump_penalty_if_jump_when_entering_compression() {}
+
+    #[test]
+    fn test_perpendicular_speed_lines_actually_perpendicular() {}
 }
