@@ -706,6 +706,16 @@ mod tests {
         assert!(Glyph::world_pos_to_braille_char(p(-0.4, -0.4)) == '\u{2840}');
         assert!(Glyph::world_pos_to_braille_char(p(0.2, 0.4)) == '\u{2808}');
     }
+    #[test]
+    fn test_world_point_to_braille_char_is_always_braille() {
+        for _ in 0..200 {
+            let random_point = p(rand_in_range(0.0, 30.0), rand_in_range(0.0, 30.0));
+
+            assert!(Glyph::is_braille(Glyph::world_pos_to_braille_char(
+                random_point
+            )));
+        }
+    }
 
     #[test]
     fn test_world_point_to_braille_glyph() {

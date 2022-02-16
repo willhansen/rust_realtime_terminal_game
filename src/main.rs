@@ -57,10 +57,12 @@ const DEFAULT_PLAYER_ACCELERATION_FROM_AIR_TRACTION: f32 =
     DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION;
 const DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION: f32 =
     DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION / 5.0;
-const DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED: f32 = 0.5;
-const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED * 3.0;
+const DEFAULT_PLAYER_MAX_RUN_SPEED: f32 = 0.5;
+const DEFAULT_PLAYER_GROUND_FRICTION_START_SPEED: f32 = 0.7;
+const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED * 3.0;
 const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
-const DEFAULT_PLAYER_MIDAIR_SOFT_MAX_SPEED: f32 = 5.0;
+const DEFAULT_PLAYER_MIDAIR_MAX_MOVE_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED;
+const DEFAULT_PLAYER_AIR_FRICTION_START_SPEED: f32 = DEFAULT_PLAYER_DASH_SPEED;
 
 const DEFAULT_PARTICLE_LIFETIME_IN_SECONDS: f32 = 0.5;
 const DEFAULT_PARTICLE_LIFETIME_IN_TICKS: f32 =
@@ -144,10 +146,12 @@ struct Player {
     alive: bool,
     pos: Point<f32>,
     recent_poses: VecDeque<Point<f32>>,
-    max_run_speed_bpf: f32,
-    max_midair_speed: f32,
+    max_run_speed: f32,
+    ground_friction_start_speed: f32,
+    air_friction_start_speed: f32,
+    max_midair_move_speed: f32,
     color_change_speed_threshold: f32,
-    vel_bpf: Point<f32>,
+    vel: Point<f32>,
     desired_direction: Point<i32>,
     jump_delta_v: f32,
     acceleration_from_gravity: f32,
@@ -161,6 +165,7 @@ struct Player {
     dash_adds_to_vel: bool,
     last_collision: Option<CollisionWithBlock>,
     moved_normal_to_collision_since_collision: bool,
+    speed_line_lifetime_in_ticks: f32,
 }
 
 impl Player {
@@ -169,13 +174,15 @@ impl Player {
             alive: false,
             pos: p(0.0, 0.0),
             recent_poses: VecDeque::<Point<f32>>::new(),
-            max_run_speed_bpf: DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED,
-            max_midair_speed: DEFAULT_PLAYER_MIDAIR_SOFT_MAX_SPEED,
+            max_run_speed: DEFAULT_PLAYER_MAX_RUN_SPEED,
+            ground_friction_start_speed: DEFAULT_PLAYER_GROUND_FRICTION_START_SPEED,
+            air_friction_start_speed: DEFAULT_PLAYER_AIR_FRICTION_START_SPEED,
+            max_midair_move_speed: DEFAULT_PLAYER_MIDAIR_MAX_MOVE_SPEED,
             color_change_speed_threshold: magnitude(p(
-                DEFAULT_PLAYER_SOFT_MAX_RUN_SPEED,
+                DEFAULT_PLAYER_MAX_RUN_SPEED,
                 DEFAULT_PLAYER_JUMP_DELTA_V,
             )),
-            vel_bpf: Point::<f32>::new(0.0, 0.0),
+            vel: Point::<f32>::new(0.0, 0.0),
             desired_direction: p(0, 0),
             jump_delta_v: DEFAULT_PLAYER_JUMP_DELTA_V,
             acceleration_from_gravity: DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
@@ -186,9 +193,10 @@ impl Player {
             remaining_coyote_time: DEFAULT_PLAYER_MAX_COYOTE_TIME,
             max_coyote_time: DEFAULT_PLAYER_MAX_COYOTE_TIME,
             dash_vel: DEFAULT_PLAYER_DASH_SPEED,
-            dash_adds_to_vel: true,
+            dash_adds_to_vel: false,
             last_collision: None,
             moved_normal_to_collision_since_collision: false,
+            speed_line_lifetime_in_ticks: 0.5 * MAX_FPS as f32,
         }
     }
 }
@@ -251,13 +259,13 @@ impl Game {
     }
 
     fn set_player_max_run_speed(&mut self, speed: f32) {
-        self.player.max_run_speed_bpf = speed;
+        self.player.max_run_speed = speed;
         self.update_player_color_change_speed_thresh();
     }
 
     fn update_player_color_change_speed_thresh(&mut self) {
         self.player.color_change_speed_threshold =
-            magnitude(p(self.player.max_run_speed_bpf, self.player.jump_delta_v));
+            magnitude(p(self.player.max_run_speed, self.player.jump_delta_v));
     }
 
     fn screen_to_world(&self, terminal_position: &(u16, u16)) -> (i32, i32) {
@@ -404,7 +412,7 @@ impl Game {
         if self.player.alive {
             self.kill_player();
         }
-        self.player.vel_bpf = p(0.0, 0.0);
+        self.player.vel = p(0.0, 0.0);
         self.player.desired_direction = p(0, 0);
         self.player.pos = p(x, y);
         self.player.alive = true;
@@ -414,13 +422,11 @@ impl Game {
         if self.player_is_grabbing_wall() || self.player_is_running_up_wall() {
             let wall_direction = sign(self.player.desired_direction);
             self.player
-                .vel_bpf
-                .add_assign(floatify(-wall_direction) * self.player.max_run_speed_bpf);
+                .vel
+                .add_assign(floatify(-wall_direction) * self.player.max_run_speed);
             self.player.desired_direction = -wall_direction;
         }
-        self.player
-            .vel_bpf
-            .add_assign(p(0.0, self.player.jump_delta_v));
+        self.player.vel.add_assign(p(0.0, self.player.jump_delta_v));
     }
 
     fn player_can_jump(&self) -> bool {
@@ -439,9 +445,9 @@ impl Game {
         if self.player.desired_direction != p(0, 0) {
             let dash_vel = floatify(self.player.desired_direction) * self.player.dash_vel;
             if self.player.dash_adds_to_vel {
-                self.player.vel_bpf.add_assign(dash_vel);
+                self.player.vel.add_assign(dash_vel);
             } else {
-                self.player.vel_bpf = dash_vel;
+                self.player.vel = dash_vel;
             }
         }
     }
@@ -532,7 +538,10 @@ impl Game {
 
     fn apply_particle_linear_velocities(&mut self, dt_in_ticks: f32) {
         self.particles.iter_mut().for_each(|particle| {
-            particle.pos.add_assign(particle.vel * dt_in_ticks);
+            particle.pos.add_assign(
+                compensate_for_vertical_stretch(particle.vel, VERTICAL_STRETCH_FACTOR)
+                    * dt_in_ticks,
+            )
         });
     }
 
@@ -611,7 +620,7 @@ impl Game {
         if let Some(last_pos) = self.player.recent_poses.get(0) {
             inferred_speed = magnitude(self.player.pos - *last_pos);
         }
-        let actual_speed = magnitude(self.player.vel_bpf);
+        let actual_speed = magnitude(self.player.vel);
         actual_speed > self.player.color_change_speed_threshold
             || inferred_speed > self.player.color_change_speed_threshold
     }
@@ -689,7 +698,11 @@ impl Game {
     fn place_particle_burst(&mut self, pos: Point<f32>, num_particles: i32, speed: f32) {
         for i in 0..num_particles {
             let dir = radial(1.0, (i as f32 / num_particles as f32) * f32::TAU());
-            self.place_particle_with_velocity_and_lifetime(pos, dir * speed, 30.0);
+            self.place_particle_with_velocity_and_lifetime(
+                pos,
+                dir * speed,
+                self.player.speed_line_lifetime_in_ticks,
+            );
         }
     }
 
@@ -699,7 +712,7 @@ impl Game {
         end_pos: Point<f32>,
         min_linear_density: f32,
     ) {
-        let num_particles_per_burst = 16;
+        let num_particles_per_burst = 64;
         let particle_speed = 0.05;
         for pos in points_in_line_with_max_gap(start_pos, end_pos, min_linear_density) {
             self.place_particle_burst(pos, num_particles_per_burst, particle_speed);
@@ -815,12 +828,12 @@ impl Game {
 
     fn player_is_grabbing_wall(&self) -> bool {
         self.player_is_pressing_against_wall_horizontally()
-            && self.player.vel_bpf.y() <= 0.0
+            && self.player.vel.y() <= 0.0
             && !self.player_is_standing_on_block()
     }
 
     fn player_is_running_up_wall(&self) -> bool {
-        self.player_is_pressing_against_wall_horizontally() && self.player.vel_bpf.y() > 0.0
+        self.player_is_pressing_against_wall_horizontally() && self.player.vel.y() > 0.0
     }
 
     fn player_is_pressing_against_wall_horizontally(&self) -> bool {
@@ -832,8 +845,8 @@ impl Game {
     }
 
     fn apply_player_wall_friction(&mut self, dt_in_ticks: f32) {
-        self.player.vel_bpf.set_y(decelerate_linearly_to_cap(
-            self.player.vel_bpf.y(),
+        self.player.vel.set_y(decelerate_linearly_to_cap(
+            self.player.vel.y(),
             0.0,
             self.player.acceleration_from_floor_traction * dt_in_ticks,
         ));
@@ -843,10 +856,10 @@ impl Game {
         if self.player_is_pressing_against_wall_horizontally() {
             return;
         }
-        self.player.vel_bpf.set_x(accelerate_within_max_speed(
-            self.player.vel_bpf.x(),
+        self.player.vel.set_x(accelerate_within_max_speed(
+            self.player.vel.x(),
             self.player.desired_direction.x(),
-            self.player.max_run_speed_bpf,
+            self.player.max_run_speed,
             self.player.acceleration_from_floor_traction * dt_in_ticks,
         ));
     }
@@ -855,25 +868,24 @@ impl Game {
         if self.player_is_pressing_against_wall_horizontally() {
             return;
         }
-        self.player.vel_bpf.set_x(accelerate_within_max_speed(
-            self.player.vel_bpf.x(),
+        self.player.vel.set_x(accelerate_within_max_speed(
+            self.player.vel.x(),
             self.player.desired_direction.x(),
-            self.player.max_run_speed_bpf,
+            self.player.max_midair_move_speed,
             self.player.acceleration_from_air_traction * dt_in_ticks,
         ));
     }
 
     fn apply_player_acceleration_from_gravity(&mut self, dt_in_ticks: f32) {
         self.player
-            .vel_bpf
+            .vel
             .add_assign(p(0.0, -self.player.acceleration_from_gravity * dt_in_ticks));
     }
 
     fn apply_player_kinematics(&mut self, dt_in_ticks: f32) {
         let start_point = self.player.pos;
         let mut remaining_step: Point<f32> =
-            compensate_for_vertical_stretch(self.player.vel_bpf, VERTICAL_STRETCH_FACTOR)
-                * dt_in_ticks;
+            compensate_for_vertical_stretch(self.player.vel, VERTICAL_STRETCH_FACTOR) * dt_in_ticks;
         let mut fraction_of_movement_remaining = 1.0;
         let mut current_start_point = start_point;
         let actual_endpoint: Point<f32>;
@@ -894,17 +906,17 @@ impl Game {
                     time_in_ticks: self.time_in_ticks()
                         - dt_in_ticks * fraction_of_movement_remaining,
                     normal: collision.normal,
-                    collider_velocity: self.player.vel_bpf,
+                    collider_velocity: self.player.vel,
                     collider_pos: collision.collider_pos,
                     collided_block_square: collision.collided_block_square,
                 });
 
                 if collision.normal.x() != 0 {
-                    self.player.vel_bpf.set_x(0.0);
+                    self.player.vel.set_x(0.0);
                     remaining_step = project(remaining_step, p(0.0, 1.0));
                 }
                 if collision.normal.y() != 0 {
-                    self.player.vel_bpf.set_y(0.0);
+                    self.player.vel.set_y(0.0);
                     remaining_step = project(remaining_step, p(1.0, 0.0));
                 }
 
@@ -960,7 +972,7 @@ impl Game {
     }
 
     fn apply_forces_to_player(&mut self, dt_in_ticks: f32) {
-        if self.player_is_grabbing_wall() && self.player.vel_bpf.y() <= 0.0 {
+        if self.player_is_grabbing_wall() && self.player.vel.y() <= 0.0 {
             self.apply_player_wall_friction(dt_in_ticks);
         } else if !self.player_is_supported() {
             self.apply_player_air_friction(dt_in_ticks);
@@ -973,23 +985,23 @@ impl Game {
     }
 
     fn apply_player_air_friction(&mut self, dt_in_ticks: f32) {
-        self.player.vel_bpf.set_x(decelerate_linearly_to_cap(
-            self.player.vel_bpf.x(),
-            self.player.max_midair_speed,
+        self.player.vel.set_x(decelerate_linearly_to_cap(
+            self.player.vel.x(),
+            self.player.air_friction_start_speed,
             self.player.deceleration_from_air_friction * dt_in_ticks,
         ));
 
-        self.player.vel_bpf.set_y(decelerate_linearly_to_cap(
-            self.player.vel_bpf.y(),
-            self.player.max_midair_speed,
-            self.player.deceleration_from_air_friction,
+        self.player.vel.set_y(decelerate_linearly_to_cap(
+            self.player.vel.y(),
+            self.player.air_friction_start_speed,
+            self.player.deceleration_from_air_friction * dt_in_ticks,
         ));
     }
 
     fn apply_player_floor_friction(&mut self, dt_in_ticks: f32) {
-        self.player.vel_bpf.set_x(decelerate_linearly_to_cap(
-            self.player.vel_bpf.x(),
-            self.player.max_run_speed_bpf,
+        self.player.vel.set_x(decelerate_linearly_to_cap(
+            self.player.vel.x(),
+            self.player.ground_friction_start_speed,
             self.player.deceleration_from_ground_friction * dt_in_ticks,
         ));
     }
@@ -1189,12 +1201,36 @@ mod tests {
         return game;
     }
 
+    fn set_up_player_just_dashed_right_in_zero_g() -> Game {
+        let mut game = set_up_player_in_zero_g();
+        game.player.desired_direction = p(1, 0);
+        game.player_dash();
+        game
+    }
+
+    fn set_up_player_barely_fighting_air_friction_to_the_right_in_zero_g() -> Game {
+        let mut game = set_up_player_in_zero_g();
+        game.player.desired_direction = p(1, 0);
+        game.player.vel = right()
+            * (game.player.air_friction_start_speed
+                + game.player.deceleration_from_air_friction * 0.9);
+        game
+    }
+
+    fn set_up_player_barely_fighting_air_friction_up_in_zero_g() -> Game {
+        let mut game = set_up_player_in_zero_g();
+        game.player.desired_direction = p(0, 1);
+        game.player.vel = up()
+            * (game.player.air_friction_start_speed
+                + game.player.deceleration_from_air_friction * 0.9);
+        game
+    }
+
     fn set_up_player_in_zero_g_frictionless_vacuum() -> Game {
         let mut game = set_up_player_in_zero_g();
-        game.player.acceleration_from_floor_traction = 0.0;
-        game.player.deceleration_from_ground_friction = 0.0;
-        game.player.deceleration_from_air_friction = 0.0;
-        return game;
+        be_frictionless(&mut game);
+        be_in_vacuum(&mut game);
+        game
     }
 
     fn set_up_player_on_platform() -> Game {
@@ -1202,6 +1238,12 @@ mod tests {
         let platform_y = game.player.pos.y() as i32 - 1;
         game.place_line_of_blocks((10, platform_y), (20, platform_y), Block::Wall);
         return game;
+    }
+    fn set_up_player_running_full_speed_to_right_on_platform() -> Game {
+        let mut game = set_up_player_on_platform();
+        game.player.vel = right() * game.player.max_run_speed;
+        game.player.desired_direction = p(1, 0);
+        game
     }
 
     fn set_up_player_very_slightly_above_platform() -> Game {
@@ -1239,7 +1281,7 @@ mod tests {
 
     fn set_up_player_one_tick_from_platform_impact() -> Game {
         let mut game = set_up_player_very_slightly_above_platform();
-        game.player.vel_bpf = p(0.0, -10.0);
+        game.player.vel = p(0.0, -10.0);
         return game;
     }
 
@@ -1462,7 +1504,7 @@ mod tests {
     #[test]
     fn test_move_player() {
         let mut game = set_up_player_on_platform();
-        game.player.max_run_speed_bpf = 1.0;
+        game.player.max_run_speed = 1.0;
         game.player.desired_direction.set_x(1);
 
         game.tick_physics();
@@ -1483,13 +1525,13 @@ mod tests {
     fn test_stop_on_collision() {
         let mut game = set_up_player_on_platform();
         game.place_block(round(game.player.pos) + p(1, 0), Block::Wall);
-        game.player.max_run_speed_bpf = 1.0;
+        game.player.max_run_speed = 1.0;
         game.player.desired_direction.set_x(1);
 
         game.tick_physics();
 
         assert!(game.player.pos == p(15.0, 11.0));
-        assert!(game.player.vel_bpf.x() == 0.0);
+        assert!(game.player.vel.x() == 0.0);
     }
 
     #[test]
@@ -1498,7 +1540,7 @@ mod tests {
         game.place_block(round(game.player.pos) + p(2, 0), Block::Wall);
         game.player.pos.add_assign(p(0.999, 0.0));
         game.player.desired_direction.set_x(1);
-        game.player.vel_bpf.set_x(5.0);
+        game.player.vel.set_x(5.0);
 
         game.tick_physics();
 
@@ -1509,7 +1551,7 @@ mod tests {
     #[test]
     fn test_move_player_slowly() {
         let mut game = set_up_player_on_platform();
-        game.player.max_run_speed_bpf = 0.49;
+        game.player.max_run_speed = 0.49;
         game.player.acceleration_from_floor_traction = 999.9; // rilly fast
         game.player.desired_direction.set_x(1);
 
@@ -1527,7 +1569,7 @@ mod tests {
     #[test]
     fn test_move_player_quickly() {
         let mut game = set_up_player_on_platform();
-        game.player.max_run_speed_bpf = 2.0;
+        game.player.max_run_speed = 2.0;
         game.player.desired_direction.set_x(1);
 
         game.tick_physics();
@@ -1542,12 +1584,12 @@ mod tests {
         let mut game = set_up_player_on_platform();
         // Player should not teleport through this block
         game.place_block(p(16, 11), Block::Wall);
-        game.player.max_run_speed_bpf = 2.0;
+        game.player.max_run_speed = 2.0;
         game.player.desired_direction.set_x(1);
 
         game.tick_physics();
         assert!(game.player.pos == p(15.0, 11.0));
-        assert!(game.player.vel_bpf.x() == 0.0);
+        assert!(game.player.vel.x() == 0.0);
     }
 
     #[test]
@@ -1591,21 +1633,21 @@ mod tests {
         game.place_line_of_blocks((14, 10), (14, 20), Block::Wall);
 
         game.place_player(15.0, 11.0);
-        game.player.vel_bpf = p(-2.0, 2.0);
+        game.player.vel = p(-2.0, 2.0);
         game.tick_physics();
-        assert!(game.player.vel_bpf.x() == 0.0);
-        assert!(game.player.vel_bpf.y() > 0.0);
+        assert!(game.player.vel.x() == 0.0);
+        assert!(game.player.vel.y() > 0.0);
     }
 
     #[test]
     fn test_decellerate_when_already_moving_faster_than_max_speed() {
         let mut game = set_up_player_on_platform();
-        game.player.max_run_speed_bpf = 1.0;
-        game.player.vel_bpf.set_x(5.0);
+        game.player.max_run_speed = 1.0;
+        game.player.vel.set_x(5.0);
         game.player.desired_direction.set_x(1);
         game.tick_physics();
-        assert!(game.player.vel_bpf.x() > game.player.max_run_speed_bpf);
-        assert!(game.player.vel_bpf.x() < 5.0);
+        assert!(game.player.vel.x() > game.player.max_run_speed);
+        assert!(game.player.vel.x() < 5.0);
     }
 
     #[test]
@@ -1613,10 +1655,10 @@ mod tests {
         let mut game = set_up_player_on_platform();
         game.player_jump_if_possible();
         game.tick_physics();
-        let vel_y_before_second_jump = game.player.vel_bpf.y();
+        let vel_y_before_second_jump = game.player.vel.y();
         game.player_jump_if_possible();
         game.tick_physics();
-        assert!(game.player.vel_bpf.y() < vel_y_before_second_jump);
+        assert!(game.player.vel.y() < vel_y_before_second_jump);
     }
 
     #[test]
@@ -1631,7 +1673,7 @@ mod tests {
     fn test_wall_grab() {
         let mut game = set_up_player_hanging_on_wall_on_left();
         game.tick_physics();
-        assert!(game.player.vel_bpf.y() == 0.0);
+        assert!(game.player.vel.y() == 0.0);
     }
 
     #[test]
@@ -1639,23 +1681,23 @@ mod tests {
         let mut game = set_up_player_hanging_on_wall_on_left();
         game.player_jump_if_possible();
         game.tick_physics();
-        assert!(game.player.vel_bpf.y() > 0.0);
-        assert!(game.player.vel_bpf.x() > 0.0);
+        assert!(game.player.vel.y() > 0.0);
+        assert!(game.player.vel.x() > 0.0);
     }
 
     #[test]
     fn test_no_running_up_walls_immediately_after_spawn() {
         let mut game = set_up_player_hanging_on_wall_on_left();
-        game.player.vel_bpf = p(-1.0, 1.0);
-        let start_vel_y = game.player.vel_bpf.y();
+        game.player.vel = p(-1.0, 1.0);
+        let start_vel_y = game.player.vel.y();
         game.tick_physics();
-        assert!(game.player.vel_bpf.y() < start_vel_y);
+        assert!(game.player.vel.y() < start_vel_y);
     }
 
     #[test]
     fn test_dont_grab_wall_while_moving_up() {
         let mut game = set_up_player_hanging_on_wall_on_left();
-        game.player.vel_bpf.set_y(1.0);
+        game.player.vel.set_y(1.0);
         assert!(!game.player_is_grabbing_wall());
     }
 
@@ -1667,14 +1709,14 @@ mod tests {
         game.player.desired_direction.set_x(-1);
         game.player.pos.add_assign(p(0.0, 2.0));
         game.player.pos.set_x(wall_x as f32 + 1.0);
-        game.player.vel_bpf = p(-3.0, 3.0);
+        game.player.vel = p(-3.0, 3.0);
         game.player.acceleration_from_gravity = 0.0;
         game.player.deceleration_from_air_friction = 0.0;
 
-        let start_y_vel = game.player.vel_bpf.y();
+        let start_y_vel = game.player.vel.y();
         let start_y_pos = game.player.pos.y();
         game.tick_physics();
-        let end_y_vel = game.player.vel_bpf.y();
+        let end_y_vel = game.player.vel.y();
         let end_y_pos = game.player.pos.y();
 
         assert!(start_y_vel == end_y_vel);
@@ -1709,7 +1751,7 @@ mod tests {
         game1.tick_physics();
         game2.tick_physics();
 
-        assert!(game1.player.vel_bpf.y() == game2.player.vel_bpf.y());
+        assert!(game1.player.vel.y() == game2.player.vel.y());
     }
 
     #[test]
@@ -1724,9 +1766,9 @@ mod tests {
     #[test]
     fn test_wall_jump_while_running_up_wall() {
         let mut game = set_up_player_hanging_on_wall_on_left();
-        game.player.vel_bpf.set_y(1.0);
+        game.player.vel.set_y(1.0);
         game.player_jump_if_possible();
-        assert!(game.player.vel_bpf.x() > 0.0);
+        assert!(game.player.vel.x() > 0.0);
     }
 
     #[test]
@@ -1980,75 +2022,44 @@ mod tests {
     fn test_dont_snap_to_grid_when_sliding_to_a_halt() {
         let mut game = set_up_player_on_platform();
         game.player.pos.add_assign(p(0.1, 0.0));
-        game.player.vel_bpf = p(0.1, 0.0);
+        game.player.vel = p(0.1, 0.0);
         game.player.acceleration_from_floor_traction = 0.1;
         game.player.desired_direction = p(0, 0);
 
         game.tick_physics();
-        assert!(game.player.vel_bpf.x() == 0.0);
+        assert!(game.player.vel.x() == 0.0);
         assert!(offset_from_grid(game.player.pos).x() != 0.0);
     }
 
     #[test]
     fn test_dash_no_direction_does_nothing() {
         let mut game = set_up_player_on_platform();
-        let start_vel = game.player.vel_bpf;
+        let start_vel = game.player.vel;
         game.player_dash();
-        assert!(game.player.vel_bpf == start_vel);
+        assert!(game.player.vel == start_vel);
     }
 
     #[test]
     fn test_dash_right_on_ground() {
         let mut game = set_up_player_on_platform();
-        let start_vel = game.player.vel_bpf;
+        let start_vel = game.player.vel;
         game.player.desired_direction = p(1, 0);
         game.player_dash();
-        assert!(
-            game.player.vel_bpf == floatify(game.player.desired_direction) * game.player.dash_vel
-        );
+        assert!(game.player.vel == floatify(game.player.desired_direction) * game.player.dash_vel);
     }
 
     #[test]
     fn test_slow_down_to_exactly_max_speed_horizontally_midair() {
-        let mut game = set_up_just_player();
-        game.player.desired_direction = p(1, 0);
-        game.player.max_midair_speed = 10.0;
-        game.player.deceleration_from_air_friction = 1.0;
-        game.player.acceleration_from_floor_traction = 0.0;
-        let vx = game.player.max_midair_speed + game.player.deceleration_from_air_friction * 0.9;
-        game.player.vel_bpf = p(vx, 0.0);
+        let mut game = set_up_player_barely_fighting_air_friction_to_the_right_in_zero_g();
         game.tick_physics();
-        assert!(game.player.vel_bpf.x() == game.player.max_midair_speed);
+        assert!(game.player.vel.x() == game.player.air_friction_start_speed);
     }
 
     #[test]
     fn test_slow_down_to_exactly_max_speed_vertically_midair() {
-        let mut game = set_up_player_in_zero_g();
-        game.player.desired_direction = p(0, 1);
-        game.player.max_midair_speed = 10.0;
-        game.player.deceleration_from_air_friction = 1.0;
-        let vy = game.player.max_midair_speed + game.player.deceleration_from_air_friction * 0.9;
-        game.player.vel_bpf = p(0.0, vy);
+        let mut game = set_up_player_barely_fighting_air_friction_up_in_zero_g();
         game.tick_physics();
-        assert!(game.player.vel_bpf.y() == game.player.max_midair_speed);
-    }
-
-    #[test]
-    fn test_air_friction_has_no_slowdown_overshoot() {
-        let mut game = set_up_player_in_zero_g();
-        game.player.desired_direction = p(1, 0);
-        game.player.max_midair_speed = 10.0;
-        game.player.deceleration_from_air_friction = 1.0;
-        game.player.acceleration_from_floor_traction = 0.0;
-        let start_vx =
-            game.player.max_midair_speed + game.player.deceleration_from_air_friction * 0.9;
-        game.player.vel_bpf = p(start_vx, 0.0);
-        game.tick_physics();
-        let vx_after_slowdown = game.player.vel_bpf.x();
-        game.tick_physics();
-        let end_vx = game.player.vel_bpf.x();
-        assert!(vx_after_slowdown < start_vx);
-        assert!(end_vx == vx_after_slowdown);
+        assert!(game.player.vel.y() == game.player.air_friction_start_speed);
     }
 
     #[test]
@@ -2090,7 +2101,7 @@ mod tests {
     fn test_different_color_when_go_fast() {
         let mut game = set_up_player_on_platform();
         let stopped_color = game.get_player_glyphs()[1][1].clone().unwrap().fg_color;
-        game.player.vel_bpf = p(game.player.max_run_speed_bpf + 5.0, 0.0);
+        game.player.vel = p(game.player.max_run_speed + 5.0, 0.0);
         let fast_color = game.get_player_glyphs()[1][1].clone().unwrap().fg_color;
 
         assert!(stopped_color != fast_color);
@@ -2181,7 +2192,7 @@ mod tests {
     #[test]
     fn test_braille_left_behind_when_go_fast() {
         let mut game = set_up_player_on_platform_in_box();
-        game.player.vel_bpf = p(game.player.color_change_speed_threshold * 5.0, 0.0);
+        game.player.vel = p(game.player.color_change_speed_threshold * 5.0, 0.0);
         let start_pos = game.player.pos;
         game.tick_physics();
         game.update_output_buffer();
@@ -2221,20 +2232,20 @@ mod tests {
     fn test_dash_sets_velocity_rather_than_adds_to_it_if_set() {
         let mut game = set_up_just_player();
         game.player.dash_adds_to_vel = false;
-        game.player.vel_bpf = p(-game.player.dash_vel * 4.0, 0.0);
+        game.player.vel = p(-game.player.dash_vel * 4.0, 0.0);
         game.player.desired_direction = p(1, 0);
         game.player_dash();
-        assert!(game.player.vel_bpf.x() > 0.0);
+        assert!(game.player.vel.x() > 0.0);
     }
 
     #[test]
     fn test_dash_adds_velocity_rather_than_sets_it_if_set() {
         let mut game = set_up_just_player();
         game.player.dash_adds_to_vel = true;
-        game.player.vel_bpf = p(-game.player.dash_vel * 4.0, 0.0);
+        game.player.vel = p(-game.player.dash_vel * 4.0, 0.0);
         game.player.desired_direction = p(1, 0);
         game.player_dash();
-        assert!(game.player.vel_bpf.x() == -game.player.dash_vel * 3.0);
+        assert!(game.player.vel.x() == -game.player.dash_vel * 3.0);
     }
 
     #[test]
@@ -2246,7 +2257,7 @@ mod tests {
         let mut game = Game::new(50, 50);
         game.player.deceleration_from_air_friction = 0.0;
         game.place_player(start_pos.x(), start_pos.y());
-        game.player.vel_bpf = start_pos - prev_pos;
+        game.player.vel = start_pos - prev_pos;
         game.player.desired_direction = p(-1, 0);
 
         game.place_block(p(34, 17), Block::Wall);
@@ -2271,14 +2282,14 @@ mod tests {
     fn update_color_threshold_with_speed_update() {
         let mut game = set_up_game();
         let start_thresh = game.player.color_change_speed_threshold;
-        game.set_player_max_run_speed(game.player.max_run_speed_bpf + 1.0);
+        game.set_player_max_run_speed(game.player.max_run_speed + 1.0);
         assert!(game.player.color_change_speed_threshold != start_thresh);
     }
 
     #[test]
     fn test_no_high_speed_color_with_normal_move_and_jump() {
         let mut game = set_up_player_on_platform();
-        game.player.vel_bpf = p(game.player.max_run_speed_bpf, 0.0);
+        game.player.vel = p(game.player.max_run_speed, 0.0);
         game.player.desired_direction = p(1, 0);
         game.player_jump();
         assert!(game.get_player_color() == PLAYER_COLOR);
@@ -2308,12 +2319,12 @@ mod tests {
     fn test_bullet_time_slows_down_motion() {
         let mut game = set_up_player_in_zero_g();
         game.player.acceleration_from_floor_traction = 0.0;
-        game.player.vel_bpf = p(1.0, 0.0);
+        game.player.vel = p(1.0, 0.0);
         let start_x = game.player.pos.x();
         game.bullet_time_factor = 0.5;
         game.toggle_bullet_time();
         game.tick_physics();
-        let expected_end_x = game.player.vel_bpf.x() * game.bullet_time_factor + start_x;
+        let expected_end_x = game.player.vel.x() * game.bullet_time_factor + start_x;
         assert!(game.player.pos.x() == expected_end_x);
     }
 
@@ -2321,36 +2332,36 @@ mod tests {
     fn test_bullet_time_slows_down_acceleration_from_gravity() {
         let mut game = set_up_just_player();
         game.player.acceleration_from_gravity = 1.0;
-        let start_vy = game.player.vel_bpf.y();
+        let start_vy = game.player.vel.y();
         game.bullet_time_factor = 0.5;
         game.toggle_bullet_time();
         game.tick_physics();
         let expected_end_vy =
             -game.player.acceleration_from_gravity * game.bullet_time_factor + start_vy;
-        assert!(game.player.vel_bpf.y() == expected_end_vy);
+        assert!(game.player.vel.y() == expected_end_vy);
     }
 
     #[test]
     fn test_no_passing_max_speed_horizontally_in_midair() {
         let mut game = set_up_just_player();
-        game.player.vel_bpf = p(game.player.max_run_speed_bpf, 0.0);
+        game.player.vel = p(game.player.max_run_speed, 0.0);
         game.player.desired_direction = p(1, 0);
         game.tick_physics();
-        assert!(game.player.vel_bpf.x().abs() <= game.player.max_midair_speed);
+        assert!(game.player.vel.x().abs() <= game.player.max_midair_move_speed);
     }
 
     #[test]
     fn test_can_turn_around_midair_around_after_a_wall_jump() {
         let mut game = set_up_player_hanging_on_wall_on_left();
         game.player.deceleration_from_air_friction = 0.0;
-        let start_vx = game.player.vel_bpf.x();
+        let start_vx = game.player.vel.x();
         game.player_jump_if_possible();
-        let vx_at_start_of_jump = game.player.vel_bpf.x();
+        let vx_at_start_of_jump = game.player.vel.x();
         game.tick_physics();
-        let vx_one_frame_into_jump = game.player.vel_bpf.x();
+        let vx_one_frame_into_jump = game.player.vel.x();
         game.player.desired_direction = p(-1, 0);
         game.tick_physics();
-        let end_vx = game.player.vel_bpf.x();
+        let end_vx = game.player.vel.x();
 
         assert!(start_vx == 0.0);
         assert!(vx_at_start_of_jump > 0.0);
@@ -2382,13 +2393,25 @@ mod tests {
     }
 
     #[test]
-    fn test_movement_compensates_for_non_square_grid() {
+    fn test_player_movement_compensates_for_non_square_grid() {
         let mut game = set_up_player_in_zero_g_frictionless_vacuum();
         let start_pos = game.player.pos;
 
-        game.player.vel_bpf = p(1.0, 1.0);
+        game.player.vel = p(1.0, 1.0);
         game.tick_physics();
         let movement = game.player.pos - start_pos;
+        assert!(movement.x() == movement.y() * VERTICAL_STRETCH_FACTOR);
+    }
+
+    #[test]
+    fn test_particles__movement_compensates_for_non_square_grid() {
+        let mut game = set_up_game();
+        game.place_particle_with_velocity_and_lifetime(p(5.0, 5.0), p(1.0, 1.0), 500.0);
+
+        let start_pos = game.particles[0].pos;
+
+        game.tick_physics();
+        let movement = game.particles[0].pos - start_pos;
         assert!(movement.x() == movement.y() * VERTICAL_STRETCH_FACTOR);
     }
 
@@ -2486,7 +2509,7 @@ mod tests {
         assert!(game.count_braille_dots_in_square(p(5, 5)) == 8);
     }
     #[test]
-    fn test_particles_can_expire() {
+    fn test_particles__can_expire() {
         let point = p(5.0, 5.0);
         let mut game = set_up_game();
         game.place_particle_with_lifespan(point, 1.0);
@@ -2509,7 +2532,7 @@ mod tests {
         assert!(game.get_buffered_glyph(snap_to_grid(point)).character == Block::Air.character());
     }
     #[test]
-    fn test_particles_move_around() {
+    fn test_particles__move_around() {
         let point = p(5.0, 5.0);
         let mut game = set_up_game();
         let mut particle = Particle::new_at(point);
@@ -2522,7 +2545,7 @@ mod tests {
     }
 
     #[test]
-    fn test_particles_die_when_out_of_map() {
+    fn test_particles__die_when_out_of_map() {
         let mut game = set_up_game();
         let point = p(50.0, 50.0);
         game.place_particle(point);
@@ -2531,7 +2554,7 @@ mod tests {
     }
 
     #[test]
-    fn test_particle_movement_slowed_by_bullet_time() {
+    fn test_particles__random_movement_slowed_by_bullet_time() {
         let mut game1 = set_up_game();
         let mut game2 = set_up_game();
         game1.toggle_bullet_time();
@@ -2549,8 +2572,12 @@ mod tests {
         let diff1 = end_pos_1 - start_pos;
         let diff2 = end_pos_2 - start_pos;
 
-        assert!(
-            (magnitude(diff1) / game1.bullet_time_factor.sqrt() - magnitude(diff2)).abs() < 0.0001
+        assert!(end_pos_1 != end_pos_2);
+
+        abs_diff_eq!(
+            magnitude(diff1) / game1.bullet_time_factor.sqrt(),
+            magnitude(diff2),
+            epsilon = 0.000001
         );
     }
 
@@ -2560,7 +2587,7 @@ mod tests {
         be_in_frictionless_space(&mut game);
         assert!(&game.player.last_collision.is_none());
         let collision_velocity = p(0.0, -5.0);
-        game.player.vel_bpf = collision_velocity;
+        game.player.vel = collision_velocity;
         game.tick_physics();
         assert!(game.time_since_last_player_collision() == Some(1.0));
         assert!(game.player.last_collision.as_ref().unwrap().normal == p(0, 1));
@@ -2584,7 +2611,7 @@ mod tests {
                 == collision_velocity
         );
         let collision_velocity = p(-10.0, 0.0);
-        game.player.vel_bpf = collision_velocity;
+        game.player.vel = collision_velocity;
         game.tick_physics();
         assert!(game.time_since_last_player_collision() == Some(1.0));
         assert!(game.player.last_collision.as_ref().unwrap().normal == p(1, 0));
@@ -2601,7 +2628,7 @@ mod tests {
     #[test]
     fn test_last_collision_tracking_accounts_for_bullet_time() {
         let mut game = set_up_player_on_platform();
-        game.player.vel_bpf = p(0.0, -1.0);
+        game.player.vel = p(0.0, -1.0);
         game.tick_physics();
         let ticks_before_bullet_time = 1.0;
         assert_relative_eq!(
@@ -2624,7 +2651,7 @@ mod tests {
     #[test]
     fn test_player_compresses_like_a_spring_when_colliding_at_high_speed() {
         let mut game = set_up_player_on_platform();
-        game.player.vel_bpf = p(0.0, -10.0);
+        game.player.vel = p(0.0, -10.0);
         game.tick_physics();
         game.tick_physics();
         assert!(game.get_player_compression_fraction() < 1.0);
@@ -2666,7 +2693,7 @@ mod tests {
     #[test]
     fn test_player_compression_characters_for_floor_collision_appear_in_correct_sequence() {
         let mut game = set_up_player_on_platform();
-        game.player.vel_bpf = p(0.0, -10.0);
+        game.player.vel = p(0.0, -10.0);
         game.tick_physics();
         assert!(game.player.last_collision.is_some());
         assert!(game.time_since_last_player_collision().unwrap() == 1.0);
@@ -2697,7 +2724,7 @@ mod tests {
         // Assignment
         let mut game = set_up_player_on_platform();
         //game.player.pos.add_assign(p(0.0, 0.1));
-        game.player.vel_bpf = p(0.0, -10.0);
+        game.player.vel = p(0.0, -10.0);
         game.tick_physics();
         assert!(game.time_since_last_player_collision() == Some(1.0));
         assert!(game.get_player_compression_fraction() < 1.0);
@@ -2714,7 +2741,7 @@ mod tests {
         // Assignment
         let mut game = set_up_player_under_platform();
         //game.player.pos.add_assign(p(0.0, 0.1));
-        game.player.vel_bpf = p(0.0, 10.0);
+        game.player.vel = p(0.0, 10.0);
         game.tick_physics();
         assert!(game.time_since_last_player_collision() == Some(1.0));
 
@@ -2729,13 +2756,13 @@ mod tests {
         // Assignment
         let mut game = set_up_player_touching_wall_on_right();
         be_in_frictionless_space(&mut game);
-        game.player.vel_bpf = p(10.0, 0.0);
+        game.player.vel = p(10.0, 0.0);
         game.tick_physics();
         assert!(game.time_since_last_player_collision() == Some(1.0));
         assert!(game.get_player_compression_fraction() < 1.0);
 
         // Action
-        game.player.vel_bpf = p(-0.1, 0.0);
+        game.player.vel = p(-0.1, 0.0);
         game.tick_physics();
 
         // Assertion
@@ -2743,7 +2770,7 @@ mod tests {
     }
 
     #[test]
-    fn test_particle_visuals_do_not_cover_blocks() {
+    fn test_particles__visuals_do_not_cover_blocks() {
         let mut game = set_up_game();
         let square = p(5, 5);
 
@@ -2759,7 +2786,7 @@ mod tests {
     #[test]
     fn test_player_remembers_movement_normal_to_last_collision__vertical_collision() {
         let mut game = set_up_player_on_platform();
-        game.player.vel_bpf = p(0.0, -1.0);
+        game.player.vel = p(0.0, -1.0);
         game.tick_physics();
         assert!(game.time_since_last_player_collision() == Some(1.0));
         assert!(game.player.moved_normal_to_collision_since_collision == false);
@@ -2771,11 +2798,12 @@ mod tests {
     #[test]
     fn test_player_remembers_movement_normal_to_last_collision__horizontal_collision() {
         let mut game = set_up_player_touching_wall_on_right();
-        game.player.vel_bpf = p(1.0, 0.0);
+        game.player.vel = p(1.0, 0.0);
+        game.player.desired_direction = p(1, 0);
         game.tick_physics();
         assert!(game.time_since_last_player_collision() == Some(1.0));
         assert!(game.player.moved_normal_to_collision_since_collision == false);
-        game.player.vel_bpf = p(-1.0, 0.0);
+        game.player.vel = p(-1.0, 0.0);
         game.tick_physics();
         assert!(game.player.moved_normal_to_collision_since_collision == true);
     }
@@ -2784,7 +2812,7 @@ mod tests {
     fn test_player_forgets_normal_movement_to_collision_upon_new_collision() {
         let mut game = set_up_player_on_platform_in_frictionless_vacuum();
         game.player.moved_normal_to_collision_since_collision = true;
-        game.player.vel_bpf = p(0.0, -1.0);
+        game.player.vel = p(0.0, -1.0);
         game.tick_physics();
         assert!(game.player.moved_normal_to_collision_since_collision == false);
     }
@@ -2799,7 +2827,7 @@ mod tests {
     }
 
     #[test]
-    fn test_particle_velocity() {
+    fn test_particles__velocity() {
         let mut game = set_up_game();
         let start_pos = p(5.0, 5.0);
         let mut particle = Particle::new_at(start_pos);
@@ -2815,7 +2843,7 @@ mod tests {
     fn test_player_compresses_when_sliding_up_wall() {
         let mut game = set_up_player_almost_touching_wall_on_right();
         game.player.desired_direction = p(1, 0);
-        game.player.vel_bpf = p(10.0, 10.0);
+        game.player.vel = p(10.0, 10.0);
         game.tick_physics();
         assert!(game.player.last_collision.is_some());
         game.tick_physics();
@@ -2875,7 +2903,7 @@ mod tests {
         game1.tick_physics();
         game2.tick_physics();
 
-        assert!(game1.player.vel_bpf.x() < game2.player.vel_bpf.x());
+        assert!(game1.player.vel.x() < game2.player.vel.x());
     }
 
     #[test]
@@ -2891,7 +2919,7 @@ mod tests {
         let mut game = set_up_player_on_platform();
         be_in_frictionless_space(&mut game);
         game.player.pos.add_assign(p(0.0, 1.0));
-        game.player.vel_bpf = p(0.0, -4.0);
+        game.player.vel = p(0.0, -4.0);
 
         game.tick_physics();
 
@@ -2908,8 +2936,8 @@ mod tests {
         game1.player.pos.add_assign(p(0.0, dist_from_impact));
         game2.player.pos.add_assign(p(-dist_from_impact, 0.0));
         let vel_of_impact = 4.0;
-        game1.player.vel_bpf = p(0.0, -vel_of_impact);
-        game2.player.vel_bpf = p(vel_of_impact, 0.0);
+        game1.player.vel = p(0.0, -vel_of_impact);
+        game2.player.vel = p(vel_of_impact, 0.0);
 
         game1.tick_physics();
         game2.tick_physics();
@@ -2943,18 +2971,18 @@ mod tests {
         let mut game1 = set_up_player_hanging_on_wall_on_left();
         let mut game2 = set_up_player_hanging_on_wall_on_left();
         let up_vel = 1.0;
-        game1.player.vel_bpf = p(0.0, up_vel);
+        game1.player.vel = p(0.0, up_vel);
         game1.player_jump_if_possible();
         game2.player_jump_if_possible();
 
-        assert!(game1.player.vel_bpf.y() == game2.player.vel_bpf.y() + up_vel);
+        assert!(game1.player.vel.y() == game2.player.vel.y() + up_vel);
     }
 
     #[test]
     fn test_speed_line_particles_have_velocity() {
         let mut game = set_up_just_player();
         be_in_space(&mut game);
-        game.player.vel_bpf = p(game.player.color_change_speed_threshold * 2.0, 0.0);
+        game.player.vel = p(game.player.color_change_speed_threshold * 2.0, 0.0);
         assert!(game.particles.is_empty());
 
         game.tick_physics();
@@ -2965,29 +2993,39 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_can_slow_down_midair_after_dash() {
+        let mut game1 = set_up_player_just_dashed_right_in_zero_g();
+        let mut game2 = set_up_player_just_dashed_right_in_zero_g();
+        game2.player.desired_direction = p(-1, 0);
+        game1.tick_physics();
+        game2.tick_physics();
+
+        assert!(game1.player.vel.x() > game2.player.vel.x());
+    }
+
     #[ignore]
     #[test]
     // Once we have vertical subsquare positioning up and running, a slow slide down will look cool.
     fn test_slowly_slide_down_when_grabbing_wall() {}
 
-    #[ignore]
     // ignore because midair max speed may be higher than running max speed
     #[test]
     fn test_be_fastest_at_very_start_of_jump() {
-        let mut game = set_up_player_on_platform();
-        game.player.vel_bpf = p(game.player.max_run_speed_bpf, 0.0);
-        game.player.desired_direction = p(1, 0);
+        let mut game = set_up_player_running_full_speed_to_right_on_platform();
+        assert!(game.player.max_run_speed >= game.player.max_midair_move_speed);
         game.player_jump();
-        let vel_at_start_of_jump = game.player.vel_bpf;
+        let vel_at_start_of_jump = game.player.vel;
         game.tick_physics();
         game.tick_physics();
         game.tick_physics();
 
-        assert!(magnitude(game.player.vel_bpf) <= magnitude(vel_at_start_of_jump));
+        assert!(magnitude(game.player.vel) <= magnitude(vel_at_start_of_jump));
     }
     #[ignore]
     #[test]
     fn test_fps_display() {}
+
     #[ignore]
     // like a spring
     #[test]

@@ -19,6 +19,19 @@ pub fn radial(r: f32, radians: f32) -> Point<f32> {
     p(r * radians.cos(), r * radians.sin())
 }
 
+pub fn right() -> Point<f32> {
+    p(1.0, 0.0)
+}
+pub fn left() -> Point<f32> {
+    p(-1.0, 0.0)
+}
+pub fn up() -> Point<f32> {
+    p(0.0, 1.0)
+}
+pub fn down() -> Point<f32> {
+    p(0.0, -1.0)
+}
+
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub struct MovecastCollision {
     pub collider_pos: Point<f32>,
@@ -231,20 +244,28 @@ pub fn accelerate_within_max_speed(
     max_speed: f32,
     acceleration: f32,
 ) -> f32 {
-    let want_stop = desired_direction.sign() == 0;
+    let want_speed_up = desired_direction.sign() as f32 * start_vel.sign() == 1.0;
+    let start_too_fast = start_vel.abs() > max_speed;
 
-    let started_above_max_speed = start_vel.abs() > max_speed;
-
-    if started_above_max_speed {
+    if start_too_fast && want_speed_up {
         start_vel
-    } else if want_stop {
-        decelerate_linearly_to_cap(start_vel, 0.0, acceleration)
     } else {
-        clamp(
-            start_vel + desired_direction as f32 * acceleration,
-            -max_speed,
-            max_speed,
+        accelerate_to_target_vel(
+            start_vel,
+            (desired_direction as f32) * max_speed,
+            acceleration,
         )
+    }
+}
+
+pub fn accelerate_to_target_vel(start_vel: f32, target_vel: f32, acceleration: f32) -> f32 {
+    let dir = (target_vel - start_vel).sign();
+    let dv = acceleration * dir;
+    let possible_new_vel = start_vel + dv;
+    if dir > 0.0 {
+        clamp(possible_new_vel, f32::NEG_INFINITY, target_vel)
+    } else {
+        clamp(possible_new_vel, target_vel, f32::INFINITY)
     }
 }
 
@@ -263,6 +284,11 @@ pub fn random_direction() -> Point<f32> {
     } else {
         return dir;
     }
+}
+
+pub fn rand_in_range(start: f32, end: f32) -> f32 {
+    let mut rng = rand::thread_rng();
+    rng.gen_range(start..end)
 }
 
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -530,37 +556,58 @@ mod tests {
     }
 
     #[test]
-    fn test_accelerate_within_max_speed_within_bounds() {
+    fn test_accelerate_within_max_speed__within_bounds() {
         assert!(accelerate_within_max_speed(1.0, 1, 10.0, 1.0) == 2.0);
     }
 
     #[test]
-    fn test_accelerate_within_max_speed_crossing_zero() {
+    fn test_accelerate_within_max_speed__crossing_zero() {
         assert!(accelerate_within_max_speed(1.0, -1, 10.0, 3.0) == -2.0);
     }
 
     #[test]
-    fn test_accelerate_within_max_speed_hitting_cap() {
+    fn test_accelerate_within_max_speed__hitting_cap() {
         assert!(accelerate_within_max_speed(1.0, 1, 10.0, 10.0) == 10.0);
     }
 
     #[test]
-    fn test_accelerate_within_max_speed_hitting_cap_across_zero() {
+    fn test_accelerate_within_max_speed__hitting_cap_across_zero() {
         assert!(accelerate_within_max_speed(1.0, -1, 10.0, 20.0) == -10.0);
     }
 
     #[test]
-    fn test_accelerate_within_max_speed_stop_at_zero() {
+    fn test_accelerate_within_max_speed__stop_at_zero() {
         assert!(accelerate_within_max_speed(1.0, 0, 10.0, 5.0) == 0.0);
     }
     #[test]
-    fn test_accelerate_within_max_speed_negative_slowing_down() {
+    fn test_accelerate_within_max_speed__negative_slowing_down() {
         assert!(accelerate_within_max_speed(-1.0, 1, 10.0, 0.5) == -0.5);
     }
 
     #[test]
-    fn test_accelerate_within_max_speed_negative_speeding_up() {
+    fn test_accelerate_within_max_speed__negative_speeding_up() {
         assert!(accelerate_within_max_speed(-1.0, -1, 10.0, 0.5) == -1.5);
+    }
+
+    #[test]
+    fn test_accelerate_within_max_speed__stopping_from_above_max() {
+        assert!(accelerate_within_max_speed(10.0, 0, 5.0, 1.0) == 9.0);
+    }
+    #[test]
+    fn test_accelerate_within_max_speed__slowing_from_above_max() {
+        assert!(accelerate_within_max_speed(10.0, -1, 5.0, 1.0) == 9.0);
+    }
+    #[test]
+    fn test_accelerate_within_max_speed__failing_to_go_fast() {
+        assert!(accelerate_within_max_speed(10.0, 1, 5.0, 1.0) == 10.0);
+    }
+    #[test]
+    fn test_accelerate_within_max_speed__stopping_from_below_neg_max() {
+        assert!(accelerate_within_max_speed(-10.0, 0, 5.0, 1.0) == -9.0);
+    }
+    #[test]
+    fn test_accelerate_within_max_speed__slowing_from_below_neg_max() {
+        assert!(accelerate_within_max_speed(-10.0, 1, 5.0, 1.0) == -9.0);
     }
 
     #[test]
