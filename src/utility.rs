@@ -333,6 +333,14 @@ pub fn lerp_2d(a: Point<f32>, b: Point<f32>, t: f32) -> Point<f32> {
     p(lerp(a.x(), b.x(), t), lerp(a.y(), b.y(), t))
 }
 
+pub fn rotated(vect: Point<f32>, degrees: f32) -> Point<f32> {
+    let (x, y) = vect.x_y();
+    p(
+        x * degrees.to_radians().cos() - y * degrees.to_radians().sin(),
+        x * degrees.to_radians().sin() + y * degrees.to_radians().cos(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -736,5 +744,19 @@ mod tests {
         let d2 = magnitude(end - midpoint);
 
         assert_relative_eq!(d1, d2);
+    }
+    #[test]
+    fn test_rotated() {
+        abs_diff_eq!(rotated(p(1.0, 0.0), 90.0).x(), 0.0, epsilon = 0.000001);
+        abs_diff_eq!(rotated(p(1.0, 0.0), 90.0).y(), 1.0, epsilon = 0.000001);
+
+        abs_diff_eq!(rotated(p(0.0, 1.0), 90.0).x(), -1.0, epsilon = 0.000001);
+        abs_diff_eq!(rotated(p(0.0, 1.0), 90.0).y(), 0.0, epsilon = 0.000001);
+
+        abs_diff_eq!(rotated(p(-1.0, 0.0), 90.0).x(), 0.0, epsilon = 0.000001);
+        abs_diff_eq!(rotated(p(-1.0, 0.0), 90.0).y(), -1.0, epsilon = 0.000001);
+
+        abs_diff_eq!(rotated(p(0.0, -1.0), 90.0).x(), 1.0, epsilon = 0.000001);
+        abs_diff_eq!(rotated(p(0.0, -1.0), 90.0).y(), 0.0, epsilon = 0.000001);
     }
 }

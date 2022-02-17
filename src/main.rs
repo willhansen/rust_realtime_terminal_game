@@ -206,7 +206,7 @@ impl Player {
             last_collision: None,
             moved_normal_to_collision_since_collision: false,
             speed_line_lifetime_in_ticks: 0.5 * MAX_FPS as f32,
-            speed_line_behavior: SpeedLineType::still_line,
+            speed_line_behavior: SpeedLineType::perpendicular_lines,
         }
     }
 }
@@ -768,7 +768,13 @@ impl Game {
         }
     }
 
-    fn place_perpendicular_moving_speed_lines(&mut self, start: Point<f32>, end: Point<f32>) {}
+    fn place_perpendicular_moving_speed_lines(&mut self, start: Point<f32>, end: Point<f32>) {
+        let speed = 0.3;
+        let dir = direction(end - start);
+        let vel = dir * speed;
+        self.place_line_of_particles_with_velocity(start, end, rotated(vel, -90.0));
+        self.place_line_of_particles_with_velocity(start, end, rotated(vel, 90.0));
+    }
 
     fn place_static_speed_lines(&mut self, start: Point<f32>, end: Point<f32>) {
         // draw all corners
@@ -1306,6 +1312,14 @@ mod tests {
         be_in_vacuum(&mut game);
         be_frictionless(&mut game);
         return game;
+    }
+
+    fn set_up_player_flying_fast_through_space_in_direction(dir: Point<f32>) -> Game {
+        let mut game = set_up_just_player();
+        be_in_space(&mut game);
+        let vel = direction(dir) * game.player.color_change_speed_threshold * 1.1;
+        game.player.vel = vel;
+        game
     }
 
     fn set_up_player_on_block() -> Game {
@@ -3094,5 +3108,16 @@ mod tests {
     fn test_jump_penalty_if_jump_when_entering_compression() {}
 
     #[test]
-    fn test_perpendicular_speed_lines_actually_perpendicular() {}
+    fn test_perpendicular_speed_lines_move_perpendicular() {
+        let dir = direction(p(1.25, 3.38)); // arbitrary
+        let mut game = set_up_player_flying_fast_through_space_in_direction(dir);
+        game.player.speed_line_behavior = SpeedLineType::perpendicular_lines;
+        game.tick_physics();
+        assert!(!game.particles.is_empty());
+        for p in game.particles {
+            assert!(magnitude(p.vel) != 0.0);
+            dbg!(p.vel, dir);
+            assert!(p.vel.dot(dir) == 0.0);
+        }
+    }
 }
