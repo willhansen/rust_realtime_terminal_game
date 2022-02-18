@@ -21,7 +21,8 @@ use geo::{point, CoordNum, Point};
 use num::traits::FloatConst;
 use std::char;
 use std::cmp::min;
-use std::collections::{HashSet, VecDeque};
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Debug;
 use std::io::{stdin, stdout, Write};
 use std::sync::mpsc::channel;
@@ -80,14 +81,16 @@ enum Block {
     Air,
     Wall,
     Brick,
+    ParticleAmalgam(i32),
 }
 
 impl Block {
     fn character(&self) -> char {
         match self {
             Block::Air => ' ',
-            Block::Wall => '█',
             Block::Brick => '▪',
+            Block::Wall => '█',
+            Block::ParticleAmalgam(_) => '#',
         }
     }
     fn color(&self) -> ColorName {
@@ -95,6 +98,7 @@ impl Block {
             Block::Air => ColorName::Black,
             Block::Wall => ColorName::White,
             Block::Brick => ColorName::White,
+            Block::ParticleAmalgam(_) => ColorName::Blue,
         }
     }
 
@@ -407,10 +411,12 @@ impl Game {
         self.particles.push(particle);
     }
 
-    fn get_particles_in_square(&self, square: Point<i32>) -> Vec<&Particle> {
+    fn get_indexes_of_particles_in_square(&self, square: Point<i32>) -> Vec<usize> {
         self.particles
             .iter()
-            .filter(|particle| snap_to_grid(particle.pos) == square)
+            .enumerate()
+            .filter(|(index, particle)| snap_to_grid(particle.pos) == square)
+            .map(|(index, particle)| index)
             .collect()
     }
 
@@ -592,6 +598,46 @@ impl Game {
         self.apply_particle_velocities(dt_in_ticks);
 
         self.delete_out_of_bounds_particles();
+
+        self.combine_dense_particles();
+    }
+
+    fn get_particle_histogram(&self) -> HashMap<Point<i32>, Vec<usize>> {
+        let mut histogram = HashMap::<Point<i32>, Vec<usize>>::new();
+        for i in 0..self.particles.len() {
+            let square = snap_to_grid(self.particles[i].pos);
+            match histogram.entry(square) {
+                Entry::Vacant(e) => {
+                    e.insert(vec![i]);
+                }
+                Entry::Occupied(mut e) => {
+                    e.get_mut().push(i);
+                }
+            }
+        }
+        histogram
+    }
+
+    fn combine_dense_particles(&mut self) {
+        let mut particle_indexes_to_delete = vec![];
+        for (square, mut particle_indexes) in self.get_particle_histogram() {
+            let num_particles = particle_indexes.len();
+            if num_particles > 10 {
+                particle_indexes_to_delete.append(&mut particle_indexes);
+                self.set_block(square, Block::ParticleAmalgam(num_particles as i32));
+            }
+        }
+        self.delete_particles_at_indexes(particle_indexes_to_delete);
+    }
+
+    fn delete_particles_at_indexes(&mut self, mut indexes: Vec<usize>) {
+        indexes.sort();
+        indexes.dedup();
+        indexes.reverse();
+
+        for i in indexes {
+            self.particles.remove(i);
+        }
     }
 
     fn apply_particle_velocities(&mut self, dt_in_ticks: f32) {
@@ -1417,6 +1463,16 @@ mod tests {
         let particle_start_vel = p(5.0, 0.0);
         game.place_wall_block(wall_square);
         game.place_particle_with_velocity(particle_start_pos, particle_start_vel);
+        game
+    }
+
+    fn set_up_30_particles_about_to_move_one_square_right() -> Game {
+        let mut game = set_up_game();
+        let start_pos = p(0.49, 0.0);
+        let start_vel = p(0.1, 0.0);
+        for _ in 0..30 {
+            game.place_particle_with_velocity(start_pos, start_vel);
+        }
         game
     }
 
@@ -2555,12 +2611,12 @@ mod tests {
         game.place_particle(p(6.5, 5.0));
         game.place_particle(p(6.5, 5.0));
 
-        assert!(game.get_particles_in_square(p(10, 10)).len() == 0);
-        assert!(game.get_particles_in_square(p(0, 0)).len() == 1);
-        assert!(game.get_particles_in_square(p(5, 5)).len() == 2);
-        assert!(game.get_particles_in_square(p(6, 5)).len() == 0);
-        assert!(game.get_particles_in_square(p(7, 5)).len() == 4);
-        assert!(game.get_particles_in_square(p(-7, -5)).len() == 0);
+        assert!(game.get_indexes_of_particles_in_square(p(10, 10)).len() == 0);
+        assert!(game.get_indexes_of_particles_in_square(p(0, 0)).len() == 1);
+        assert!(game.get_indexes_of_particles_in_square(p(5, 5)).len() == 2);
+        assert!(game.get_indexes_of_particles_in_square(p(6, 5)).len() == 0);
+        assert!(game.get_indexes_of_particles_in_square(p(7, 5)).len() == 4);
+        assert!(game.get_indexes_of_particles_in_square(p(-7, -5)).len() == 0);
     }
     #[test]
     fn test_count_braille_dots_in_square() {
@@ -2590,7 +2646,7 @@ mod tests {
         game.place_line_of_particles(p(5.1, 6.0), p(5.1, 4.0));
         game.place_line_of_particles(p(4.9, 6.0), p(4.9, 4.0));
         game.update_output_buffer();
-        assert!(game.get_particles_in_square(p(5, 5)).len() == 8);
+        assert!(game.get_indexes_of_particles_in_square(p(5, 5)).len() == 8);
         assert!(game.count_braille_dots_in_square(p(5, 5)) == 8);
     }
     #[test]
@@ -3180,5 +3236,18 @@ mod tests {
         assert!(game.particles[0].pos.y() == particle_start_pos.y() + particle_start_vel.y());
         assert!(game.particles[0].vel.x() == -particle_start_vel.x());
         assert!(game.particles[0].vel.y() == particle_start_vel.y());
+    }
+
+    #[test]
+    fn test_particles_combine_into_blocks() {
+        let mut game = set_up_30_particles_about_to_move_one_square_right();
+        let particle_square = p(1, 0);
+        game.tick_physics();
+        assert!(game.particles.is_empty());
+        assert!(matches!(
+            game.get_block(particle_square),
+            Block::ParticleAmalgam(_)
+        ));
+        assert!(matches!(game.get_block(p(0, 0)), Block::Air));
     }
 }
