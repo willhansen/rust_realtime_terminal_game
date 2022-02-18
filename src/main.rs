@@ -781,11 +781,11 @@ impl Game {
     }
 
     fn place_perpendicular_moving_speed_lines(&mut self, start: Point<f32>, end: Point<f32>) {
-        let speed = 0.3;
-        let dir = direction(end - start);
-        let vel = dir * speed;
-        self.place_line_of_particles_with_velocity(start, end, rotated(vel, -90.0));
-        self.place_line_of_particles_with_velocity(start, end, rotated(vel, 90.0));
+        let particle_speed = 0.3;
+        // Note: Due to non-square nature of the grid, player velocity may not be parallel to displacement
+        let particle_vel = direction(self.player.vel) * particle_speed;
+        self.place_line_of_particles_with_velocity(start, end, rotated(particle_vel, -90.0));
+        self.place_line_of_particles_with_velocity(start, end, rotated(particle_vel, 90.0));
     }
 
     fn place_static_speed_lines(&mut self, start: Point<f32>, end: Point<f32>) {
@@ -3142,7 +3142,7 @@ mod tests {
         assert!(!game.particles.is_empty());
         for p in game.particles {
             assert!(magnitude(p.vel) != 0.0);
-            assert!(p.vel.dot(dir) == 0.0);
+            assert!(p.vel.dot(dir).abs() < 0.00001);
         }
     }
 
