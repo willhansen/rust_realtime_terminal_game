@@ -747,16 +747,48 @@ mod tests {
     }
     #[test]
     fn test_rotated() {
-        abs_diff_eq!(rotated(p(1.0, 0.0), 90.0).x(), 0.0, epsilon = 0.000001);
-        abs_diff_eq!(rotated(p(1.0, 0.0), 90.0).y(), 1.0, epsilon = 0.000001);
+        assert!(abs_diff_eq!(
+            rotated(p(1.0, 0.0), 90.0).x(),
+            0.0,
+            epsilon = 0.000001
+        ));
+        assert!(abs_diff_eq!(
+            rotated(p(1.0, 0.0), 90.0).y(),
+            1.0,
+            epsilon = 0.000001
+        ));
 
-        abs_diff_eq!(rotated(p(0.0, 1.0), 90.0).x(), -1.0, epsilon = 0.000001);
-        abs_diff_eq!(rotated(p(0.0, 1.0), 90.0).y(), 0.0, epsilon = 0.000001);
+        assert!(abs_diff_eq!(
+            rotated(p(0.0, 1.0), 90.0).x(),
+            -1.0,
+            epsilon = 0.000001
+        ));
+        assert!(abs_diff_eq!(
+            rotated(p(0.0, 1.0), 90.0).y(),
+            0.0,
+            epsilon = 0.000001
+        ));
 
-        abs_diff_eq!(rotated(p(-1.0, 0.0), 90.0).x(), 0.0, epsilon = 0.000001);
-        abs_diff_eq!(rotated(p(-1.0, 0.0), 90.0).y(), -1.0, epsilon = 0.000001);
+        assert!(abs_diff_eq!(
+            rotated(p(-1.0, 0.0), 90.0).x(),
+            0.0,
+            epsilon = 0.000001
+        ));
+        assert!(abs_diff_eq!(
+            rotated(p(-1.0, 0.0), 90.0).y(),
+            -1.0,
+            epsilon = 0.000001
+        ));
 
-        abs_diff_eq!(rotated(p(0.0, -1.0), 90.0).x(), 1.0, epsilon = 0.000001);
-        abs_diff_eq!(rotated(p(0.0, -1.0), 90.0).y(), 0.0, epsilon = 0.000001);
+        assert!(abs_diff_eq!(
+            rotated(p(0.0, -1.0), 90.0).x(),
+            1.0,
+            epsilon = 0.000001
+        ));
+        assert!(abs_diff_eq!(
+            rotated(p(0.0, -1.0), 90.0).y(),
+            0.0,
+            epsilon = 0.000001
+        ));
     }
 }

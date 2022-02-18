@@ -1,3 +1,4 @@
+#![allow(non_snake_case)]
 #![feature(is_sorted)]
 mod glyph;
 mod utility;
@@ -112,11 +113,19 @@ impl Block {
 }
 
 #[derive(PartialEq, Debug)]
+enum ParticleWallCollisionBehavior {
+    pass_through,
+    vanish,
+    bounce,
+}
+
+#[derive(PartialEq, Debug)]
 struct Particle {
     ticks_to_expiry: f32,
     pos: Point<f32>,
     vel: Point<f32>,
     random_walk_speed: f32,
+    wall_collision_behavior: ParticleWallCollisionBehavior,
 }
 
 impl Particle {
@@ -130,6 +139,7 @@ impl Particle {
             pos,
             vel: p(0.0, 0.0),
             random_walk_speed: 0.0,
+            wall_collision_behavior: ParticleWallCollisionBehavior::bounce,
         }
     }
 }
@@ -143,6 +153,7 @@ struct CollisionWithBlock {
     collided_block_square: Point<i32>,
 }
 
+#[derive(PartialEq, Debug)]
 enum SpeedLineType {
     still_line,
     burst_chain,
@@ -374,10 +385,20 @@ impl Game {
         vel: Point<f32>,
         life_duration: f32,
     ) {
-        let mut particle = Particle::new_at(pos);
-        particle.vel = vel;
+        let mut particle = self.make_particle_with_velocity(pos, vel);
         particle.ticks_to_expiry = life_duration;
         self.particles.push(particle);
+    }
+
+    fn make_particle_with_velocity(&mut self, pos: Point<f32>, vel: Point<f32>) -> Particle {
+        let mut particle = Particle::new_at(pos);
+        particle.vel = vel;
+        particle
+    }
+
+    fn place_particle_with_velocity(&mut self, pos: Point<f32>, vel: Point<f32>) {
+        let p = self.make_particle_with_velocity(pos, vel);
+        self.add_particle(p);
     }
 
     fn place_particle_with_lifespan(&mut self, pos: Point<f32>, lifespan_in_ticks: f32) {
@@ -568,27 +589,18 @@ impl Game {
     fn apply_particle_physics(&mut self, dt_in_ticks: f32) {
         self.apply_particle_lifetimes(dt_in_ticks);
 
-        self.apply_particle_linear_velocities(dt_in_ticks);
-        self.apply_particle_random_walks(dt_in_ticks);
+        self.apply_particle_velocities(dt_in_ticks);
 
         self.delete_out_of_bounds_particles();
     }
 
-    fn apply_particle_linear_velocities(&mut self, dt_in_ticks: f32) {
+    fn apply_particle_velocities(&mut self, dt_in_ticks: f32) {
         self.particles.iter_mut().for_each(|particle| {
-            particle.pos.add_assign(
-                compensate_for_vertical_stretch(particle.vel, VERTICAL_STRETCH_FACTOR)
-                    * dt_in_ticks,
-            )
-        });
-    }
+            let mut step = compensate_for_vertical_stretch(particle.vel, VERTICAL_STRETCH_FACTOR)
+                * dt_in_ticks
+                + direction(random_direction()) * particle.random_walk_speed * dt_in_ticks.sqrt();
 
-    fn apply_particle_random_walks(&mut self, dt_in_ticks: f32) {
-        self.particles.iter_mut().for_each(|particle| {
-            // sqrt because 2d random walk (maybe not quite right)
-            particle.pos.add_assign(
-                direction(random_direction()) * particle.random_walk_speed * dt_in_ticks.sqrt(),
-            );
+            particle.pos.add_assign(step);
         });
     }
 
@@ -1396,6 +1408,16 @@ mod tests {
         game.place_line_of_blocks((wall_x, 0), (wall_x, 20), Block::Wall);
         game.player.desired_direction.set_x(-1);
         return game;
+    }
+
+    fn set_up_particle_moving_right_and_about_to_hit_wall() -> Game {
+        let mut game = set_up_game();
+        let wall_square = p(5, 5);
+        let particle_start_pos = floatify(wall_square - p(1, 0));
+        let particle_start_vel = p(5.0, 0.0);
+        game.place_wall_block(wall_square);
+        game.place_particle_with_velocity(particle_start_pos, particle_start_vel);
+        game
     }
 
     fn be_frictionless(game: &mut Game) {
@@ -2637,11 +2659,12 @@ mod tests {
 
         assert!(end_pos_1 != end_pos_2);
 
-        abs_diff_eq!(
+        dbg!(diff1, magnitude(diff1), diff2, magnitude(diff2));
+        assert!(abs_diff_eq!(
             magnitude(diff1) / game1.bullet_time_factor.sqrt(),
             magnitude(diff2),
             epsilon = 0.000001
-        );
+        ));
     }
 
     #[test]
@@ -3112,12 +3135,50 @@ mod tests {
         let dir = direction(p(1.25, 3.38)); // arbitrary
         let mut game = set_up_player_flying_fast_through_space_in_direction(dir);
         game.player.speed_line_behavior = SpeedLineType::perpendicular_lines;
+        let v1 = game.player.vel;
         game.tick_physics();
+        let v2 = game.player.vel;
+        assert!(v1 == v2);
         assert!(!game.particles.is_empty());
         for p in game.particles {
             assert!(magnitude(p.vel) != 0.0);
-            dbg!(p.vel, dir);
             assert!(p.vel.dot(dir) == 0.0);
         }
+    }
+
+    #[ignore]
+    #[test]
+    fn test_particle_wall_collision_behavior__pass_through() {
+        let mut game = set_up_particle_moving_right_and_about_to_hit_wall();
+        let particle_start_pos = game.particles[0].pos;
+        let particle_start_vel = game.particles[0].vel;
+        game.particles[0].wall_collision_behavior = ParticleWallCollisionBehavior::pass_through;
+        game.tick_particles();
+        assert!(game.particles[0].pos == particle_start_pos + particle_start_vel);
+        assert!(game.particles[0].vel == particle_start_vel);
+    }
+
+    #[ignore]
+    #[test]
+    fn test_particle_wall_collision_behavior__vanish() {
+        let mut game = set_up_particle_moving_right_and_about_to_hit_wall();
+        game.particles[0].wall_collision_behavior = ParticleWallCollisionBehavior::vanish;
+        game.tick_particles();
+        assert!(game.particles.is_empty());
+    }
+
+    #[ignore]
+    #[test]
+    fn test_particle_wall_collision_behavior__bounce() {
+        let mut game = set_up_particle_moving_right_and_about_to_hit_wall();
+        let particle_start_pos = game.particles[0].pos;
+        game.particles[0].vel.set_y(-0.1);
+        let particle_start_vel = game.particles[0].vel;
+        game.particles[0].wall_collision_behavior = ParticleWallCollisionBehavior::bounce;
+        game.tick_particles();
+        assert!(game.particles[0].pos.x() < particle_start_pos.x());
+        assert!(game.particles[0].pos.y() == particle_start_pos.y() + particle_start_vel.y());
+        assert!(game.particles[0].vel.x() == -particle_start_vel.x());
+        assert!(game.particles[0].vel.y() == particle_start_vel.y());
     }
 }
