@@ -3,7 +3,6 @@
 mod glyph;
 mod utility;
 
-extern crate device_query;
 extern crate geo;
 extern crate line_drawing;
 extern crate num;
@@ -13,17 +12,14 @@ extern crate termion;
 extern crate approx;
 
 // use assert2::{assert, check};
-use crate::num::traits::Pow;
-use device_query::{DeviceQuery, DeviceState, Keycode};
 use enum_as_inner::EnumAsInner;
 use geo::algorithm::euclidean_distance::EuclideanDistance;
-use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
-use geo::{point, CoordNum, Point};
+use geo::Point;
 use num::traits::FloatConst;
 use std::char;
 use std::cmp::min;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
 use std::io::{stdin, stdout, Write};
 use std::sync::mpsc::channel;
@@ -33,7 +29,6 @@ use termion::event::{Event, Key, MouseButton, MouseEvent};
 use termion::input::{MouseTerminal, TermRead};
 use termion::raw::IntoRawMode;
 
-use crate::SpeedLineType::perpendicular_lines;
 use glyph::*;
 use utility::*;
 
@@ -111,6 +106,7 @@ impl Block {
             _ => true,
         }
     }
+    #[allow(dead_code)]
     fn wall_grabbable(&self) -> bool {
         match self {
             Block::Air => false,
@@ -121,9 +117,9 @@ impl Block {
 
 #[derive(PartialEq, Debug)]
 enum ParticleWallCollisionBehavior {
-    pass_through,
-    vanish,
-    bounce,
+    PassThrough,
+    Vanish,
+    Bounce,
 }
 
 #[derive(PartialEq, Debug)]
@@ -148,7 +144,7 @@ impl Particle {
             start_pos: pos,
             vel: p(0.0, 0.0),
             random_walk_speed: 0.0,
-            wall_collision_behavior: ParticleWallCollisionBehavior::bounce,
+            wall_collision_behavior: ParticleWallCollisionBehavior::Bounce,
         }
     }
 }
@@ -158,16 +154,19 @@ struct CollisionWithBlock {
     time_in_ticks: f32,
     normal: Point<i32>,
     collider_velocity: Point<f32>,
+    #[allow(dead_code)]
     collider_pos: Point<f32>,
+    #[allow(dead_code)]
     collided_block_square: Point<i32>,
 }
 
 #[derive(PartialEq, Debug)]
 enum SpeedLineType {
-    still_line,
-    burst_chain,
-    burst_on_dash,
-    perpendicular_lines,
+    StillLine,
+    BurstChain,
+    #[allow(dead_code)]
+    BurstOnDash,
+    PerpendicularLines,
 }
 
 struct Player {
@@ -226,7 +225,7 @@ impl Player {
             last_collision: None,
             moved_normal_to_collision_since_collision: false,
             speed_line_lifetime_in_ticks: 0.5 * MAX_FPS as f32,
-            speed_line_behavior: SpeedLineType::perpendicular_lines,
+            speed_line_behavior: SpeedLineType::PerpendicularLines,
         }
     }
 }
@@ -420,8 +419,8 @@ impl Game {
         self.particles
             .iter()
             .enumerate()
-            .filter(|(index, particle)| snap_to_grid(particle.pos) == square)
-            .map(|(index, particle)| index)
+            .filter(|(_, particle)| snap_to_grid(particle.pos) == square)
+            .map(|(index, _)| index)
             .collect()
     }
 
@@ -625,7 +624,7 @@ impl Game {
 
     fn combine_dense_particles(&mut self) {
         let mut particle_indexes_to_delete = vec![];
-        for (square, mut indexes_of_particles_in_square) in self.get_particle_histogram() {
+        for (square, indexes_of_particles_in_square) in self.get_particle_histogram() {
             let mut indexes_of_particles_that_did_not_start_here: Vec<usize> =
                 indexes_of_particles_in_square
                     .iter()
@@ -668,7 +667,7 @@ impl Game {
 
     fn apply_particle_velocities(&mut self, dt_in_ticks: f32) {
         self.particles.iter_mut().for_each(|particle| {
-            let mut step = compensate_for_vertical_stretch(
+            let step = compensate_for_vertical_stretch(
                 particle.vel * dt_in_ticks
                     + direction(random_direction())
                         * particle.random_walk_speed
@@ -699,7 +698,7 @@ impl Game {
         particles_are_in_world
             .into_iter()
             .enumerate()
-            .filter(|(i, is_in_world)| !*is_in_world)
+            .filter(|(_, is_in_world)| !*is_in_world)
             .map(|(i, _)| i)
             .rev()
             .for_each(|i| {
@@ -821,13 +820,13 @@ impl Game {
     fn generate_speed_particles(&mut self) {
         if let Some(&last_pos) = self.player.recent_poses.get(0) {
             match &self.player.speed_line_behavior {
-                SpeedLineType::still_line => {
+                SpeedLineType::StillLine => {
                     self.place_static_speed_lines(last_pos, self.player.pos)
                 }
-                SpeedLineType::perpendicular_lines => {
+                SpeedLineType::PerpendicularLines => {
                     self.place_perpendicular_moving_speed_lines(last_pos, self.player.pos)
                 }
-                SpeedLineType::burst_chain => {
+                SpeedLineType::BurstChain => {
                     self.place_particle_burst_speed_line(last_pos, self.player.pos, 1.0)
                 }
                 _ => {}
@@ -923,6 +922,7 @@ impl Game {
     fn set_buffered_glyph(&mut self, pos: Point<i32>, new_glyph: Glyph) {
         self.output_buffer[pos.x() as usize][pos.y() as usize] = new_glyph;
     }
+    #[allow(dead_code)]
     fn get_glyph_on_screen(&self, pos: Point<i32>) -> &Glyph {
         return &self.output_on_screen[pos.x() as usize][pos.y() as usize];
     }
@@ -2233,7 +2233,6 @@ mod tests {
     #[test]
     fn test_dash_right_on_ground() {
         let mut game = set_up_player_on_platform();
-        let start_vel = game.player.vel;
         game.player.desired_direction = p(1, 0);
         game.player_dash();
         assert!(game.player.vel == floatify(game.player.desired_direction) * game.player.dash_vel);
@@ -2397,7 +2396,7 @@ mod tests {
 
     #[test]
     fn test_player_recent_poses_starts_empty() {
-        let mut game = set_up_player_on_platform();
+        let game = set_up_player_on_platform();
         assert!(game.player.recent_poses.is_empty());
     }
 
@@ -2644,7 +2643,6 @@ mod tests {
     fn test_speed_lines_are_particles() {
         let mut game = set_up_just_player();
         game.player.desired_direction = p(1, 0);
-        let start_pos = game.player.pos;
         game.player_dash();
         game.tick_physics();
         assert!(!game.particles.is_empty());
@@ -2865,7 +2863,6 @@ mod tests {
             collider_pos: p(5.0, 5.0),
             collided_block_square: p(5, 4),
         });
-        let player_glyphs = game.get_player_glyphs();
         assert!(
             EIGHTH_BLOCKS_FROM_BOTTOM[1..8].contains(&game.get_compressed_player_glyph().character)
         );
@@ -2881,7 +2878,6 @@ mod tests {
             collider_pos: p(5.0, 5.0),
             collided_block_square: p(5, 4),
         }); // parts of this don't add up, but they shouldn't need to
-        let player_glyphs = game.get_player_glyphs();
         assert!(
             EIGHTH_BLOCKS_FROM_LEFT[1..8].contains(&game.get_compressed_player_glyph().character)
         );
@@ -3178,7 +3174,7 @@ mod tests {
     #[test]
     fn test_burst_speed_line_particles_have_velocity() {
         let mut game = set_up_player_just_dashed_right_in_zero_g();
-        game.player.speed_line_behavior = SpeedLineType::burst_chain;
+        game.player.speed_line_behavior = SpeedLineType::BurstChain;
         game.tick_physics();
 
         assert!(!game.particles.is_empty());
@@ -3190,7 +3186,7 @@ mod tests {
     #[test]
     fn test_stationary_speed_line_particles_have_no_velocity() {
         let mut game = set_up_player_just_dashed_right_in_zero_g();
-        game.player.speed_line_behavior = SpeedLineType::still_line;
+        game.player.speed_line_behavior = SpeedLineType::StillLine;
         game.tick_physics();
 
         assert!(!game.particles.is_empty());
@@ -3245,7 +3241,7 @@ mod tests {
     fn test_perpendicular_speed_lines_move_perpendicular() {
         let dir = direction(p(1.25, 3.38)); // arbitrary
         let mut game = set_up_player_flying_fast_through_space_in_direction(dir);
-        game.player.speed_line_behavior = SpeedLineType::perpendicular_lines;
+        game.player.speed_line_behavior = SpeedLineType::PerpendicularLines;
         let v1 = game.player.vel;
         game.tick_physics();
         let v2 = game.player.vel;
@@ -3262,7 +3258,7 @@ mod tests {
         let mut game = set_up_particle_moving_right_and_about_to_hit_wall();
         let particle_start_pos = game.particles[0].pos;
         let particle_start_vel = game.particles[0].vel;
-        game.particles[0].wall_collision_behavior = ParticleWallCollisionBehavior::pass_through;
+        game.particles[0].wall_collision_behavior = ParticleWallCollisionBehavior::PassThrough;
         game.tick_particles();
         assert!(game.particles[0].pos == particle_start_pos + particle_start_vel);
         assert!(game.particles[0].vel == particle_start_vel);
@@ -3272,7 +3268,7 @@ mod tests {
     #[test]
     fn test_particle_wall_collision_behavior__vanish() {
         let mut game = set_up_particle_moving_right_and_about_to_hit_wall();
-        game.particles[0].wall_collision_behavior = ParticleWallCollisionBehavior::vanish;
+        game.particles[0].wall_collision_behavior = ParticleWallCollisionBehavior::Vanish;
         game.tick_particles();
         assert!(game.particles.is_empty());
     }
@@ -3284,7 +3280,7 @@ mod tests {
         let particle_start_pos = game.particles[0].pos;
         game.particles[0].vel.set_y(-0.1);
         let particle_start_vel = game.particles[0].vel;
-        game.particles[0].wall_collision_behavior = ParticleWallCollisionBehavior::bounce;
+        game.particles[0].wall_collision_behavior = ParticleWallCollisionBehavior::Bounce;
         game.tick_particles();
         assert!(game.particles[0].pos.x() < particle_start_pos.x());
         assert!(game.particles[0].pos.y() == particle_start_pos.y() + particle_start_vel.y());
@@ -3331,8 +3327,8 @@ mod tests {
         let dir = direction(p(1.234, 6.845)); // arbitrary
         let mut game1 = set_up_player_flying_fast_through_space_in_direction(dir);
         let mut game2 = set_up_player_flying_fast_through_space_in_direction(dir);
-        game1.player.speed_line_behavior = SpeedLineType::perpendicular_lines;
-        game2.player.speed_line_behavior = SpeedLineType::perpendicular_lines;
+        game1.player.speed_line_behavior = SpeedLineType::PerpendicularLines;
+        game2.player.speed_line_behavior = SpeedLineType::PerpendicularLines;
 
         let time_compression = 10;
         game1.bullet_time_factor = 1.0 / (time_compression as f32);

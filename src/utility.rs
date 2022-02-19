@@ -22,12 +22,14 @@ pub fn radial(r: f32, radians: f32) -> Point<f32> {
 pub fn right() -> Point<f32> {
     p(1.0, 0.0)
 }
+#[allow(dead_code)]
 pub fn left() -> Point<f32> {
     p(-1.0, 0.0)
 }
 pub fn up() -> Point<f32> {
     p(0.0, 1.0)
 }
+#[allow(dead_code)]
 pub fn down() -> Point<f32> {
     p(0.0, -1.0)
 }
@@ -147,6 +149,7 @@ pub fn offset_from_grid(world_pos: Point<f32>) -> Point<f32> {
     return world_pos - floatify(snap_to_grid(world_pos));
 }
 
+#[allow(dead_code)]
 pub fn trunc(vec: Point<f32>) -> Point<i32> {
     return Point::<i32>::new(vec.x().trunc() as i32, vec.y().trunc() as i32);
 }
@@ -179,6 +182,7 @@ pub fn direction(vec: Point<f32>) -> Point<f32> {
     return vec / magnitude(vec);
 }
 
+#[allow(dead_code)]
 pub fn fract(vec: Point<f32>) -> Point<f32> {
     return Point::<f32>::new(vec.x().fract(), vec.y().fract());
 }

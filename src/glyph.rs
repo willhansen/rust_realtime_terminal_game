@@ -2,7 +2,7 @@ extern crate geo;
 
 use termion::color;
 
-use geo::{point, CoordNum, Point};
+use geo::Point;
 use std::cmp::min;
 
 use crate::utility::*;
@@ -30,10 +30,12 @@ pub fn quarter_block_by_offset(half_steps: (i32, i32)) -> char {
 #[derive(Clone, PartialEq, Eq, Debug, Copy)]
 pub enum ColorName {
     Red,
+    #[allow(dead_code)]
     Green,
     Blue,
     Black,
     White,
+    #[allow(dead_code)]
     Reset,
 }
 
@@ -96,6 +98,7 @@ impl Glyph {
         }
     }
 
+    #[allow(dead_code)]
     pub fn square_with_horizontal_offset(fraction_of_square_offset: f32) -> Glyph {
         Glyph::colored_square_with_horizontal_offset(fraction_of_square_offset, ColorName::White)
     }
@@ -121,6 +124,7 @@ impl Glyph {
             };
         }
     }
+    #[allow(dead_code)]
     pub fn square_with_vertical_offset(fraction_of_square_offset: f32) -> Glyph {
         return Glyph::colored_square_with_vertical_offset(
             fraction_of_square_offset,
@@ -161,6 +165,7 @@ impl Glyph {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_glyphs_for_floating_square(pos: Point<f32>) -> Vec<Vec<Option<Glyph>>> {
         Glyph::get_glyphs_for_colored_floating_square(pos, ColorName::White)
     }
@@ -180,6 +185,7 @@ impl Glyph {
             Glyph::get_half_grid_glyphs_for_colored_floating_square(pos, color)
         }
     }
+    #[allow(dead_code)]
     pub fn get_smooth_horizontal_glyphs_for_floating_square(
         pos: Point<f32>,
     ) -> Vec<Vec<Option<Glyph>>> {
@@ -210,6 +216,7 @@ impl Glyph {
 
         return output;
     }
+    #[allow(dead_code)]
     pub fn get_smooth_vertical_glyphs_for_floating_square(
         pos: Point<f32>,
     ) -> Vec<Vec<Option<Glyph>>> {
