@@ -275,6 +275,12 @@ pub fn compensate_for_vertical_stretch(
 ) -> Point<f32> {
     p(before.x(), before.y() / vertical_stretch_factor)
 }
+pub fn uncompensate_for_vertical_stretch(
+    before: Point<f32>,
+    vertical_stretch_factor: f32,
+) -> Point<f32> {
+    p(before.x(), before.y() * vertical_stretch_factor)
+}
 
 pub fn random_direction() -> Point<f32> {
     let mut rng = rand::thread_rng();

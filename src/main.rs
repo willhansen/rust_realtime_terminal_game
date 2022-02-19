@@ -15,6 +15,7 @@ extern crate approx;
 // use assert2::{assert, check};
 use crate::num::traits::Pow;
 use device_query::{DeviceQuery, DeviceState, Keycode};
+use enum_as_inner::EnumAsInner;
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Point};
@@ -75,8 +76,10 @@ const DEFAULT_MAX_COMPRESSION: f32 = 0.2;
 const DEFAULT_TICKS_TO_MAX_COMPRESSION: f32 = 5.0;
 const DEFAULT_TICKS_TO_END_COMPRESSION: f32 = 10.0;
 
+const DEFAULT_PARTICLE_AMALGAMATION_DENSITY: i32 = 10;
+
 // These have no positional information
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumAsInner)]
 enum Block {
     Air,
     Wall,
@@ -90,7 +93,7 @@ impl Block {
             Block::Air => ' ',
             Block::Brick => '▪',
             Block::Wall => '█',
-            Block::ParticleAmalgam(_) => '#',
+            Block::ParticleAmalgam(_) => '▒',
         }
     }
     fn color(&self) -> ColorName {
@@ -104,7 +107,7 @@ impl Block {
 
     fn subject_to_block_gravity(&self) -> bool {
         match self {
-            Block::Air | Block::Wall => false,
+            Block::Air | Block::Wall | Block::ParticleAmalgam(_) => false,
             _ => true,
         }
     }
@@ -127,6 +130,7 @@ enum ParticleWallCollisionBehavior {
 struct Particle {
     ticks_to_expiry: f32,
     pos: Point<f32>,
+    start_pos: Point<f32>,
     vel: Point<f32>,
     random_walk_speed: f32,
     wall_collision_behavior: ParticleWallCollisionBehavior,
@@ -141,6 +145,7 @@ impl Particle {
         Particle {
             ticks_to_expiry: f32::INFINITY,
             pos,
+            start_pos: pos,
             vel: p(0.0, 0.0),
             random_walk_speed: 0.0,
             wall_collision_behavior: ParticleWallCollisionBehavior::bounce,
@@ -620,18 +625,39 @@ impl Game {
 
     fn combine_dense_particles(&mut self) {
         let mut particle_indexes_to_delete = vec![];
-        for (square, mut particle_indexes) in self.get_particle_histogram() {
-            let num_particles = particle_indexes.len();
-            if num_particles > 10 {
-                particle_indexes_to_delete.append(&mut particle_indexes);
-                self.set_block(square, Block::ParticleAmalgam(num_particles as i32));
+        for (square, mut indexes_of_particles_in_square) in self.get_particle_histogram() {
+            let mut indexes_of_particles_that_did_not_start_here: Vec<usize> =
+                indexes_of_particles_in_square
+                    .iter()
+                    .filter(|&&index| snap_to_grid(self.particles[index].start_pos) != square)
+                    .cloned()
+                    .collect();
+            let block = self.get_block(square);
+            if indexes_of_particles_that_did_not_start_here.len()
+                > DEFAULT_PARTICLE_AMALGAMATION_DENSITY as usize
+                || (!indexes_of_particles_that_did_not_start_here.is_empty()
+                    && matches!(block, Block::ParticleAmalgam(_)))
+            {
+                let existing_count = if let Block::ParticleAmalgam(count) = block {
+                    count
+                } else {
+                    0
+                };
+                self.set_block(
+                    square,
+                    Block::ParticleAmalgam(
+                        indexes_of_particles_that_did_not_start_here.len() as i32 + existing_count,
+                    ),
+                );
+                particle_indexes_to_delete
+                    .append(&mut indexes_of_particles_that_did_not_start_here);
             }
         }
         self.delete_particles_at_indexes(particle_indexes_to_delete);
     }
 
     fn delete_particles_at_indexes(&mut self, mut indexes: Vec<usize>) {
-        indexes.sort();
+        indexes.sort_unstable();
         indexes.dedup();
         indexes.reverse();
 
@@ -642,9 +668,13 @@ impl Game {
 
     fn apply_particle_velocities(&mut self, dt_in_ticks: f32) {
         self.particles.iter_mut().for_each(|particle| {
-            let mut step = compensate_for_vertical_stretch(particle.vel, VERTICAL_STRETCH_FACTOR)
-                * dt_in_ticks
-                + direction(random_direction()) * particle.random_walk_speed * dt_in_ticks.sqrt();
+            let mut step = compensate_for_vertical_stretch(
+                particle.vel * dt_in_ticks
+                    + direction(random_direction())
+                        * particle.random_walk_speed
+                        * dt_in_ticks.sqrt(),
+                VERTICAL_STRETCH_FACTOR,
+            );
 
             particle.pos.add_assign(step);
         });
@@ -763,8 +793,11 @@ impl Game {
         let height = self.grid[0].len();
         for x in 0..width {
             for y in 0..height {
-                if self.grid[x][y] != Block::Air {
-                    self.output_buffer[x][y] = Glyph::from_char(self.grid[x][y].character());
+                let block = self.grid[x][y];
+                if block != Block::Air {
+                    let mut glyph = Glyph::from_char(block.character());
+                    glyph.fg_color = block.color();
+                    self.output_buffer[x][y] = glyph;
                 }
             }
         }
@@ -1456,19 +1489,36 @@ mod tests {
         return game;
     }
 
-    fn set_up_particle_moving_right_and_about_to_hit_wall() -> Game {
+    fn set_up_particle_moving_right_and_about_to_hit_block(block: Block) -> Game {
         let mut game = set_up_game();
-        let wall_square = p(5, 5);
-        let particle_start_pos = floatify(wall_square - p(1, 0));
-        let particle_start_vel = p(5.0, 0.0);
-        game.place_wall_block(wall_square);
+        let block_square = p(5, 5);
+        let particle_start_pos = floatify(block_square) + p(-0.51, 0.0);
+        let particle_start_vel = p(0.1, 0.0);
+        game.place_block(block_square, block);
         game.place_particle_with_velocity(particle_start_pos, particle_start_vel);
         game
+    }
+
+    fn set_up_particle_moving_right_and_about_to_hit_wall() -> Game {
+        set_up_particle_moving_right_and_about_to_hit_block(Block::Wall)
+    }
+
+    fn set_up_particle_moving_right_and_about_to_hit_particle_amalgam() -> Game {
+        set_up_particle_moving_right_and_about_to_hit_block(Block::ParticleAmalgam(5))
     }
 
     fn set_up_30_particles_about_to_move_one_square_right() -> Game {
         let mut game = set_up_game();
         let start_pos = p(0.49, 0.0);
+        let start_vel = p(0.1, 0.0);
+        for _ in 0..30 {
+            game.place_particle_with_velocity(start_pos, start_vel);
+        }
+        game
+    }
+    fn set_up_30_particles_moving_slowly_right_from_origin() -> Game {
+        let mut game = set_up_game();
+        let start_pos = p(0.0, 0.0);
         let start_vel = p(0.1, 0.0);
         for _ in 0..30 {
             game.place_particle_with_velocity(start_pos, start_vel);
@@ -2710,16 +2760,21 @@ mod tests {
 
         let end_pos_1 = game1.particles[0].pos;
         let end_pos_2 = game2.particles[0].pos;
-        let diff1 = end_pos_1 - start_pos;
-        let diff2 = end_pos_2 - start_pos;
+        let distorted_diff1 = end_pos_1 - start_pos;
+        let distorted_diff2 = end_pos_2 - start_pos;
+        let diff1 = uncompensate_for_vertical_stretch(
+            distorted_diff1 / game1.bullet_time_factor.sqrt(),
+            VERTICAL_STRETCH_FACTOR,
+        );
+        let diff2 = uncompensate_for_vertical_stretch(distorted_diff2, VERTICAL_STRETCH_FACTOR);
 
         assert!(end_pos_1 != end_pos_2);
 
         dbg!(diff1, magnitude(diff1), diff2, magnitude(diff2));
         assert!(abs_diff_eq!(
-            magnitude(diff1) / game1.bullet_time_factor.sqrt(),
+            magnitude(diff1),
             magnitude(diff2),
-            epsilon = 0.000001
+            epsilon = 0.0001
         ));
     }
 
@@ -3202,7 +3257,6 @@ mod tests {
         }
     }
 
-    #[ignore]
     #[test]
     fn test_particle_wall_collision_behavior__pass_through() {
         let mut game = set_up_particle_moving_right_and_about_to_hit_wall();
@@ -3241,6 +3295,7 @@ mod tests {
     #[test]
     fn test_particles_combine_into_blocks() {
         let mut game = set_up_30_particles_about_to_move_one_square_right();
+        let start_square = p(0, 0);
         let particle_square = p(1, 0);
         game.tick_physics();
         assert!(game.particles.is_empty());
@@ -3248,6 +3303,26 @@ mod tests {
             game.get_block(particle_square),
             Block::ParticleAmalgam(_)
         ));
-        assert!(matches!(game.get_block(p(0, 0)), Block::Air));
+        assert!(matches!(game.get_block(start_square), Block::Air));
+    }
+
+    #[test]
+    fn test_particles_do_not_amalgamate_in_starting_square() {
+        let mut game = set_up_30_particles_moving_slowly_right_from_origin();
+        let start_square = p(0, 0);
+        game.tick_physics();
+        assert!(game.particles.len() == 30);
+        assert!(matches!(game.get_block(start_square), Block::Air));
+    }
+    #[test]
+    fn test_particle_amalgams_absorb_particles_when_particle_lands_inside() {
+        let mut game = set_up_particle_moving_right_and_about_to_hit_particle_amalgam();
+        let block_square = p(5, 5);
+        let block = game.get_block(block_square);
+        let start_count = block.as_particle_amalgam().unwrap();
+        assert!(game.particles.len() == 1);
+        game.tick_physics();
+        assert!(game.particles.len() == 0);
+        assert!(game.get_block(block_square) == Block::ParticleAmalgam(start_count + 1));
     }
 }
