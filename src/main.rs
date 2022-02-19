@@ -361,15 +361,24 @@ impl Game {
         self.add_particles(line);
     }
 
-    fn make_line_of_particles(&mut self, pos0: Point<f32>, pos1: Point<f32>) -> Vec<Particle> {
-        let braille_pos0 = Glyph::world_pos_to_braille_pos(pos0);
-        let braille_pos1 = Glyph::world_pos_to_braille_pos(pos1);
-        let mut new_particles = Vec::<Particle>::new();
-        for (x, y) in line_drawing::Bresenham::new(
+    fn braille_bresenham_line_points(
+        start_pos: Point<f32>,
+        end_pos: Point<f32>,
+    ) -> Vec<Point<f32>> {
+        let braille_pos0 = Glyph::world_pos_to_braille_pos(start_pos);
+        let braille_pos1 = Glyph::world_pos_to_braille_pos(end_pos);
+
+        line_drawing::Bresenham::new(
             snap_to_grid(braille_pos0).x_y(),
             snap_to_grid(braille_pos1).x_y(),
-        ) {
-            let particle_pos = Glyph::braille_pos_to_world_pos(p(x as f32, y as f32));
+        )
+        .map(|(x, y)| Glyph::braille_pos_to_world_pos(p(x as f32, y as f32)))
+        .collect()
+    }
+
+    fn make_line_of_particles(&mut self, pos0: Point<f32>, pos1: Point<f32>) -> Vec<Particle> {
+        let mut new_particles = Vec::<Particle>::new();
+        for particle_pos in Game::braille_bresenham_line_points(pos0, pos1) {
             new_particles.push(Particle::new_at(particle_pos));
         }
         new_particles
@@ -818,14 +827,19 @@ impl Game {
     }
 
     fn generate_speed_particles(&mut self) {
+        let now = self.time_in_ticks();
+        let then = now - self.get_time_factor();
         if let Some(&last_pos) = self.player.recent_poses.get(0) {
             match &self.player.speed_line_behavior {
                 SpeedLineType::StillLine => {
                     self.place_static_speed_lines(last_pos, self.player.pos)
                 }
-                SpeedLineType::PerpendicularLines => {
-                    self.place_perpendicular_moving_speed_lines(last_pos, self.player.pos)
-                }
+                SpeedLineType::PerpendicularLines => self.place_perpendicular_moving_speed_lines(
+                    last_pos,
+                    self.player.pos,
+                    then,
+                    now,
+                ),
                 SpeedLineType::BurstChain => {
                     self.place_particle_burst_speed_line(last_pos, self.player.pos, 1.0)
                 }
@@ -858,12 +872,28 @@ impl Game {
         }
     }
 
-    fn place_perpendicular_moving_speed_lines(&mut self, start: Point<f32>, end: Point<f32>) {
+    fn place_perpendicular_moving_speed_lines(
+        &mut self,
+        start_pos: Point<f32>,
+        end_pos: Point<f32>,
+        start_time: f32,
+        end_time: f32,
+    ) {
         let particle_speed = 0.3;
         // Note: Due to non-square nature of the grid, player velocity may not be parallel to displacement
         let particle_vel = direction(self.player.vel) * particle_speed;
-        self.place_line_of_particles_with_velocity(start, end, rotated(particle_vel, -90.0));
-        self.place_line_of_particles_with_velocity(start, end, rotated(particle_vel, 90.0));
+        let particles_per_block = 2.0;
+        let time_frequency_of_speed_particles = particles_per_block * magnitude(self.player.vel);
+        for pos in time_synchronized_points_on_line(
+            start_pos,
+            end_pos,
+            start_time,
+            end_time,
+            1.0 / time_frequency_of_speed_particles,
+        ) {
+            self.place_particle_with_velocity(pos, rotated(particle_vel, -90.0));
+            self.place_particle_with_velocity(pos, rotated(particle_vel, 90.0));
+        }
     }
 
     fn place_static_speed_lines(&mut self, start: Point<f32>, end: Point<f32>) {
@@ -3323,7 +3353,7 @@ mod tests {
     }
 
     #[test]
-    fn test_perpendicular_speed_lines_are_the_same_in_bullet_time() {
+    fn test_perpendicular_speed_lines_have_the_same_number_of_particles_in_bullet_time() {
         let dir = direction(p(1.234, 6.845)); // arbitrary
         let mut game1 = set_up_player_flying_fast_through_space_in_direction(dir);
         let mut game2 = set_up_player_flying_fast_through_space_in_direction(dir);

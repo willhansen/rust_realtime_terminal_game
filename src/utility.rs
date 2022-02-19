@@ -304,6 +304,9 @@ pub fn rand_in_range(start: f32, end: f32) -> f32 {
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a * (1.0 - t) + b * t
 }
+pub fn inverse_lerp(a: f32, b: f32, value_between_a_and_b: f32) -> f32 {
+    (value_between_a_and_b - a) / (b - a)
+}
 
 pub fn floating_square_exactly_touching_fixed_square(
     float_square_pos: Point<f32>,
@@ -349,6 +352,26 @@ pub fn rotated(vect: Point<f32>, degrees: f32) -> Point<f32> {
         x * degrees.to_radians().cos() - y * degrees.to_radians().sin(),
         x * degrees.to_radians().sin() + y * degrees.to_radians().cos(),
     )
+}
+pub fn time_synchronized_points_on_line(
+    start_point: Point<f32>,
+    end_point: Point<f32>,
+    start_time: f32,
+    end_time: f32,
+    time_period: f32,
+) -> Vec<Point<f32>> {
+    let start_time_in_periods = start_time / time_period;
+    let end_time_in_periods = end_time / time_period;
+    let first_period_in_range = start_time_in_periods.ceil() as i32;
+    // intentionally leave off last period if exactly at end time
+    let one_past_last_period_in_range = end_time_in_periods.ceil() as i32;
+    let mut output_points = vec![];
+    for i in first_period_in_range..one_past_last_period_in_range {
+        let time = i as f32 * time_period;
+        let time_as_fraction = inverse_lerp(start_time, end_time, time);
+        output_points.push(lerp_2d(start_point, end_point, time_as_fraction));
+    }
+    output_points
 }
 
 #[cfg(test)]
@@ -655,6 +678,21 @@ mod tests {
     }
 
     #[test]
+    fn test_inverse_lerp_undoes_lerp() {
+        let a = 5.0;
+        let b = 100.0;
+
+        let t = 3.445;
+        assert_relative_eq!(inverse_lerp(a, b, lerp(a, b, t)), t);
+
+        let t = 0.384;
+        assert_relative_eq!(inverse_lerp(a, b, lerp(a, b, t)), t);
+
+        let t = -25.0;
+        assert_relative_eq!(inverse_lerp(a, b, lerp(a, b, t)), t);
+    }
+
+    #[test]
     fn test_square_exactly_touching_square_below() {
         assert!(floating_square_exactly_touching_fixed_square(
             p(1.0, 0.0),
@@ -800,5 +838,36 @@ mod tests {
             0.0,
             epsilon = 0.000001
         ));
+    }
+    #[test]
+    fn test_time_synchronized_points_on_line__simple_horizontal_no_rounding() {
+        let points = time_synchronized_points_on_line(p(0.0, 0.0), p(5.0, 0.0), -0.1, 9.9, 1.0);
+        assert!(points.len() == 10);
+        for p in points {
+            assert!(p.y() == 0.0);
+            assert!(p.x() <= 5.0);
+            assert!(p.x() >= 0.0);
+        }
+    }
+    #[test]
+    fn test_time_synchronized_points_on_line__include_start_time_but_not_end_time() {
+        let start_point = p(0.0, 0.0);
+        let points = time_synchronized_points_on_line(start_point, p(1.0, 1.0), 0.0, 1.0, 1.0);
+        assert!(points.len() == 1);
+        assert!(points[0] == start_point);
+    }
+    #[test]
+    fn test_time_synchronized_points_on_line__can_be_empty() {
+        let start_point = p(0.0, 0.0);
+        let points = time_synchronized_points_on_line(start_point, p(1.0, 1.0), 0.1, 1.0, 1.0);
+        assert!(points.is_empty());
+    }
+    #[test]
+    fn test_time_synchronized_points_on_line__correct_interpolation() {
+        let start_point = p(0.0, 0.0);
+        let end_point = p(2.0, 1.0);
+        let points = time_synchronized_points_on_line(start_point, end_point, 0.25, 1.25, 1.0);
+        assert!(points.len() == 1);
+        assert!(points[0] == p(1.5, 0.75));
     }
 }
