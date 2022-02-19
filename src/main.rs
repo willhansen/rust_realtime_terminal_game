@@ -3325,4 +3325,25 @@ mod tests {
         assert!(game.particles.len() == 0);
         assert!(game.get_block(block_square) == Block::ParticleAmalgam(start_count + 1));
     }
+
+    #[test]
+    fn test_perpendicular_speed_lines_are_the_same_in_bullet_time() {
+        let dir = direction(p(1.234, 6.845)); // arbitrary
+        let mut game1 = set_up_player_flying_fast_through_space_in_direction(dir);
+        let mut game2 = set_up_player_flying_fast_through_space_in_direction(dir);
+        game1.player.speed_line_behavior = SpeedLineType::perpendicular_lines;
+        game2.player.speed_line_behavior = SpeedLineType::perpendicular_lines;
+
+        let time_compression = 10;
+        game1.bullet_time_factor = 1.0 / (time_compression as f32);
+        game1.toggle_bullet_time();
+
+        for _ in 0..time_compression {
+            game1.tick_physics();
+        }
+
+        game2.tick_physics();
+
+        assert!(game1.particles.len() == game2.particles.len());
+    }
 }
