@@ -1473,6 +1473,7 @@ mod tests {
         game.place_line_of_blocks((10, platform_y), (20, platform_y), Block::Wall);
         return game;
     }
+
     fn set_up_player_running_full_speed_to_right_on_platform() -> Game {
         let mut game = set_up_player_on_platform();
         game.player.vel = right() * game.player.max_run_speed;
@@ -1621,6 +1622,20 @@ mod tests {
         game.place_wall_block(p(5, 6));
         game.place_wall_block(p(6, 6));
         game
+    }
+    fn set_up_30_particles_about_to_bounce_off_platform() -> Game {
+        let mut game = set_up_game();
+        let platform_y = 10;
+        game.place_line_of_blocks((10, platform_y), (20, platform_y), Block::Wall);
+        for i in 0..30 {
+            let mut particle = game.make_particle_with_velocity(
+                p(i as f32 / 3.0 + 10.0, platform_y as f32 + 0.1),
+                p(i as f32 / 30.0 - 0.5, -2.0),
+            );
+            particle.wall_collision_behavior = ParticleWallCollisionBehavior::Bounce;
+            game.add_particle(particle);
+        }
+        return game;
     }
 
     fn be_frictionless(game: &mut Game) {
@@ -3457,5 +3472,23 @@ mod tests {
         assert!(collision.unwrap().collider_pos == p(4.5, start_pos.y()));
         assert!(collision.unwrap().collided_block_square == p(5, 5));
         assert!(collision.unwrap().normal == p(-1, 0));
+    }
+
+    #[test]
+    fn test_several_particles_bouncing_off_a_platform_at_various_angles() {
+        let mut game = set_up_30_particles_about_to_bounce_off_platform();
+        assert!(game.particles.len() == 30);
+        let start_vels: Vec<Point<f32>> = game.particles.iter().map(|p| p.vel).collect();
+
+        game.tick_physics();
+
+        assert!(game.particles.len() == 30);
+        let end_vels: Vec<Point<f32>> = game.particles.iter().map(|p| p.vel).collect();
+
+        for i in 0..game.particles.len() {
+            assert!(start_vels[i].x() == end_vels[i].x());
+            assert!(start_vels[i].y() == -end_vels[i].y());
+            assert!(game.particles[i].pos.y() == game.particles[0].pos.y());
+        }
     }
 }
