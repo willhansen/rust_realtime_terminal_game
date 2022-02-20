@@ -343,6 +343,7 @@ impl Game {
         self.place_block(pos, Block::Wall);
     }
 
+    #[allow(dead_code)]
     fn place_line_of_particles_with_velocity(
         &mut self,
         start: Point<f32>,
@@ -3387,7 +3388,7 @@ mod tests {
     #[test]
     fn test_particle_wall_collision_behavior__bounce() {
         let mut game = set_up_particle_moving_right_and_about_to_hit_wall();
-        let particle_start_pos = game.particles[0].pos;
+        //let particle_start_pos = game.particles[0].pos;
         game.particles[0].vel.set_y(-0.1);
         let particle_start_vel = game.particles[0].vel;
         game.particles[0].wall_collision_behavior = ParticleWallCollisionBehavior::Bounce;
@@ -3455,7 +3456,7 @@ mod tests {
 
     #[test]
     fn test_squarecast__hit_some_blocks() {
-        let mut game = set_up_four_wall_blocks_at_5_and_6();
+        let game = set_up_four_wall_blocks_at_5_and_6();
         let start_pos = p(3.0, 5.3);
         let dir = right();
         let collision = game.squarecast(start_pos, start_pos + dir * 500.0, 1.0);
@@ -3465,7 +3466,7 @@ mod tests {
     }
     #[test]
     fn test_squarecast__hit_some_blocks_with_a_point() {
-        let mut game = set_up_four_wall_blocks_at_5_and_6();
+        let game = set_up_four_wall_blocks_at_5_and_6();
         let start_pos = p(3.0, 5.3);
         let dir = right();
         let collision = game.squarecast(start_pos, start_pos + dir * 500.0, 0.0);
