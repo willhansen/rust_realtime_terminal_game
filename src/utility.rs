@@ -35,21 +35,28 @@ pub fn down() -> Point<f32> {
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
-pub struct MovecastCollision {
+pub struct SquarecastCollision {
     pub collider_pos: Point<f32>,
     pub normal: Point<i32>,
     pub collided_block_square: Point<i32>,
 }
 
-pub fn single_block_movecast(
+pub fn single_block_squarecast(
     start_point: Point<f32>,
     end_point: Point<f32>,
     grid_square_center: Point<i32>,
-) -> Option<MovecastCollision> {
+    moving_square_side_length: f32,
+) -> Option<SquarecastCollision> {
     // formulates the problem as a point crossing the boundary of an r=1 square
     let movement_line = geo::Line::new(start_point, end_point);
     //println!("movement_line: {:?}", movement_line);
-    let expanded_corner_offsets = vec![p(1.0, 1.0), p(-1.0, 1.0), p(-1.0, -1.0), p(1.0, -1.0)];
+    let mut expanded_corner_offsets = vec![];
+    for i in 0..4 {
+        expanded_corner_offsets.push(rotated(
+            p(1.0, 1.0) * (0.5 + moving_square_side_length / 2.0),
+            i as f32 * 90.0,
+        ))
+    }
     let expanded_square_corners: Vec<Point<f32>> = expanded_corner_offsets
         .iter()
         .map(|&rel_p| floatify(grid_square_center) + rel_p)
@@ -89,11 +96,19 @@ pub fn single_block_movecast(
     let collision_normal = e(round_to_direction_number(
         collision_point - floatify(grid_square_center),
     ));
-    return Some(MovecastCollision {
+    return Some(SquarecastCollision {
         collider_pos: collision_point,
         normal: collision_normal,
         collided_block_square: grid_square_center,
     });
+}
+
+pub fn single_block_unit_squarecast(
+    start_point: Point<f32>,
+    end_point: Point<f32>,
+    grid_square_center: Point<i32>,
+) -> Option<SquarecastCollision> {
+    single_block_squarecast(start_point, end_point, grid_square_center, 1.0)
 }
 
 pub fn e<T: CoordNum + num::Signed + std::fmt::Display>(dir_num: T) -> Point<T> {
@@ -123,23 +138,26 @@ pub fn round_to_direction_number(point: Point<f32>) -> i32 {
         }
     }
 }
-
 pub fn grid_squares_overlapped_by_floating_unit_square(pos: Point<f32>) -> Vec<Point<i32>> {
+    grid_squares_overlapped_by_floating_square(pos, 1.0)
+}
+
+pub fn grid_squares_overlapped_by_floating_square(
+    pos: Point<f32>,
+    square_side_length: f32,
+) -> Vec<Point<i32>> {
+    let bottom_left_point = pos - p(1.0, 1.0) * square_side_length / 2.0;
+    let top_right_point = pos + p(1.0, 1.0) * square_side_length / 2.0;
+
+    let bottom_left_square = round_vector_with_tie_break_toward_inf(bottom_left_point);
+    let top_right_square = round_vector_with_tie_break_toward_neg_inf(top_right_point);
     let mut output = Vec::<Point<i32>>::new();
-    let offset_direction = round(sign(offset_from_grid(pos)));
-    // each non-zero offset axis implies one more square.  Both implies three
-    for i in 0..3 {
-        for j in 0..3 {
-            let candidate_square_pos = p(i as i32 - 1, j as i32 - 1);
-            if (candidate_square_pos.x() == offset_direction.x() || candidate_square_pos.x() == 0)
-                && (candidate_square_pos.y() == offset_direction.y()
-                    || candidate_square_pos.y() == 0)
-            {
-                output.push(snap_to_grid(pos) + candidate_square_pos);
-            }
+    for x in bottom_left_square.x()..=top_right_square.x() {
+        for y in bottom_left_square.y()..=top_right_square.y() {
+            output.push(p(x, y));
         }
     }
-    return output;
+    output
 }
 
 pub fn snap_to_grid(world_pos: Point<f32>) -> Point<i32> {
@@ -164,6 +182,13 @@ pub fn round_vector_with_tie_break_toward_inf(vec: Point<f32>) -> Point<i32> {
         round_with_tie_break_toward_inf(vec.y()),
     );
 }
+
+pub fn round_vector_with_tie_break_toward_neg_inf(vec: Point<f32>) -> Point<i32> {
+    return Point::<i32>::new(
+        round_with_tie_break_toward_neg_inf(vec.x()),
+        round_with_tie_break_toward_neg_inf(vec.y()),
+    );
+}
 pub fn round_with_tie_break_toward_inf(x: f32) -> i32 {
     if (x - x.round()).abs() == 0.5 {
         return (x + 0.1).round() as i32;
@@ -171,6 +196,14 @@ pub fn round_with_tie_break_toward_inf(x: f32) -> i32 {
         return x.round() as i32;
     }
 }
+pub fn round_with_tie_break_toward_neg_inf(x: f32) -> i32 {
+    if (x - x.round()).abs() == 0.5 {
+        return (x - 0.1).round() as i32;
+    } else {
+        return x.round() as i32;
+    }
+}
+
 pub fn floatify(vec: Point<i32>) -> Point<f32> {
     return Point::<f32>::new(vec.x() as f32, vec.y() as f32);
 }
@@ -380,11 +413,11 @@ mod tests {
     use assert2::assert;
 
     #[test]
-    fn test_single_block_movecast_horizontal_hit() {
+    fn test_single_block_unit_squarecast__horizontal_hit() {
         let start = p(0.0, 0.0);
         let end = p(5.0, 0.0);
         let wall = p(2, 0);
-        let result = single_block_movecast(start, end, wall);
+        let result = single_block_unit_squarecast(start, end, wall);
 
         assert!(result != None);
         assert!(result.unwrap().collider_pos == floatify(wall - p(1, 0)));
@@ -392,14 +425,14 @@ mod tests {
     }
 
     #[test]
-    fn grid_square_overlap_one_square() {
+    fn test_unit_grid_square_overlap__one_square() {
         let point = p(57.0, -90.0);
         let squares = grid_squares_overlapped_by_floating_unit_square(point);
         assert!(squares.len() == 1);
         assert!(squares[0] == snap_to_grid(point));
     }
     #[test]
-    fn grid_square_overlap_two_squares_horizontal() {
+    fn test_unit_grid_square_overlap__two_squares_horizontal() {
         let point = p(0.5, 0.0);
         let squares = grid_squares_overlapped_by_floating_unit_square(point);
         assert!(squares.len() == 2);
@@ -408,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn grid_square_overlap_two_squares_vertical() {
+    fn test_unit_grid_square_overlap__two_squares_vertical() {
         let point = p(0.0, -0.1);
         let squares = grid_squares_overlapped_by_floating_unit_square(point);
         assert!(squares.len() == 2);
@@ -417,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn grid_square_overlap_four_squares() {
+    fn test_unit_grid_square_overlap__four_squares() {
         let point = p(5.9, -8.1);
         let squares = grid_squares_overlapped_by_floating_unit_square(point);
         assert!(squares.len() == 4);
@@ -427,7 +460,7 @@ mod tests {
         assert!(squares.contains(&p(6, -9)));
     }
     #[test]
-    fn grid_square_barely_overlaps_four_squares() {
+    fn test_unit_grid_square_barely_overlaps_four_squares() {
         let point = p(50.999, 80.0001);
         let squares = grid_squares_overlapped_by_floating_unit_square(point);
         assert!(squares.len() == 4);
@@ -505,7 +538,7 @@ mod tests {
         let end_point = start_point + p(3.0, 0.0);
         let block_center = p(3, 0);
         assert!(
-            single_block_movecast(start_point, end_point, block_center)
+            single_block_unit_squarecast(start_point, end_point, block_center)
                 .unwrap()
                 .collider_pos
                 == p(2.0, 0.0)
@@ -518,7 +551,7 @@ mod tests {
         let end_point = start_point + p(0.0, 5.0);
         let block_center = p(0, 5);
         assert!(
-            single_block_movecast(start_point, end_point, block_center)
+            single_block_unit_squarecast(start_point, end_point, block_center)
                 .unwrap()
                 .collider_pos
                 == p(start_point.x(), 4.0)
@@ -531,7 +564,7 @@ mod tests {
         let end_point = start_point + p(3.0, 3.0);
         let block_center = p(7, 1);
         assert!(
-            single_block_movecast(start_point, end_point, block_center)
+            single_block_unit_squarecast(start_point, end_point, block_center)
                 .unwrap()
                 .collider_pos
                 == p(6.0, 1.0)
@@ -569,6 +602,16 @@ mod tests {
         assert!(round_vector_with_tie_break_toward_inf(p(-0.1, -0.1)) == p(0, 0));
         assert!(round_vector_with_tie_break_toward_inf(p(0.5, 0.5)) == p(1, 1));
         assert!(round_vector_with_tie_break_toward_inf(p(-0.5, -0.5)) == p(0, 0));
+    }
+    #[test]
+    fn test_round_with_tie_break_to_neg_inf() {
+        assert!(round_vector_with_tie_break_toward_neg_inf(p(0.0, 0.0)) == p(0, 0));
+        assert!(round_vector_with_tie_break_toward_neg_inf(p(1.0, 1.0)) == p(1, 1));
+        assert!(round_vector_with_tie_break_toward_neg_inf(p(-1.0, -1.0)) == p(-1, -1));
+        assert!(round_vector_with_tie_break_toward_neg_inf(p(0.1, 0.1)) == p(0, 0));
+        assert!(round_vector_with_tie_break_toward_neg_inf(p(-0.1, -0.1)) == p(0, 0));
+        assert!(round_vector_with_tie_break_toward_neg_inf(p(0.5, 0.5)) == p(0, 0));
+        assert!(round_vector_with_tie_break_toward_neg_inf(p(-0.5, -0.5)) == p(-1, -1));
     }
 
     #[test]
@@ -869,5 +912,34 @@ mod tests {
         let points = time_synchronized_points_on_line(start_point, end_point, 0.25, 1.25, 1.0);
         assert!(points.len() == 1);
         assert!(points[0] == p(1.5, 0.75));
+    }
+    #[test]
+    fn test_grid_square_overlap__really_small_square() {
+        let point = p(1.1, 1.9);
+        let squares = grid_squares_overlapped_by_floating_square(point, 0.2);
+        assert!(squares.len() == 1);
+        assert!(squares.contains(&p(1, 2)));
+    }
+    #[test]
+    fn test_grid_square_overlap__really_small_square_on_corner() {
+        let point = p(1.5, 1.5);
+        let squares = grid_squares_overlapped_by_floating_square(point, 0.2);
+        assert!(squares.len() == 4);
+    }
+    #[test]
+    fn test_grid_square_overlap__9_squares_when_centered() {
+        let point = p(5.0, 5.0);
+        let squares = grid_squares_overlapped_by_floating_square(point, 1.1);
+        assert!(squares.len() == 9);
+    }
+    #[test]
+    fn test_grid_square_overlap__exactly_overlapping_4_and_touching_12_more() {
+        let point = p(5.5, 5.5);
+        let squares = grid_squares_overlapped_by_floating_square(point, 2.0);
+        assert!(squares.len() == 4);
+        assert!(squares.contains(&p(5, 5)));
+        assert!(squares.contains(&p(6, 5)));
+        assert!(squares.contains(&p(5, 6)));
+        assert!(squares.contains(&p(6, 6)));
     }
 }

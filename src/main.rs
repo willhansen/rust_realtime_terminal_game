@@ -115,14 +115,14 @@ impl Block {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 enum ParticleWallCollisionBehavior {
     PassThrough,
     Vanish,
     Bounce,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 struct Particle {
     ticks_to_expiry: f32,
     pos: Point<f32>,
@@ -675,17 +675,53 @@ impl Game {
     }
 
     fn apply_particle_velocities(&mut self, dt_in_ticks: f32) {
-        self.particles.iter_mut().for_each(|particle| {
-            let step = compensate_for_vertical_stretch(
+        let mut particle_indexes_to_delete = vec![];
+        for i in 0..self.particles.len() {
+            let particle = self.particles[i].clone();
+
+            let mut step = compensate_for_vertical_stretch(
                 particle.vel * dt_in_ticks
                     + direction(random_direction())
                         * particle.random_walk_speed
                         * dt_in_ticks.sqrt(),
                 VERTICAL_STRETCH_FACTOR,
             );
+            let mut start_pos = particle.pos;
+            let mut end_pos = start_pos + step;
 
-            particle.pos.add_assign(step);
-        });
+            if particle.wall_collision_behavior != ParticleWallCollisionBehavior::PassThrough {
+                while magnitude(step) > 0.0 {
+                    if let Some(collision) = self.linecast(start_pos, end_pos) {
+                        if particle.wall_collision_behavior == ParticleWallCollisionBehavior::Bounce
+                        {
+                            let new_start = collision.collider_pos;
+                            let step_taken = new_start - start_pos;
+                            step.add_assign(-step_taken);
+                            let vel = self.particles[i].vel;
+                            if collision.normal.x() != 0 {
+                                step.set_x(-step.x());
+                                self.particles[i].vel.set_x(-vel.x());
+                            } else {
+                                step.set_y(-step.y());
+                                self.particles[i].vel.set_y(-vel.y());
+                            }
+                            start_pos = new_start;
+                            end_pos = start_pos + step;
+                        } else if particle.wall_collision_behavior
+                            == ParticleWallCollisionBehavior::Vanish
+                        {
+                            particle_indexes_to_delete.push(i);
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            self.particles[i].pos = end_pos;
+        }
+        self.delete_particles_at_indexes(particle_indexes_to_delete);
     }
 
     fn apply_particle_lifetimes(&mut self, dt_in_ticks: f32) {
@@ -1068,7 +1104,7 @@ impl Game {
         let mut current_target = start_point + remaining_step;
         let mut collision_occurred = false;
         loop {
-            if let Some(collision) = self.movecast(current_start_point, current_target) {
+            if let Some(collision) = self.unit_squarecast(current_start_point, current_target) {
                 collision_occurred = true;
                 let step_taken_to_this_collision = collision.collider_pos - current_start_point;
                 let fraction_through_remaining_movement_just_moved =
@@ -1186,7 +1222,24 @@ impl Game {
     // tries to draw a line in air
     // returns None if out of bounds
     // returns the start position if start is not Block::Air
-    fn movecast(&self, start_pos: Point<f32>, end_pos: Point<f32>) -> Option<MovecastCollision> {
+    fn unit_squarecast(
+        &self,
+        start_pos: Point<f32>,
+        end_pos: Point<f32>,
+    ) -> Option<SquarecastCollision> {
+        self.squarecast(start_pos, end_pos, 1.0)
+    }
+
+    fn linecast(&self, start_pos: Point<f32>, end_pos: Point<f32>) -> Option<SquarecastCollision> {
+        self.squarecast(start_pos, end_pos, 0.0)
+    }
+
+    fn squarecast(
+        &self,
+        start_pos: Point<f32>,
+        end_pos: Point<f32>,
+        moving_square_side_length: f32,
+    ) -> Option<SquarecastCollision> {
         let ideal_step = end_pos - start_pos;
 
         let collision_checks_per_block_travelled =
@@ -1203,16 +1256,21 @@ impl Game {
         // needed for very small steps
         intermediate_player_positions_to_check.push(end_pos);
         for point_to_check in &intermediate_player_positions_to_check {
-            let overlapping_squares =
-                grid_squares_overlapped_by_floating_unit_square(*point_to_check);
-            let mut collisions = Vec::<MovecastCollision>::new();
+            let overlapping_squares = grid_squares_overlapped_by_floating_square(
+                *point_to_check,
+                moving_square_side_length,
+            );
+            let mut collisions = Vec::<SquarecastCollision>::new();
             for overlapping_square in &overlapping_squares {
                 if self.in_world(*overlapping_square)
                     && self.get_block(*overlapping_square) == Block::Wall
                 {
-                    if let Some(collision) =
-                        single_block_movecast(start_pos, *point_to_check, *overlapping_square)
-                    {
+                    if let Some(collision) = single_block_squarecast(
+                        start_pos,
+                        *point_to_check,
+                        *overlapping_square,
+                        moving_square_side_length,
+                    ) {
                         collisions.push(collision);
                     } else {
                         panic!("Started inside a block");
@@ -1556,6 +1614,15 @@ mod tests {
         game
     }
 
+    fn set_up_four_wall_blocks_at_5_and_6() -> Game {
+        let mut game = set_up_game();
+        game.place_wall_block(p(5, 5));
+        game.place_wall_block(p(6, 5));
+        game.place_wall_block(p(5, 6));
+        game.place_wall_block(p(6, 6));
+        game
+    }
+
     fn be_frictionless(game: &mut Game) {
         game.player.acceleration_from_floor_traction = 0.0;
         game.player.deceleration_from_ground_friction = 0.0;
@@ -1620,30 +1687,30 @@ mod tests {
     }
 
     #[test]
-    fn test_single_block_movecast_no_move() {
+    fn test_single_block_squarecast_no_move() {
         let point = p(0.0, 0.0);
         let p_wall = p(5, 5);
 
-        assert!(single_block_movecast(point, point, p_wall) == None);
+        assert!(single_block_unit_squarecast(point, point, p_wall) == None);
     }
 
     #[test]
-    fn test_movecast_no_move() {
+    fn test_squarecast_no_move() {
         let game = Game::new(30, 30);
         let point = p(0.0, 0.0);
 
-        assert!(game.movecast(point, point) == None);
+        assert!(game.unit_squarecast(point, point) == None);
     }
 
     #[test]
-    fn test_movecast_horizontal_hit() {
+    fn test_squarecast_horizontal_hit() {
         let mut game = Game::new(30, 30);
         let p_wall = p(5, 0);
         game.place_block(p_wall, Block::Wall);
 
         let p1 = floatify(p_wall) + p(-2.0, 0.0);
         let p2 = floatify(p_wall) + p(2.0, 0.0);
-        let result = game.movecast(p1, p2);
+        let result = game.unit_squarecast(p1, p2);
 
         assert!(result != None);
         assert!(result.unwrap().collider_pos == floatify(p_wall) + p(-1.0, 0.0));
@@ -1651,14 +1718,14 @@ mod tests {
     }
 
     #[test]
-    fn test_movecast_vertical_hit() {
+    fn test_squarecast_vertical_hit() {
         let mut game = Game::new(30, 30);
         let p_wall = p(15, 10);
         game.place_block(p_wall, Block::Wall);
 
         let p1 = floatify(p_wall) + p(0.0, -1.1);
         let p2 = floatify(p_wall);
-        let result = game.movecast(p1, p2);
+        let result = game.unit_squarecast(p1, p2);
 
         assert!(result != None);
         assert!(result.unwrap().collider_pos == floatify(p_wall) + p(0.0, -1.0));
@@ -1666,14 +1733,14 @@ mod tests {
     }
 
     #[test]
-    fn test_movecast_end_slightly_overlapping_a_block() {
+    fn test_squarecast_end_slightly_overlapping_a_block() {
         let mut game = Game::new(30, 30);
         let p_wall = p(15, 10);
         game.place_block(p_wall, Block::Wall);
 
         let p1 = floatify(p_wall) + p(0.0, 1.5);
         let p2 = floatify(p_wall) + p(0.0, 0.999999);
-        let result = game.movecast(p1, p2);
+        let result = game.unit_squarecast(p1, p2);
 
         assert!(result != None);
         assert!(result.unwrap().collider_pos == floatify(p_wall) + p(0.0, 1.0));
@@ -1681,35 +1748,35 @@ mod tests {
     }
 
     #[test]
-    fn test_movecast() {
+    fn test_squarecast() {
         let mut game = Game::new(30, 30);
         game.place_line_of_blocks((10, 10), (20, 10), Block::Wall);
 
         assert!(
-            game.movecast(p(15.0, 9.0), p(17.0, 11.0))
-                == Some(MovecastCollision {
+            game.unit_squarecast(p(15.0, 9.0), p(17.0, 11.0))
+                == Some(SquarecastCollision {
                     collider_pos: p(15.0, 9.0),
                     normal: p(0, -1),
                     collided_block_square: p(15, 10),
                 })
         );
         assert!(
-            game.movecast(p(15.0, 9.0), p(17.0, 110.0))
-                == Some(MovecastCollision {
+            game.unit_squarecast(p(15.0, 9.0), p(17.0, 110.0))
+                == Some(SquarecastCollision {
                     collider_pos: p(15.0, 9.0),
                     normal: p(0, -1),
                     collided_block_square: p(15, 10),
                 })
         );
-        assert!(game.movecast(p(1.0, 9.0), p(-17.0, 9.0)) == None);
-        assert!(game.movecast(p(15.0, 9.0), p(17.0, -11.0)) == None);
+        assert!(game.unit_squarecast(p(1.0, 9.0), p(-17.0, 9.0)) == None);
+        assert!(game.unit_squarecast(p(15.0, 9.0), p(17.0, -11.0)) == None);
     }
 
     #[test]
-    fn test_movecast_skips_player() {
+    fn test_squarecast_skips_player() {
         let game = set_up_player_on_platform();
 
-        assert!(game.movecast(p(15.0, 11.0), p(15.0, 13.0)) == None);
+        assert!(game.unit_squarecast(p(15.0, 11.0), p(15.0, 13.0)) == None);
     }
 
     #[test]
@@ -3294,7 +3361,6 @@ mod tests {
         assert!(game.particles[0].vel == particle_start_vel);
     }
 
-    #[ignore]
     #[test]
     fn test_particle_wall_collision_behavior__vanish() {
         let mut game = set_up_particle_moving_right_and_about_to_hit_wall();
@@ -3303,7 +3369,6 @@ mod tests {
         assert!(game.particles.is_empty());
     }
 
-    #[ignore]
     #[test]
     fn test_particle_wall_collision_behavior__bounce() {
         let mut game = set_up_particle_moving_right_and_about_to_hit_wall();
@@ -3312,8 +3377,8 @@ mod tests {
         let particle_start_vel = game.particles[0].vel;
         game.particles[0].wall_collision_behavior = ParticleWallCollisionBehavior::Bounce;
         game.tick_particles();
-        assert!(game.particles[0].pos.x() < particle_start_pos.x());
-        assert!(game.particles[0].pos.y() == particle_start_pos.y() + particle_start_vel.y());
+        //assert!(game.particles[0].pos.x() < particle_start_pos.x());
+        //assert!(game.particles[0].pos.y() == particle_start_pos.y() + particle_start_vel.y());
         assert!(game.particles[0].vel.x() == -particle_start_vel.x());
         assert!(game.particles[0].vel.y() == particle_start_vel.y());
     }
@@ -3371,5 +3436,26 @@ mod tests {
         game2.tick_physics();
 
         assert!(game1.particles.len() == game2.particles.len());
+    }
+
+    #[test]
+    fn test_squarecast__hit_some_blocks() {
+        let mut game = set_up_four_wall_blocks_at_5_and_6();
+        let start_pos = p(3.0, 5.3);
+        let dir = right();
+        let collision = game.squarecast(start_pos, start_pos + dir * 500.0, 1.0);
+        assert!(collision.unwrap().collider_pos == p(4.0, start_pos.y()));
+        assert!(collision.unwrap().collided_block_square == p(5, 5));
+        assert!(collision.unwrap().normal == p(-1, 0));
+    }
+    #[test]
+    fn test_squarecast__hit_some_blocks_with_a_point() {
+        let mut game = set_up_four_wall_blocks_at_5_and_6();
+        let start_pos = p(3.0, 5.3);
+        let dir = right();
+        let collision = game.squarecast(start_pos, start_pos + dir * 500.0, 0.0);
+        assert!(collision.unwrap().collider_pos == p(4.5, start_pos.y()));
+        assert!(collision.unwrap().collided_block_square == p(5, 5));
+        assert!(collision.unwrap().normal == p(-1, 0));
     }
 }
