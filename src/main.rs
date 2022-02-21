@@ -11,6 +11,8 @@ extern crate termion;
 #[macro_use]
 extern crate approx;
 
+use ntest::timeout;
+
 // use assert2::{assert, check};
 use enum_as_inner::EnumAsInner;
 use geo::algorithm::euclidean_distance::EuclideanDistance;
@@ -126,6 +128,7 @@ enum ParticleWallCollisionBehavior {
 struct Particle {
     ticks_to_expiry: f32,
     pos: Point<f32>,
+    prev_pos: Point<f32>,
     start_pos: Point<f32>,
     vel: Point<f32>,
     random_walk_speed: f32,
@@ -140,7 +143,8 @@ impl Particle {
     fn new_at(pos: Point<f32>) -> Particle {
         Particle {
             ticks_to_expiry: f32::INFINITY,
-            pos,
+            pos: pos,
+            prev_pos: pos,
             start_pos: pos,
             vel: p(0.0, 0.0),
             random_walk_speed: 0.0,
@@ -331,13 +335,19 @@ impl Game {
     fn place_boundary_wall(&mut self) {
         let xmax = self.grid.len() as i32 - 1;
         let ymax = self.grid[0].len() as i32 - 1;
-        self.place_line_of_blocks((0, 0), (xmax, 0), Block::Wall);
-        self.place_line_of_blocks((xmax, 0), (xmax, ymax), Block::Wall);
-        self.place_line_of_blocks((xmax, ymax), (0, ymax), Block::Wall);
-        self.place_line_of_blocks((0, ymax), (0, 0), Block::Wall);
+        let xmin = 0;
+        let ymin = 0;
+        self.place_line_of_blocks((xmin, ymin), (xmax, ymin), Block::Wall);
+        self.place_line_of_blocks((xmax, ymin), (xmax, ymax), Block::Wall);
+        self.place_line_of_blocks((xmax, ymax), (xmin, ymax), Block::Wall);
+        self.place_line_of_blocks((xmin, ymax), (xmin, ymin), Block::Wall);
     }
 
     fn place_block(&mut self, pos: Point<i32>, block: Block) {
+        if !self.in_world(pos) {
+            println!("tried placing block out of world: {:?}", pos);
+            return;
+        }
         self.grid[pos.x() as usize][pos.y() as usize] = block;
     }
 
@@ -694,12 +704,20 @@ impl Game {
             let mut end_pos = start_pos + step;
 
             if particle.wall_collision_behavior != ParticleWallCollisionBehavior::PassThrough {
-                while magnitude(step) > 0.0 {
+                while magnitude(step) > 0.00001 {
+                    dbg!(start_pos);
                     if let Some(collision) = self.linecast(start_pos, end_pos) {
                         if particle.wall_collision_behavior == ParticleWallCollisionBehavior::Bounce
                         {
                             let new_start = collision.collider_pos;
                             let step_taken = new_start - start_pos;
+                            dbg!(
+                                start_pos,
+                                new_start,
+                                &particle.pos,
+                                &collision.collider_pos,
+                                step_taken
+                            );
                             step.add_assign(-step_taken);
                             let vel = self.particles[i].vel;
                             if collision.normal.x() != 0 {
@@ -722,8 +740,18 @@ impl Game {
                         break;
                     }
                 }
+                let end_square = snap_to_grid(end_pos);
+                let particle_ended_inside_square = self.get_block(end_square) == Block::Wall
+                    && point_inside_square(end_pos, end_square);
+                if particle_ended_inside_square
+                    && particle.wall_collision_behavior == ParticleWallCollisionBehavior::Bounce
+                {
+                    dbg!(&self.particles[i], start_pos, end_pos);
+                    panic!("particle_ended_inside_wall")
+                }
             }
 
+            self.particles[i].prev_pos = self.particles[i].pos;
             self.particles[i].pos = end_pos;
         }
         self.delete_particles_at_indexes(particle_indexes_to_delete);
@@ -1279,7 +1307,8 @@ impl Game {
                     ) {
                         collisions.push(collision);
                     } else {
-                        panic!("Started inside a block");
+                        dbg!(start_pos, end_pos, *overlapping_square);
+                        panic!("Squarecast found no collision for an overlapping wall block");
                     }
                 }
             }
@@ -1294,7 +1323,7 @@ impl Game {
                 // might have missed one
                 let normal_square = closest_collision_to_start.collided_block_square
                     + closest_collision_to_start.normal;
-                if normal_square != start_square
+                if !point_inside_square(start_pos, normal_square)
                     && self.in_world(normal_square)
                     && self.get_block(normal_square) == Block::Wall
                 {
@@ -1470,7 +1499,7 @@ mod tests {
     fn set_up_player_barely_fighting_air_friction_to_the_right_in_zero_g() -> Game {
         let mut game = set_up_player_in_zero_g();
         game.player.desired_direction = p(1, 0);
-        game.player.vel = right()
+        game.player.vel = right_f()
             * (game.player.air_friction_start_speed
                 + game.player.deceleration_from_air_friction * 0.9);
         game
@@ -1479,7 +1508,7 @@ mod tests {
     fn set_up_player_barely_fighting_air_friction_up_in_zero_g() -> Game {
         let mut game = set_up_player_in_zero_g();
         game.player.desired_direction = p(0, 1);
-        game.player.vel = up()
+        game.player.vel = up_f()
             * (game.player.air_friction_start_speed
                 + game.player.deceleration_from_air_friction * 0.9);
         game
@@ -1501,7 +1530,7 @@ mod tests {
 
     fn set_up_player_running_full_speed_to_right_on_platform() -> Game {
         let mut game = set_up_player_on_platform();
-        game.player.vel = right() * game.player.max_run_speed;
+        game.player.vel = right_f() * game.player.max_run_speed;
         game.player.desired_direction = p(1, 0);
         game
     }
@@ -1648,9 +1677,28 @@ mod tests {
         game.place_wall_block(p(6, 6));
         game
     }
-    fn set_up_n_particles_about_to_bounce_off_platform(n: i32) -> Game {
+
+    fn set_up_plus_sign_wall_blocks_at_square(square: Point<i32>) -> Game {
         let mut game = set_up_game();
-        let platform_y = 10;
+        game.place_wall_block(square);
+        for i in 0..4 {
+            game.place_wall_block(square + orthogonal_direction(i));
+        }
+        game
+    }
+
+    fn set_up_particle_about_to_hit_concave_corner() -> Game {
+        let plus_center = p(7, 7);
+        let mut game = set_up_plus_sign_wall_blocks_at_square(plus_center);
+        let start_pos = floatify(plus_center) + p(-0.51, 0.52);
+        let start_vel = p(0.1, -0.1);
+        game.place_particle_with_velocity(start_pos, start_vel);
+        game
+    }
+
+    fn set_up_n_particles_about_to_bounce_off_platform_at_grid_bottom(n: i32) -> Game {
+        let mut game = set_up_game();
+        let platform_y = 0;
         let platform_start_x = 10;
         let platform_width = 10;
 
@@ -3496,7 +3544,7 @@ mod tests {
     fn test_squarecast__hit_some_blocks() {
         let game = set_up_four_wall_blocks_at_5_and_6();
         let start_pos = p(3.0, 5.3);
-        let dir = right();
+        let dir = right_f();
         let collision = game.squarecast(start_pos, start_pos + dir * 500.0, 1.0);
         assert!(collision.unwrap().collider_pos == p(4.0, start_pos.y()));
         assert!(collision.unwrap().collided_block_square == p(5, 5));
@@ -3506,7 +3554,7 @@ mod tests {
     fn test_squarecast__hit_some_blocks_with_a_point() {
         let game = set_up_four_wall_blocks_at_5_and_6();
         let start_pos = p(3.0, 5.3);
-        let dir = right();
+        let dir = right_f();
         let collision = game.squarecast(start_pos, start_pos + dir * 500.0, 0.0);
         assert!(collision.unwrap().collider_pos == p(4.5, start_pos.y()));
         assert!(collision.unwrap().collided_block_square == p(5, 5));
@@ -3514,9 +3562,10 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_several_particles_bouncing_off_a_platform_at_various_angles() {
-        let n = 100;
-        let mut game = set_up_n_particles_about_to_bounce_off_platform(n);
+        let n = 10;
+        let mut game = set_up_n_particles_about_to_bounce_off_platform_at_grid_bottom(n);
         assert!(game.particles.len() == n as usize);
         let start_vels: Vec<Point<f32>> = game.particles.iter().map(|p| p.vel).collect();
         game.particle_amalgamation_density = 99999;
@@ -3541,5 +3590,27 @@ mod tests {
         assert!(collision.unwrap().collider_pos.x() == 6.5);
         assert!(collision.unwrap().collided_block_square == p(6, 6));
         assert!(collision.unwrap().normal == p(1, 0));
+    }
+    #[test]
+    fn test_linecast__hit_near_corner_at_grid_bottom() {
+        let plus_center = p(7, 0);
+        let mut game = set_up_plus_sign_wall_blocks_at_square(plus_center);
+        let start_pos = floatify(plus_center) + p(-1.0, 1.0);
+        let end_pos = floatify(plus_center) + p(0.0, -0.001);
+        let collision = game.linecast(start_pos, end_pos);
+        assert!(collision.is_some());
+        assert!(collision.unwrap().collided_block_square == plus_center + p(-1, 0));
+        assert!(collision.unwrap().normal == p(0, 1));
+    }
+
+    #[test]
+    fn test_particle__double_bounce_in_corner() {
+        let mut game = set_up_particle_about_to_hit_concave_corner();
+        let start_vel = game.particles[0].vel;
+
+        game.tick_physics();
+
+        let end_vel = game.particles[0].vel;
+        assert!(end_vel == -start_vel);
     }
 }

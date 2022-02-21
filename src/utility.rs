@@ -19,18 +19,18 @@ pub fn radial(r: f32, radians: f32) -> Point<f32> {
     p(r * radians.cos(), r * radians.sin())
 }
 
-pub fn right() -> Point<f32> {
+pub fn right_f() -> Point<f32> {
     p(1.0, 0.0)
 }
 #[allow(dead_code)]
-pub fn left() -> Point<f32> {
+pub fn left_f() -> Point<f32> {
     p(-1.0, 0.0)
 }
-pub fn up() -> Point<f32> {
+pub fn up_f() -> Point<f32> {
     p(0.0, 1.0)
 }
 #[allow(dead_code)]
-pub fn down() -> Point<f32> {
+pub fn down_f() -> Point<f32> {
     p(0.0, -1.0)
 }
 
@@ -93,7 +93,7 @@ pub fn single_block_squarecast(
     let collision_point = candidate_edge_intersections[0];
     //println!("collision_point: {:?}", collision_point);
     //println!("rounded_dir_number: {:?}", round_to_direction_number( collision_point - floatify(grid_square_center)));
-    let collision_normal = e(round_to_direction_number(
+    let collision_normal = orthogonal_direction(round_to_direction_number(
         collision_point - floatify(grid_square_center),
     ));
     return Some(SquarecastCollision {
@@ -111,7 +111,7 @@ pub fn single_block_unit_squarecast(
     single_block_squarecast(start_point, end_point, grid_square_center, 1.0)
 }
 
-pub fn e<T: CoordNum + num::Signed + std::fmt::Display>(dir_num: T) -> Point<T> {
+pub fn orthogonal_direction<T: CoordNum + num::Signed + std::fmt::Display>(dir_num: T) -> Point<T> {
     let dir_num_int = dir_num.to_i32().unwrap() % 4;
     match dir_num_int {
         0 => Point::<T>::new(T::one(), T::zero()),
@@ -165,6 +165,22 @@ pub fn snap_to_grid(world_pos: Point<f32>) -> Point<i32> {
 }
 pub fn offset_from_grid(world_pos: Point<f32>) -> Point<f32> {
     return world_pos - floatify(snap_to_grid(world_pos));
+}
+
+pub fn point_inside_square(point: Point<f32>, square: Point<i32>) -> bool {
+    let diff = point - floatify(square);
+    return diff.x().abs() < 0.5 && diff.y().abs() < 0.5;
+}
+
+pub fn point_exactly_touching_square(point: Point<f32>, square: Point<i32>) -> bool {
+    let diff = point - floatify(square);
+    let on_x_limit = diff.x().abs() == 0.5;
+    let on_y_limit = diff.y().abs() == 0.5;
+    let within_x_limit = diff.x().abs() < 0.5;
+    let within_y_limit = diff.y().abs() < 0.5;
+    return (within_x_limit && on_y_limit)
+        || (within_y_limit && on_x_limit)
+        || (on_x_limit && on_y_limit);
 }
 
 #[allow(dead_code)]
@@ -573,16 +589,16 @@ mod tests {
 
     #[test]
     fn test_orthogonal_direction_generation() {
-        assert!(e(0.0) == p(1.0, 0.0));
-        assert!(e(0) == p(1, 0));
-        assert!(e(1.0) == p(0.0, 1.0));
-        assert!(e(1) == p(0, 1));
-        assert!(e(2.0) == p(-1.0, 0.0));
-        assert!(e(2) == p(-1, 0));
-        assert!(e(3.0) == p(0.0, -1.0));
-        assert!(e(3) == p(0, -1));
-        assert!(e(4.0) == p(1.0, 0.0));
-        assert!(e(4) == p(1, 0));
+        assert!(orthogonal_direction(0.0) == p(1.0, 0.0));
+        assert!(orthogonal_direction(0) == p(1, 0));
+        assert!(orthogonal_direction(1.0) == p(0.0, 1.0));
+        assert!(orthogonal_direction(1) == p(0, 1));
+        assert!(orthogonal_direction(2.0) == p(-1.0, 0.0));
+        assert!(orthogonal_direction(2) == p(-1, 0));
+        assert!(orthogonal_direction(3.0) == p(0.0, -1.0));
+        assert!(orthogonal_direction(3) == p(0, -1));
+        assert!(orthogonal_direction(4.0) == p(1.0, 0.0));
+        assert!(orthogonal_direction(4) == p(1, 0));
     }
     #[test]
     fn test_projection() {
@@ -941,5 +957,27 @@ mod tests {
         assert!(squares.contains(&p(6, 5)));
         assert!(squares.contains(&p(5, 6)));
         assert!(squares.contains(&p(6, 6)));
+    }
+
+    #[test]
+    fn test_point_inside_square() {
+        assert!(point_inside_square(p(0.49, 0.6), p(0, 0)) == false);
+        assert!(point_inside_square(p(0.49, 0.4), p(0, 0)) == true);
+        assert!(point_inside_square(p(0.49, 0.6), p(0, 1)) == true);
+        assert!(point_inside_square(p(5.0, 5.1), p(5, 5)) == true);
+        assert!(point_inside_square(p(5.0, 8.1), p(5, 5)) == false);
+    }
+
+    #[test]
+    fn test_point_touching_square() {
+        assert!(point_exactly_touching_square(p(0.5, 0.5), p(0, 0)) == true);
+        assert!(point_exactly_touching_square(p(0.5, 0.5), p(1, 0)) == true);
+        assert!(point_exactly_touching_square(p(0.5, 0.5), p(1, 1)) == true);
+        assert!(point_exactly_touching_square(p(0.5, 0.5), p(0, 1)) == true);
+
+        assert!(point_exactly_touching_square(p(0.5001, 0.5), p(0, 0)) == false);
+        assert!(point_exactly_touching_square(p(0.5001, 0.5), p(1, 0)) == true);
+        assert!(point_exactly_touching_square(p(0.5001, 0.5), p(0, 1)) == false);
+        assert!(point_exactly_touching_square(p(0.5001, 0.5), p(1, 1)) == true);
     }
 }
