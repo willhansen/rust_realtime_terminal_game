@@ -244,6 +244,7 @@ struct Game {
     is_bullet_time: bool,
     bullet_time_factor: f32,
     player: Player,
+    particle_amalgamation_density: i32,
 }
 
 impl Game {
@@ -263,6 +264,7 @@ impl Game {
             is_bullet_time: false,
             bullet_time_factor: 0.1,
             player: Player::new(),
+            particle_amalgamation_density: DEFAULT_PARTICLE_AMALGAMATION_DENSITY,
         }
     }
 
@@ -643,7 +645,7 @@ impl Game {
                     .collect();
             let block = self.get_block(square);
             if indexes_of_particles_that_did_not_start_here.len()
-                > DEFAULT_PARTICLE_AMALGAMATION_DENSITY as usize
+                > self.particle_amalgamation_density as usize
                 || (!indexes_of_particles_that_did_not_start_here.is_empty()
                     && matches!(block, Block::ParticleAmalgam(_)))
             {
@@ -687,6 +689,7 @@ impl Game {
                         * dt_in_ticks.sqrt(),
                 VERTICAL_STRETCH_FACTOR,
             );
+            //dbg!(&step);
             let mut start_pos = particle.pos;
             let mut end_pos = start_pos + step;
 
@@ -708,6 +711,7 @@ impl Game {
                             }
                             start_pos = new_start;
                             end_pos = start_pos + step;
+                            //break;
                         } else if particle.wall_collision_behavior
                             == ParticleWallCollisionBehavior::Vanish
                         {
@@ -1254,6 +1258,7 @@ impl Game {
                     + direction(ideal_step) * (i as f32 / collision_checks_per_block_travelled),
             );
         }
+        let start_square = snap_to_grid(start_pos);
         // needed for very small steps
         intermediate_player_positions_to_check.push(end_pos);
         for point_to_check in &intermediate_player_positions_to_check {
@@ -1268,7 +1273,7 @@ impl Game {
                 {
                     if let Some(collision) = single_block_squarecast(
                         start_pos,
-                        *point_to_check,
+                        end_pos,
                         *overlapping_square,
                         moving_square_side_length,
                     ) {
@@ -1285,6 +1290,25 @@ impl Game {
                     a_dist.partial_cmp(&b_dist).unwrap()
                 });
                 let closest_collision_to_start = collisions[0];
+
+                // might have missed one
+                let normal_square = closest_collision_to_start.collided_block_square
+                    + closest_collision_to_start.normal;
+                if normal_square != start_square
+                    && self.in_world(normal_square)
+                    && self.get_block(normal_square) == Block::Wall
+                {
+                    if let Some(collision) = single_block_squarecast(
+                        start_pos,
+                        end_pos,
+                        normal_square,
+                        moving_square_side_length,
+                    ) {
+                        return Some(collision);
+                    } else {
+                        panic!("No collision with wall block normal to collision");
+                    }
+                }
                 return Some(closest_collision_to_start);
             }
         }
@@ -1624,14 +1648,28 @@ mod tests {
         game.place_wall_block(p(6, 6));
         game
     }
-    fn set_up_30_particles_about_to_bounce_off_platform() -> Game {
+    fn set_up_n_particles_about_to_bounce_off_platform(n: i32) -> Game {
         let mut game = set_up_game();
         let platform_y = 10;
-        game.place_line_of_blocks((10, platform_y), (20, platform_y), Block::Wall);
-        for i in 0..30 {
+        let platform_start_x = 10;
+        let platform_width = 10;
+
+        game.place_line_of_blocks(
+            (platform_start_x, platform_y),
+            (platform_start_x + platform_width, platform_y),
+            Block::Wall,
+        );
+        for i in 0..n {
             let mut particle = game.make_particle_with_velocity(
-                p(i as f32 / 3.0 + 10.0, platform_y as f32 + 0.1),
-                p(i as f32 / 30.0 - 0.5, -2.0),
+                p(
+                    lerp(
+                        platform_start_x as f32 + platform_width as f32 / 3.0,
+                        platform_start_x as f32 + platform_width as f32 * 2.0 / 3.0,
+                        i as f32 / n as f32,
+                    ),
+                    platform_y as f32 + 0.6,
+                ),
+                p(i as f32 / n as f32 - 0.5, -2.0),
             );
             particle.wall_collision_behavior = ParticleWallCollisionBehavior::Bounce;
             game.add_particle(particle);
@@ -3477,13 +3515,15 @@ mod tests {
 
     #[test]
     fn test_several_particles_bouncing_off_a_platform_at_various_angles() {
-        let mut game = set_up_30_particles_about_to_bounce_off_platform();
-        assert!(game.particles.len() == 30);
+        let n = 100;
+        let mut game = set_up_n_particles_about_to_bounce_off_platform(n);
+        assert!(game.particles.len() == n as usize);
         let start_vels: Vec<Point<f32>> = game.particles.iter().map(|p| p.vel).collect();
+        game.particle_amalgamation_density = 99999;
 
         game.tick_physics();
 
-        assert!(game.particles.len() == 30);
+        assert!(game.particles.len() == n as usize);
         let end_vels: Vec<Point<f32>> = game.particles.iter().map(|p| p.vel).collect();
 
         for i in 0..game.particles.len() {
@@ -3491,5 +3531,15 @@ mod tests {
             assert!(start_vels[i].y() == -end_vels[i].y());
             assert!(game.particles[i].pos.y() == game.particles[0].pos.y());
         }
+    }
+    #[test]
+    fn test_linecast_hit_between_blocks() {
+        let game = set_up_four_wall_blocks_at_5_and_6();
+        let start_pos = p(10.0, 10.0);
+        let end_pos = p(6.4999, 5.49999);
+        let collision = game.linecast(start_pos, end_pos);
+        assert!(collision.unwrap().collider_pos.x() == 6.5);
+        assert!(collision.unwrap().collided_block_square == p(6, 6));
+        assert!(collision.unwrap().normal == p(1, 0));
     }
 }
