@@ -3654,4 +3654,15 @@ mod tests {
             set_up_particle_moving_in_direction_about_to_hit_wall_at_square(left_f(), p(0, 15));
         game.tick_physics();
     }
+    #[test]
+    fn test_linecast_straight_into_wall_seam() {
+        let start_pos = p(0.0, 0.5);
+        let end_pos = p(5.0, 0.5);
+        let mut game = set_up_game();
+        game.place_wall_block(p(1, 0));
+        game.place_wall_block(p(1, 1));
+        let collision = game.linecast(start_pos, end_pos);
+        dbg!(&collision);
+        assert!(collision.is_some());
+    }
 }

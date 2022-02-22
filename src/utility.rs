@@ -143,17 +143,15 @@ pub fn grid_squares_overlapped_by_floating_unit_square(pos: Point<f32>) -> Vec<P
     grid_squares_overlapped_by_floating_square(pos, 1.0)
 }
 
-pub fn grid_squares_overlapped_by_floating_square(
+pub fn grid_squares_touched_by_floating_square_with_tolerance(
     pos: Point<f32>,
     square_side_length: f32,
+    this_much_overlap_required: f32,
 ) -> Vec<Point<i32>> {
     let bottom_left_point = pos - p(1.0, 1.0) * square_side_length / 2.0;
     let top_right_point = pos + p(1.0, 1.0) * square_side_length / 2.0;
 
-    let nudge = p(
-        RADIUS_OF_EXACTLY_TOUCHING_ZONE,
-        RADIUS_OF_EXACTLY_TOUCHING_ZONE,
-    );
+    let nudge = p(this_much_overlap_required, this_much_overlap_required);
 
     let bottom_left_square = round_vector_with_tie_break_toward_inf(bottom_left_point + nudge);
     let top_right_square = round_vector_with_tie_break_toward_neg_inf(top_right_point - nudge);
@@ -164,6 +162,28 @@ pub fn grid_squares_overlapped_by_floating_square(
         }
     }
     output
+}
+
+pub fn grid_squares_touched_or_overlapped_by_floating_square(
+    pos: Point<f32>,
+    square_side_length: f32,
+) -> Vec<Point<i32>> {
+    grid_squares_touched_by_floating_square_with_tolerance(
+        pos,
+        square_side_length,
+        -RADIUS_OF_EXACTLY_TOUCHING_ZONE,
+    )
+}
+
+pub fn grid_squares_overlapped_by_floating_square(
+    pos: Point<f32>,
+    square_side_length: f32,
+) -> Vec<Point<i32>> {
+    grid_squares_touched_by_floating_square_with_tolerance(
+        pos,
+        square_side_length,
+        RADIUS_OF_EXACTLY_TOUCHING_ZONE,
+    )
 }
 
 pub fn snap_to_grid(world_pos: Point<f32>) -> Point<i32> {
