@@ -849,6 +849,13 @@ impl Game {
             }
         }
     }
+    fn width(&self) -> usize {
+        self.grid.len()
+    }
+    fn height(&self) -> usize {
+        self.grid[0].len()
+    }
+
     fn fill_output_buffer_with_black(&mut self) {
         let width = self.grid.len();
         let height = self.grid[0].len();
@@ -1280,7 +1287,6 @@ impl Game {
                     + direction(ideal_step) * (i as f32 / collision_checks_per_block_travelled),
             );
         }
-        let start_square = snap_to_grid(start_pos);
         // needed for very small steps
         intermediate_player_positions_to_check.push(end_pos);
         for point_to_check in &intermediate_player_positions_to_check {
@@ -1626,14 +1632,28 @@ mod tests {
         return game;
     }
 
-    fn set_up_particle_moving_right_and_about_to_hit_block(block: Block) -> Game {
+    fn set_up_particle_moving_in_direction_about_to_hit_block_at_square(
+        dir: Point<f32>,
+        block: Block,
+        square: Point<i32>,
+    ) -> Game {
         let mut game = set_up_game();
-        let block_square = p(5, 5);
-        let particle_start_pos = floatify(block_square) + p(-0.51, 0.0);
-        let particle_start_vel = p(0.1, 0.0);
-        game.place_block(block_square, block);
+        let particle_start_pos = floatify(square) + -dir * 0.51;
+        let particle_start_vel = dir * 0.1;
+        game.place_block(square, block);
         game.place_particle_with_velocity(particle_start_pos, particle_start_vel);
         game
+    }
+
+    fn set_up_particle_moving_in_direction_about_to_hit_wall_at_square(
+        dir: Point<f32>,
+        square: Point<i32>,
+    ) -> Game {
+        set_up_particle_moving_in_direction_about_to_hit_block_at_square(dir, Block::Wall, square)
+    }
+
+    fn set_up_particle_moving_right_and_about_to_hit_block(block: Block) -> Game {
+        set_up_particle_moving_in_direction_about_to_hit_block_at_square(right_f(), block, p(5, 5))
     }
 
     fn set_up_particle_moving_right_and_about_to_hit_wall() -> Game {
@@ -3580,8 +3600,9 @@ mod tests {
     fn test_linecast_hit_between_blocks() {
         let game = set_up_four_wall_blocks_at_5_and_6();
         let start_pos = p(10.0, 10.0);
-        let end_pos = p(6.4999, 5.49999);
+        let end_pos = p(6.4999, 5.4999);
         let collision = game.linecast(start_pos, end_pos);
+        assert!(collision.is_some());
         assert!(collision.unwrap().collider_pos.x() == 6.5);
         assert!(collision.unwrap().collided_block_square == p(6, 6));
         assert!(collision.unwrap().normal == p(1, 0));
@@ -3607,5 +3628,30 @@ mod tests {
 
         let end_vel = game.particles[0].vel;
         assert!(end_vel == -start_vel);
+    }
+
+    #[test]
+    fn test_particle_bounce_off_wall_at_bottom_of_grid() {
+        let mut game =
+            set_up_particle_moving_in_direction_about_to_hit_wall_at_square(down_f(), p(15, 0));
+        game.tick_physics();
+    }
+    #[test]
+    fn test_particle_bounce_off_wall_at_top_of_grid() {
+        let mut game =
+            set_up_particle_moving_in_direction_about_to_hit_wall_at_square(up_f(), p(15, 29));
+        game.tick_physics();
+    }
+    #[test]
+    fn test_particle_bounce_off_wall_at_right_of_grid() {
+        let mut game =
+            set_up_particle_moving_in_direction_about_to_hit_wall_at_square(right_f(), p(29, 15));
+        game.tick_physics();
+    }
+    #[test]
+    fn test_particle_bounce_off_wall_at_left_of_grid() {
+        let mut game =
+            set_up_particle_moving_in_direction_about_to_hit_wall_at_square(left_f(), p(0, 15));
+        game.tick_physics();
     }
 }
