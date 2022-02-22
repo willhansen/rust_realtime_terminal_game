@@ -1,6 +1,7 @@
 extern crate geo;
 extern crate rand;
 
+use crate::RADIUS_OF_EXACTLY_TOUCHING_ZONE;
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Point};
@@ -149,8 +150,13 @@ pub fn grid_squares_overlapped_by_floating_square(
     let bottom_left_point = pos - p(1.0, 1.0) * square_side_length / 2.0;
     let top_right_point = pos + p(1.0, 1.0) * square_side_length / 2.0;
 
-    let bottom_left_square = round_vector_with_tie_break_toward_inf(bottom_left_point);
-    let top_right_square = round_vector_with_tie_break_toward_neg_inf(top_right_point);
+    let nudge = p(
+        RADIUS_OF_EXACTLY_TOUCHING_ZONE,
+        RADIUS_OF_EXACTLY_TOUCHING_ZONE,
+    );
+
+    let bottom_left_square = round_vector_with_tie_break_toward_inf(bottom_left_point + nudge);
+    let top_right_square = round_vector_with_tie_break_toward_neg_inf(top_right_point - nudge);
     let mut output = Vec::<Point<i32>>::new();
     for x in bottom_left_square.x()..=top_right_square.x() {
         for y in bottom_left_square.y()..=top_right_square.y() {
@@ -169,18 +175,45 @@ pub fn offset_from_grid(world_pos: Point<f32>) -> Point<f32> {
 
 pub fn point_inside_square(point: Point<f32>, square: Point<i32>) -> bool {
     let diff = point - floatify(square);
-    return diff.x().abs() < 0.5 && diff.y().abs() < 0.5;
+    let within_x_limit = diff.x().abs() < 0.5 - RADIUS_OF_EXACTLY_TOUCHING_ZONE;
+    let within_y_limit = diff.y().abs() < 0.5 - RADIUS_OF_EXACTLY_TOUCHING_ZONE;
+    within_x_limit && within_y_limit
 }
 
-pub fn point_exactly_touching_square(point: Point<f32>, square: Point<i32>) -> bool {
+pub fn point_exactly_touching_unit_square(point: Point<f32>, square: Point<i32>) -> bool {
+    point_exactly_touching_square(point, square, 1.0)
+}
+
+pub fn point_exactly_touching_square(
+    point: Point<f32>,
+    square: Point<i32>,
+    square_side_length: f32,
+) -> bool {
     let diff = point - floatify(square);
-    let on_x_limit = diff.x().abs() == 0.5;
-    let on_y_limit = diff.y().abs() == 0.5;
-    let within_x_limit = diff.x().abs() < 0.5;
-    let within_y_limit = diff.y().abs() < 0.5;
+    let on_x_limit =
+        (diff.x().abs() - square_side_length / 2.0).abs() <= RADIUS_OF_EXACTLY_TOUCHING_ZONE;
+    let on_y_limit =
+        (diff.y().abs() - square_side_length / 2.0).abs() <= RADIUS_OF_EXACTLY_TOUCHING_ZONE;
+    let within_x_limit =
+        diff.x().abs() < square_side_length / 2.0 - RADIUS_OF_EXACTLY_TOUCHING_ZONE;
+    let within_y_limit =
+        diff.y().abs() < square_side_length / 2.0 - RADIUS_OF_EXACTLY_TOUCHING_ZONE;
     return (within_x_limit && on_y_limit)
         || (within_y_limit && on_x_limit)
         || (on_x_limit && on_y_limit);
+}
+
+pub fn point_diagonally_touching_square(
+    point: Point<f32>,
+    square: Point<i32>,
+    square_side_length: f32,
+) -> bool {
+    let diff = point - floatify(square);
+    let on_x_limit =
+        (diff.x().abs() - square_side_length / 2.0).abs() <= RADIUS_OF_EXACTLY_TOUCHING_ZONE;
+    let on_y_limit =
+        (diff.y().abs() - square_side_length / 2.0).abs() <= RADIUS_OF_EXACTLY_TOUCHING_ZONE;
+    on_x_limit && on_y_limit
 }
 
 #[allow(dead_code)]
@@ -357,22 +390,12 @@ pub fn inverse_lerp(a: f32, b: f32, value_between_a_and_b: f32) -> f32 {
     (value_between_a_and_b - a) / (b - a)
 }
 
-pub fn floating_square_exactly_touching_fixed_square(
+pub fn floating_square_orthogonally_touching_fixed_square(
     float_square_pos: Point<f32>,
     fixed_square_pos: Point<i32>,
 ) -> bool {
-    let diff = float_square_pos - floatify(fixed_square_pos);
-    let (x, y) = diff.x_y();
-    let on_x_bound = x.abs() == 1.0;
-    let on_y_bound = y.abs() == 1.0;
-    let within_x_bounds = x.abs() <= 1.0;
-    let within_y_bounds = y.abs() <= 1.0;
-
-    let on_perfect_diagonal = on_x_bound && on_y_bound;
-    let on_x_side = on_x_bound && within_y_bounds;
-    let on_y_side = on_y_bound && within_x_bounds;
-
-    !on_perfect_diagonal && (on_x_side || on_y_side)
+    point_exactly_touching_square(float_square_pos, fixed_square_pos, 2.0)
+        && !point_diagonally_touching_square(float_square_pos, fixed_square_pos, 2.0)
 }
 
 pub fn points_in_line_with_max_gap(
@@ -426,6 +449,7 @@ pub fn time_synchronized_points_on_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RADIUS_OF_EXACTLY_TOUCHING_ZONE;
     use assert2::assert;
 
     #[test]
@@ -753,49 +777,56 @@ mod tests {
 
     #[test]
     fn test_square_exactly_touching_square_below() {
-        assert!(floating_square_exactly_touching_fixed_square(
+        assert!(floating_square_orthogonally_touching_fixed_square(
             p(1.0, 0.0),
             p(1, -1)
         ));
     }
     #[test]
+    fn test_square_exactly_touching_square_below_with_small_tolerance() {
+        assert!(floating_square_orthogonally_touching_fixed_square(
+            p(1.0, 0.0 + RADIUS_OF_EXACTLY_TOUCHING_ZONE / 2.0),
+            p(1, -1)
+        ));
+    }
+    #[test]
     fn test_square_exactly_touching_square_below_with_small_horizontal_shift() {
-        assert!(floating_square_exactly_touching_fixed_square(
+        assert!(floating_square_orthogonally_touching_fixed_square(
             p(1.2, 0.0),
             p(1, -1)
         ));
     }
     #[test]
     fn test_square_exactly_touching_square_below_with_larger_horizontal_shift() {
-        assert!(floating_square_exactly_touching_fixed_square(
+        assert!(floating_square_orthogonally_touching_fixed_square(
             p(1.9, 0.0),
             p(1, -1)
         ));
     }
     #[test]
     fn test_square_not_exactly_touching_square_below_with_way_too_big_horizontal_shift() {
-        assert!(!floating_square_exactly_touching_fixed_square(
+        assert!(!floating_square_orthogonally_touching_fixed_square(
             p(19.0, 0.0),
             p(1, -1)
         ));
     }
     #[test]
     fn test_square_not_exactly_touching_square_below_with_slight_gap() {
-        assert!(!floating_square_exactly_touching_fixed_square(
+        assert!(!floating_square_orthogonally_touching_fixed_square(
             p(1.0, 0.0001),
             p(1, -1)
         ));
     }
     #[test]
     fn test_square_not_exactly_touching_square_below_with_slight_overlap() {
-        assert!(!floating_square_exactly_touching_fixed_square(
+        assert!(!floating_square_orthogonally_touching_fixed_square(
             p(1.0, -0.0001),
             p(1, -1)
         ));
     }
     #[test]
     fn test_square_not_exactly_touching_square_on_perfect_diagonal() {
-        assert!(!floating_square_exactly_touching_fixed_square(
+        assert!(!floating_square_orthogonally_touching_fixed_square(
             p(0.0, 0.0),
             p(1, -1)
         ));
@@ -969,15 +1000,56 @@ mod tests {
     }
 
     #[test]
-    fn test_point_touching_square() {
-        assert!(point_exactly_touching_square(p(0.5, 0.5), p(0, 0)) == true);
-        assert!(point_exactly_touching_square(p(0.5, 0.5), p(1, 0)) == true);
-        assert!(point_exactly_touching_square(p(0.5, 0.5), p(1, 1)) == true);
-        assert!(point_exactly_touching_square(p(0.5, 0.5), p(0, 1)) == true);
+    fn test_point_exactly_touching_square() {
+        assert!(point_exactly_touching_unit_square(p(0.5, 0.5), p(0, 0)) == true);
+        assert!(point_exactly_touching_unit_square(p(0.5, 0.5), p(1, 0)) == true);
+        assert!(point_exactly_touching_unit_square(p(0.5, 0.5), p(1, 1)) == true);
+        assert!(point_exactly_touching_unit_square(p(0.5, 0.5), p(0, 1)) == true);
 
-        assert!(point_exactly_touching_square(p(0.5001, 0.5), p(0, 0)) == false);
-        assert!(point_exactly_touching_square(p(0.5001, 0.5), p(1, 0)) == true);
-        assert!(point_exactly_touching_square(p(0.5001, 0.5), p(0, 1)) == false);
-        assert!(point_exactly_touching_square(p(0.5001, 0.5), p(1, 1)) == true);
+        assert!(point_exactly_touching_unit_square(p(0.5001, 0.5), p(0, 0)) == false);
+        assert!(point_exactly_touching_unit_square(p(0.5001, 0.5), p(1, 0)) == true);
+        assert!(point_exactly_touching_unit_square(p(0.5001, 0.5), p(0, 1)) == false);
+        assert!(point_exactly_touching_unit_square(p(0.5001, 0.5), p(1, 1)) == true);
+    }
+    #[test]
+    fn test_point_exactly_touching_square_with_small_tolerance() {
+        assert!(
+            point_exactly_touching_unit_square(
+                p(0.5 + RADIUS_OF_EXACTLY_TOUCHING_ZONE / 2.0, 0.0),
+                p(0, 0)
+            ) == true
+        );
+        assert!(
+            point_exactly_touching_unit_square(
+                p(0.5 + 3.0 * RADIUS_OF_EXACTLY_TOUCHING_ZONE / 2.0, 0.0),
+                p(0, 0)
+            ) == false
+        );
+    }
+    #[test]
+    fn test_point_not_inside_square_if_exactly_touching_it_within_tolerances() {
+        let test_point_touching_square = p(0.5 + RADIUS_OF_EXACTLY_TOUCHING_ZONE / 2.0, 0.0);
+        let test_point_in_square = p(0.5 - 3.0 * RADIUS_OF_EXACTLY_TOUCHING_ZONE / 2.0, 0.0);
+        let test_square = p(0, 0);
+
+        assert!(
+            point_exactly_touching_unit_square(test_point_touching_square, test_square)
+                != point_inside_square(test_point_touching_square, test_square),
+        );
+        assert!(
+            point_exactly_touching_unit_square(test_point_in_square, test_square)
+                != point_inside_square(test_point_in_square, test_square),
+        );
+    }
+    #[test]
+    fn test_exactly_touching_is_not_enough_to_count_as_overlapping() {
+        assert!(
+            grid_squares_overlapped_by_floating_square(
+                p(0.0, 0.0),
+                1.0 + RADIUS_OF_EXACTLY_TOUCHING_ZONE / 2.0
+            )
+            .len()
+                == 1
+        );
     }
 }

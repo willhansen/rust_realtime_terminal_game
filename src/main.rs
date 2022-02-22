@@ -75,6 +75,8 @@ const DEFAULT_TICKS_TO_END_COMPRESSION: f32 = 10.0;
 
 const DEFAULT_PARTICLE_AMALGAMATION_DENSITY: i32 = 10;
 
+const RADIUS_OF_EXACTLY_TOUCHING_ZONE: f32 = 0.000001;
+
 // These have no positional information
 #[derive(Copy, Clone, PartialEq, Eq, Debug, EnumAsInner)]
 enum Block {
@@ -705,19 +707,11 @@ impl Game {
 
             if particle.wall_collision_behavior != ParticleWallCollisionBehavior::PassThrough {
                 while magnitude(step) > 0.00001 {
-                    dbg!(start_pos);
                     if let Some(collision) = self.linecast(start_pos, end_pos) {
                         if particle.wall_collision_behavior == ParticleWallCollisionBehavior::Bounce
                         {
                             let new_start = collision.collider_pos;
                             let step_taken = new_start - start_pos;
-                            dbg!(
-                                start_pos,
-                                new_start,
-                                &particle.pos,
-                                &collision.collider_pos,
-                                step_taken
-                            );
                             step.add_assign(-step_taken);
                             let vel = self.particles[i].vel;
                             if collision.normal.x() != 0 {
@@ -747,7 +741,7 @@ impl Game {
                     && particle.wall_collision_behavior == ParticleWallCollisionBehavior::Bounce
                 {
                     dbg!(&self.particles[i], start_pos, end_pos);
-                    panic!("particle_ended_inside_wall")
+                    panic!("particle ended inside wall")
                 }
             }
 
@@ -1368,7 +1362,7 @@ impl Game {
                     let target_square = snap_to_grid(self.player.pos) + rel_square;
                     if let Some(block) = self.get_block_relative_to_player(rel_square) {
                         if block == Block::Wall
-                            && floating_square_exactly_touching_fixed_square(
+                            && floating_square_orthogonally_touching_fixed_square(
                                 self.player.pos,
                                 target_square,
                             )
@@ -1841,7 +1835,7 @@ mod tests {
         game.place_block(p_wall, Block::Wall);
 
         let p1 = floatify(p_wall) + p(0.0, 1.5);
-        let p2 = floatify(p_wall) + p(0.0, 0.999999);
+        let p2 = floatify(p_wall) + p(0.0, 0.999);
         let result = game.unit_squarecast(p1, p2);
 
         assert!(result != None);
@@ -3563,7 +3557,7 @@ mod tests {
 
     #[test]
     #[timeout(100)]
-    fn test_several_particles_bouncing_off_a_platform_at_various_angles() {
+    fn test_several_particles_bouncing_off_a_platform_at_various_angles_at_grid_bottom() {
         let n = 10;
         let mut game = set_up_n_particles_about_to_bounce_off_platform_at_grid_bottom(n);
         assert!(game.particles.len() == n as usize);
@@ -3581,6 +3575,7 @@ mod tests {
             assert!(game.particles[i].pos.y() == game.particles[0].pos.y());
         }
     }
+
     #[test]
     fn test_linecast_hit_between_blocks() {
         let game = set_up_four_wall_blocks_at_5_and_6();
