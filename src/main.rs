@@ -1866,7 +1866,10 @@ mod tests {
         let result = game.unit_squarecast(p1, p2);
 
         assert!(result != None);
-        assert!(result.unwrap().collider_pos == floatify(p_wall) + p(-1.0, 0.0));
+        assert!(points_nearly_equal(
+            result.unwrap().collider_pos,
+            floatify(p_wall) + p(-1.0, 0.0)
+        ));
         assert!(result.unwrap().normal == p(-1, 0));
     }
 
@@ -1882,7 +1885,10 @@ mod tests {
         let result = game.unit_squarecast(p1, p2);
 
         assert!(result != None);
-        assert!(result.unwrap().collider_pos == floatify(p_wall) + p(0.0, -1.0));
+        assert!(points_nearly_equal(
+            result.unwrap().collider_pos,
+            floatify(p_wall) + p(0.0, -1.0)
+        ));
         assert!(result.unwrap().normal == p(0, -1));
     }
 
@@ -1898,7 +1904,10 @@ mod tests {
         let result = game.unit_squarecast(p1, p2);
 
         assert!(result != None);
-        assert!(result.unwrap().collider_pos == floatify(p_wall) + p(0.0, 1.0));
+        assert!(points_nearly_equal(
+            result.unwrap().collider_pos,
+            floatify(p_wall) + p(0.0, 1.0)
+        ));
         assert!(result.unwrap().normal == p(0, 1));
     }
 
@@ -2078,7 +2087,7 @@ mod tests {
         for _ in 0..50 {
             game.tick_physics();
         }
-        assert!(game.player.pos.y() == start_pos.y());
+        assert!(nearly_equal(game.player.pos.y(), start_pos.y()));
     }
 
     #[test]
@@ -3122,7 +3131,10 @@ mod tests {
         let collision_velocity = p(0.0, -5.0);
         game.player.vel = collision_velocity;
         game.tick_physics();
-        assert!(game.time_since_last_player_collision() == Some(1.0));
+        assert!(nearly_equal(
+            game.time_since_last_player_collision().unwrap(),
+            1.0
+        ));
         assert!(game.player.last_collision.as_ref().unwrap().normal == p(0, 1));
         assert!(
             game.player
@@ -3133,7 +3145,10 @@ mod tests {
                 == collision_velocity
         );
         game.tick_physics();
-        assert!(game.time_since_last_player_collision() == Some(2.0));
+        assert!(nearly_equal(
+            game.time_since_last_player_collision().unwrap(),
+            2.0
+        ));
         assert!(game.player.last_collision.as_ref().unwrap().normal == p(0, 1));
         assert!(
             game.player
@@ -3165,21 +3180,21 @@ mod tests {
         game.player.vel = p(0.0, -1.0);
         game.tick_physics();
         let ticks_before_bullet_time = 1.0;
-        assert_relative_eq!(
+        assert!(nearly_equal(
             game.time_since_last_player_collision().unwrap(),
             ticks_before_bullet_time
-        );
+        ));
         game.toggle_bullet_time();
         game.tick_physics();
-        assert_relative_eq!(
+        assert!(nearly_equal(
             game.time_since_last_player_collision().unwrap(),
             game.bullet_time_factor + ticks_before_bullet_time
-        );
+        ));
         game.tick_physics();
-        assert_relative_eq!(
+        assert!(nearly_equal(
             game.time_since_last_player_collision().unwrap(),
             game.bullet_time_factor * 2.0 + ticks_before_bullet_time
-        );
+        ));
     }
 
     #[test]
@@ -3232,7 +3247,10 @@ mod tests {
         game.player.vel = p(0.0, -10.0);
         game.tick_physics();
         assert!(game.player.last_collision.is_some());
-        assert!(game.time_since_last_player_collision().unwrap() == 1.0);
+        assert!(nearly_equal(
+            game.time_since_last_player_collision().unwrap(),
+            1.0
+        ));
 
         let mut chars_in_compression_start = Vec::<char>::new();
         for _ in 0..DEFAULT_TICKS_TO_MAX_COMPRESSION as i32 {
@@ -3263,7 +3281,10 @@ mod tests {
         //game.player.pos.add_assign(p(0.0, 0.1));
         game.player.vel = p(0.0, -10.0);
         game.tick_physics();
-        assert!(game.time_since_last_player_collision() == Some(1.0));
+        assert!(nearly_equal(
+            game.time_since_last_player_collision().unwrap(),
+            1.0
+        ));
         assert!(game.get_player_compression_fraction() < 1.0);
 
         // Action
@@ -3271,7 +3292,7 @@ mod tests {
         game.tick_physics();
 
         // Assertion
-        assert!(game.get_player_compression_fraction() == 1.0);
+        assert!(nearly_equal(game.get_player_compression_fraction(), 1.0));
     }
     #[test]
     #[timeout(100)]
@@ -3281,7 +3302,10 @@ mod tests {
         //game.player.pos.add_assign(p(0.0, 0.1));
         game.player.vel = p(0.0, 10.0);
         game.tick_physics();
-        assert!(game.time_since_last_player_collision() == Some(1.0));
+        assert!(nearly_equal(
+            game.time_since_last_player_collision().unwrap(),
+            1.0
+        ));
 
         // Action
         game.tick_physics();
@@ -3297,7 +3321,10 @@ mod tests {
         be_in_frictionless_space(&mut game);
         game.player.vel = p(10.0, 0.0);
         game.tick_physics();
-        assert!(game.time_since_last_player_collision() == Some(1.0));
+        assert!(nearly_equal(
+            game.time_since_last_player_collision().unwrap(),
+            1.0
+        ));
         assert!(game.get_player_compression_fraction() < 1.0);
 
         // Action
@@ -3329,7 +3356,10 @@ mod tests {
         let mut game = set_up_player_on_platform();
         game.player.vel = p(0.0, -1.0);
         game.tick_physics();
-        assert!(game.time_since_last_player_collision() == Some(1.0));
+        assert!(nearly_equal(
+            game.time_since_last_player_collision().unwrap(),
+            1.0
+        ));
         assert!(game.player.moved_normal_to_collision_since_collision == false);
         game.player_jump_if_possible();
         game.tick_physics();
@@ -3343,7 +3373,10 @@ mod tests {
         game.player.vel = p(1.0, 0.0);
         game.player.desired_direction = p(1, 0);
         game.tick_physics();
-        assert!(game.time_since_last_player_collision() == Some(1.0));
+        assert!(nearly_equal(
+            game.time_since_last_player_collision().unwrap(),
+            1.0
+        ));
         assert!(game.player.moved_normal_to_collision_since_collision == false);
         game.player.vel = p(-1.0, 0.0);
         game.tick_physics();
@@ -3477,7 +3510,10 @@ mod tests {
 
         game.tick_physics();
 
-        assert!(game.time_since_last_player_collision() == Some(0.5));
+        assert!(nearly_equal(
+            game.time_since_last_player_collision().unwrap(),
+            0.5
+        ));
     }
 
     #[test]
@@ -3730,7 +3766,10 @@ mod tests {
         let start_pos = p(3.0, 5.3);
         let dir = right_f();
         let collision = game.squarecast(start_pos, start_pos + dir * 500.0, 1.0);
-        assert!(collision.unwrap().collider_pos == p(4.0, start_pos.y()));
+        assert!(points_nearly_equal(
+            collision.unwrap().collider_pos,
+            p(4.0, start_pos.y())
+        ));
         assert!(collision.unwrap().collided_block_square == p(5, 5));
         assert!(collision.unwrap().normal == p(-1, 0));
     }
@@ -3741,7 +3780,10 @@ mod tests {
         let start_pos = p(3.0, 5.3);
         let dir = right_f();
         let collision = game.squarecast(start_pos, start_pos + dir * 500.0, 0.0);
-        assert!(collision.unwrap().collider_pos == p(4.5, start_pos.y()));
+        assert!(points_nearly_equal(
+            collision.unwrap().collider_pos,
+            p(4.5, start_pos.y())
+        ));
         assert!(collision.unwrap().collided_block_square == p(5, 5));
         assert!(collision.unwrap().normal == p(-1, 0));
     }
@@ -3775,7 +3817,7 @@ mod tests {
         let end_pos = p(6.4999, 5.4999);
         let collision = game.linecast(start_pos, end_pos);
         assert!(collision.is_some());
-        assert!(collision.unwrap().collider_pos.x() == 6.5);
+        assert!(nearly_equal(collision.unwrap().collider_pos.x(), 6.5));
         assert!(collision.unwrap().collided_block_square == p(6, 6));
         assert!(collision.unwrap().normal == p(1, 0));
     }

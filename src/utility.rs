@@ -543,6 +543,22 @@ pub fn time_synchronized_points_on_line(
     output_points
 }
 
+// for tests
+pub fn points_nearly_equal(a: Point<f32>, b: Point<f32>) -> bool {
+    let result = magnitude(a - b) < 0.0001;
+    if !result {
+        dbg!(a, b);
+    }
+    result
+}
+pub fn nearly_equal(a: f32, b: f32) -> bool {
+    let result = (a - b).abs() < 0.0001;
+    if !result {
+        dbg!(a, b);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,7 +573,10 @@ mod tests {
         let result = single_block_unit_squarecast(start, end, wall);
 
         assert!(result != None);
-        assert!(result.unwrap().collider_pos == floatify(wall - p(1, 0)));
+        assert!(points_nearly_equal(
+            result.unwrap().collider_pos,
+            floatify(wall - p(1, 0))
+        ));
         assert!(result.unwrap().normal == p(-1, 0));
     }
 
@@ -674,12 +693,12 @@ mod tests {
         let start_point = p(0.0, 0.0);
         let end_point = start_point + p(3.0, 0.0);
         let block_center = p(3, 0);
-        assert!(
+        assert!(points_nearly_equal(
             single_block_unit_squarecast(start_point, end_point, block_center)
                 .unwrap()
-                .collider_pos
-                == p(2.0, 0.0)
-        );
+                .collider_pos,
+            p(2.0, 0.0)
+        ));
     }
 
     #[test]
@@ -687,12 +706,12 @@ mod tests {
         let start_point = p(0.3, 0.0);
         let end_point = start_point + p(0.0, 5.0);
         let block_center = p(0, 5);
-        assert!(
+        assert!(points_nearly_equal(
             single_block_unit_squarecast(start_point, end_point, block_center)
                 .unwrap()
-                .collider_pos
-                == p(start_point.x(), 4.0)
-        );
+                .collider_pos,
+            p(start_point.x(), 4.0)
+        ));
     }
 
     #[test]
@@ -700,12 +719,12 @@ mod tests {
         let start_point = p(5.0, 0.0);
         let end_point = start_point + p(3.0, 3.0);
         let block_center = p(7, 1);
-        assert!(
+        assert!(points_nearly_equal(
             single_block_unit_squarecast(start_point, end_point, block_center)
                 .unwrap()
-                .collider_pos
-                == p(6.0, 1.0)
-        );
+                .collider_pos,
+            p(6.0, 1.0)
+        ));
     }
 
     #[test]
@@ -713,12 +732,7 @@ mod tests {
         let start_point = p(0.0, 1.0);
         let end_point = start_point + p(10.0, 0.0);
         let block_center = p(4, 0);
-        assert!(
-            single_block_unit_squarecast(start_point, end_point, block_center)
-                .unwrap()
-                .collider_pos
-                == p(3.0, 1.0)
-        );
+        assert!(single_block_unit_squarecast(start_point, end_point, block_center).is_none());
     }
 
     #[test]
@@ -734,24 +748,14 @@ mod tests {
         let start_point = p(0.0, 0.5);
         let end_point = start_point + p(10.0, 0.0);
         let block_center = p(4, 0);
-        assert!(
-            single_block_linecast(start_point, end_point, block_center)
-                .unwrap()
-                .collider_pos
-                == p(3.5, 0.5)
-        );
+        assert!(single_block_linecast(start_point, end_point, block_center).is_none());
     }
     #[test]
     fn test_single_block_linecast__exactly_on_bottom_edge() {
         let start_point = p(0.0, -0.5);
         let end_point = start_point + p(10.0, 0.0);
         let block_center = p(4, 0);
-        assert!(
-            single_block_linecast(start_point, end_point, block_center)
-                .unwrap()
-                .collider_pos
-                == p(3.5, -0.5)
-        );
+        assert!(single_block_linecast(start_point, end_point, block_center).is_none());
     }
 
     #[test]
