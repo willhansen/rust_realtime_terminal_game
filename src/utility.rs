@@ -1,7 +1,7 @@
 extern crate geo;
 extern crate rand;
 
-use crate::RADIUS_OF_EXACTLY_TOUCHING_ZONE;
+use crate::{AdjacentOccupancyMask, RADIUS_OF_EXACTLY_TOUCHING_ZONE};
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Point};
@@ -41,23 +41,57 @@ pub struct SquarecastCollision {
     pub normal: Point<i32>,
     pub collided_block_square: Point<i32>,
 }
-
 pub fn single_block_squarecast(
     start_point: Point<f32>,
     end_point: Point<f32>,
     grid_square_center: Point<i32>,
     moving_square_side_length: f32,
 ) -> Option<SquarecastCollision> {
+    single_block_squarecast_with_filled_cracks(
+        start_point,
+        end_point,
+        grid_square_center,
+        moving_square_side_length,
+        [[false; 3]; 3],
+    )
+}
+
+pub fn single_block_squarecast_with_filled_cracks(
+    start_point: Point<f32>,
+    end_point: Point<f32>,
+    grid_square_center: Point<i32>,
+    moving_square_side_length: f32,
+    adjacent_squares_occupied: AdjacentOccupancyMask,
+) -> Option<SquarecastCollision> {
     // formulates the problem as a point crossing the boundary of an r=1 square
     let movement_line = geo::Line::new(start_point, end_point);
     //println!("movement_line: {:?}", movement_line);
     let mut expanded_corner_offsets = vec![];
     for i in 0..4 {
-        expanded_corner_offsets.push(rotated(
-            p(1.0, 1.0) * (0.5 + moving_square_side_length / 2.0),
-            i as f32 * 90.0,
-        ))
+        let indexes_for_relative_up = quarter_turns::<i32>(p(0, 1), i) + p(1, 1);
+        let indexes_for_relative_right = quarter_turns::<i32>(p(1, 0), i) + p(1, 1);
+        let relative_up_occupied = adjacent_squares_occupied[indexes_for_relative_up.x() as usize]
+            [indexes_for_relative_up.y() as usize];
+        let relative_right_occupied = adjacent_squares_occupied
+            [indexes_for_relative_right.x() as usize][indexes_for_relative_right.y() as usize];
+
+        let mut unrotated_new_corner = p(1.0, 1.0) * (0.5 + moving_square_side_length / 2.0);
+        if relative_up_occupied {
+            unrotated_new_corner.add_assign(up_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE);
+        } else {
+            unrotated_new_corner.add_assign(-up_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE);
+        }
+        if relative_right_occupied {
+            unrotated_new_corner.add_assign(right_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE);
+        } else {
+            unrotated_new_corner.add_assign(-right_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE);
+        }
+
+        let new_corner = quarter_turns(unrotated_new_corner, i);
+
+        expanded_corner_offsets.push(new_corner);
     }
+
     let expanded_square_corners: Vec<Point<f32>> = expanded_corner_offsets
         .iter()
         .map(|&rel_p| floatify(grid_square_center) + rel_p)
@@ -102,6 +136,14 @@ pub fn single_block_squarecast(
         normal: collision_normal,
         collided_block_square: grid_square_center,
     });
+}
+
+pub fn single_block_linecast(
+    start_point: Point<f32>,
+    end_point: Point<f32>,
+    grid_square_center: Point<i32>,
+) -> Option<SquarecastCollision> {
+    single_block_squarecast(start_point, end_point, grid_square_center, 0.0)
 }
 
 pub fn single_block_unit_squarecast(
@@ -445,6 +487,41 @@ pub fn rotated(vect: Point<f32>, degrees: f32) -> Point<f32> {
         x * degrees.to_radians().sin() + y * degrees.to_radians().cos(),
     )
 }
+
+pub fn int_to_T<T: num::Signed>(x: i32) -> T {
+    match x {
+        1 => T::one(),
+        0 => T::zero(),
+        -1 => -T::one(),
+        _ => panic!(),
+    }
+}
+pub fn quarter_turns<T: 'static + CoordNum + num::Signed + std::fmt::Display>(
+    vect: Point<T>,
+    quarter_periods: i32,
+) -> Point<T> {
+    let (x, y) = vect.x_y();
+    p(
+        x * int_to_T(int_cos(quarter_periods)) - y * int_to_T(int_sin(quarter_periods)),
+        x * int_to_T(int_sin(quarter_periods)) + y * int_to_T(int_cos(quarter_periods)),
+    )
+}
+pub fn int_cos(quarter_periods: i32) -> i32 {
+    match quarter_periods.rem_euclid(4) {
+        0 => 1,
+        1 | 3 => 0,
+        2 => -1,
+        _ => panic!(),
+    }
+}
+pub fn int_sin(quarter_periods: i32) -> i32 {
+    match quarter_periods.rem_euclid(4) {
+        0 | 2 => 0,
+        1 => 1,
+        3 => -1,
+        _ => panic!(),
+    }
+}
 pub fn time_synchronized_points_on_line(
     start_point: Point<f32>,
     end_point: Point<f32>,
@@ -593,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collision_point_head_on_horizontal() {
+    fn test_single_block_unit_squarecast_head_on_horizontal() {
         let start_point = p(0.0, 0.0);
         let end_point = start_point + p(3.0, 0.0);
         let block_center = p(3, 0);
@@ -606,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collision_point_head_slightly_offset_from_vertical() {
+    fn test_single_block_unit_squarecast__slightly_offset_from_vertical() {
         let start_point = p(0.3, 0.0);
         let end_point = start_point + p(0.0, 5.0);
         let block_center = p(0, 5);
@@ -619,7 +696,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collision_point_slightly_diagonalish() {
+    fn test_single_block_unit_squarecast__slightly_diagonalish() {
         let start_point = p(5.0, 0.0);
         let end_point = start_point + p(3.0, 3.0);
         let block_center = p(7, 1);
@@ -629,6 +706,60 @@ mod tests {
                 .collider_pos
                 == p(6.0, 1.0)
         );
+    }
+
+    #[test]
+    fn test_single_block_unit_squarecast__exactly_on_edge() {
+        let start_point = p(0.0, 1.0);
+        let end_point = start_point + p(10.0, 0.0);
+        let block_center = p(4, 0);
+        assert!(
+            single_block_unit_squarecast(start_point, end_point, block_center)
+                .unwrap()
+                .collider_pos
+                == p(3.0, 1.0)
+        );
+    }
+
+    #[test]
+    fn test_single_block_unit_squarecast__no_detection_moving_away_from_exact_touch() {
+        let start_point = p(0.0, 0.0);
+        let end_point = start_point + right_f() * 10.0;
+        let block_center = p(-1, 0);
+        assert!(single_block_unit_squarecast(start_point, end_point, block_center).is_none());
+    }
+
+    #[test]
+    fn test_single_block_linecast__exactly_on_top_edge() {
+        let start_point = p(0.0, 0.5);
+        let end_point = start_point + p(10.0, 0.0);
+        let block_center = p(4, 0);
+        assert!(
+            single_block_linecast(start_point, end_point, block_center)
+                .unwrap()
+                .collider_pos
+                == p(3.5, 0.5)
+        );
+    }
+    #[test]
+    fn test_single_block_linecast__exactly_on_bottom_edge() {
+        let start_point = p(0.0, -0.5);
+        let end_point = start_point + p(10.0, 0.0);
+        let block_center = p(4, 0);
+        assert!(
+            single_block_linecast(start_point, end_point, block_center)
+                .unwrap()
+                .collider_pos
+                == p(3.5, -0.5)
+        );
+    }
+
+    #[test]
+    fn test_single_block_linecast__no_detection_moving_away_from_exact_touch() {
+        let block_center = p(0, 0);
+        let start_point = p(0.5, 0.0);
+        let end_point = start_point + right_f() * 10.0;
+        assert!(single_block_linecast(start_point, end_point, block_center).is_none());
     }
 
     #[test]
@@ -1071,5 +1202,29 @@ mod tests {
             .len()
                 == 1
         );
+    }
+
+    #[test]
+    fn test_int_cos() {
+        assert!(int_cos(-1) == 0);
+        assert!(int_cos(0) == 1);
+        assert!(int_cos(1) == 0);
+        assert!(int_cos(2) == -1);
+        assert!(int_cos(3) == 0);
+        assert!(int_cos(4) == 1);
+    }
+    #[test]
+    fn test_int_sin() {
+        assert!(int_sin(-1) == -1);
+        assert!(int_sin(0) == 0);
+        assert!(int_sin(1) == 1);
+        assert!(int_sin(2) == 0);
+        assert!(int_sin(3) == -1);
+        assert!(int_sin(4) == 0);
+    }
+    #[test]
+    fn test_quarter_turns() {
+        assert!(quarter_turns(p(1.0, 2.0), 1) == p(-2.0, 1.0));
+        assert!(quarter_turns(p(1, 2), 1) == p(-2, 1));
     }
 }

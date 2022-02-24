@@ -77,6 +77,8 @@ const DEFAULT_PARTICLE_AMALGAMATION_DENSITY: i32 = 10;
 
 const RADIUS_OF_EXACTLY_TOUCHING_ZONE: f32 = 0.000001;
 
+pub type AdjacentOccupancyMask = [[bool; 3]; 3];
+
 // These have no positional information
 #[derive(Copy, Clone, PartialEq, Eq, Debug, EnumAsInner)]
 enum Block {
@@ -321,8 +323,15 @@ impl Game {
             (self.terminal_size.1 as i32 - world_position.1) as u16,
         )
     }
-    fn get_block(&self, pos: Point<i32>) -> Block {
-        return self.grid[pos.x() as usize][pos.y() as usize];
+    fn get_block(&self, square: Point<i32>) -> Block {
+        return self.grid[square.x() as usize][square.y() as usize];
+    }
+    fn try_get_block(&self, square: Point<i32>) -> Option<Block> {
+        return if self.in_world(square) {
+            Some(self.grid[square.x() as usize][square.y() as usize])
+        } else {
+            None
+        };
     }
     fn set_block(&mut self, pos: Point<i32>, block: Block) {
         self.grid[pos.x() as usize][pos.y() as usize] = block;
@@ -1016,6 +1025,18 @@ impl Game {
         }
     }
 
+    fn get_occupancy_of_nearby_walls(&self, square: Point<i32>) -> AdjacentOccupancyMask {
+        let mut output = [[false; 3]; 3];
+        for i in 0..3 {
+            for j in 0..3 {
+                let rx = i as i32 - 1;
+                let ry = j as i32 - 1;
+                output[i][j] = matches!(self.try_get_block(square + p(rx, ry)), Some(Block::Wall));
+            }
+        }
+        output
+    }
+
     fn get_buffered_glyph(&self, pos: Point<i32>) -> &Glyph {
         return &self.output_buffer[pos.x() as usize][pos.y() as usize];
     }
@@ -1290,7 +1311,7 @@ impl Game {
         // needed for very small steps
         intermediate_player_positions_to_check.push(end_pos);
         for point_to_check in &intermediate_player_positions_to_check {
-            let overlapping_squares = grid_squares_overlapped_by_floating_square(
+            let overlapping_squares = grid_squares_touched_or_overlapped_by_floating_square(
                 *point_to_check,
                 moving_square_side_length,
             );
@@ -1299,16 +1320,14 @@ impl Game {
                 if self.in_world(*overlapping_square)
                     && self.get_block(*overlapping_square) == Block::Wall
                 {
-                    if let Some(collision) = single_block_squarecast(
+                    if let Some(collision) = single_block_squarecast_with_filled_cracks(
                         start_pos,
                         end_pos,
                         *overlapping_square,
                         moving_square_side_length,
+                        self.get_occupancy_of_nearby_walls(*overlapping_square),
                     ) {
                         collisions.push(collision);
-                    } else {
-                        dbg!(start_pos, end_pos, *overlapping_square);
-                        panic!("Squarecast found no collision for an overlapping wall block");
                     }
                 }
             }
@@ -1469,6 +1488,18 @@ mod tests {
 
     fn set_up_game() -> Game {
         Game::new(30, 30)
+    }
+
+    fn set_up_game_filled_with_walls() -> Game {
+        let mut game = Game::new(30, 30);
+        for y in 0..game.height() {
+            game.place_line_of_blocks(
+                (0, y as i32),
+                (game.width() as i32 - 1, y as i32),
+                Block::Wall,
+            );
+        }
+        game
     }
 
     fn set_up_just_player() -> Game {
@@ -1760,6 +1791,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_placement_and_gravity() {
         let mut game = Game::new(30, 30);
         game.place_block(p(10, 10), Block::Wall);
@@ -1777,6 +1809,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_place_player() {
         let mut game = Game::new(30, 30);
         // TODO: should these be variables?  Or should I just hardcode them?
@@ -1793,6 +1826,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_dies_when_falling_off_screen() {
         let mut game = Game::new(30, 30);
         game.place_player(15.0, 0.0);
@@ -1803,6 +1837,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_single_block_squarecast_no_move() {
         let point = p(0.0, 0.0);
         let p_wall = p(5, 5);
@@ -1811,6 +1846,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_squarecast_no_move() {
         let game = Game::new(30, 30);
         let point = p(0.0, 0.0);
@@ -1819,6 +1855,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_squarecast_horizontal_hit() {
         let mut game = Game::new(30, 30);
         let p_wall = p(5, 0);
@@ -1834,6 +1871,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_squarecast_vertical_hit() {
         let mut game = Game::new(30, 30);
         let p_wall = p(15, 10);
@@ -1849,6 +1887,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_squarecast_end_slightly_overlapping_a_block() {
         let mut game = Game::new(30, 30);
         let p_wall = p(15, 10);
@@ -1864,6 +1903,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_squarecast() {
         let mut game = Game::new(30, 30);
         game.place_line_of_blocks((10, 10), (20, 10), Block::Wall);
@@ -1889,6 +1929,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_squarecast_skips_player() {
         let game = set_up_player_on_platform();
 
@@ -1896,6 +1937,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_in_world_check() {
         let game = Game::new(30, 30);
         assert!(game.in_world(p(0, 0)));
@@ -1906,6 +1948,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_move_player() {
         let mut game = set_up_player_on_platform();
         game.player.max_run_speed = 1.0;
@@ -1926,6 +1969,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_stop_on_collision() {
         let mut game = set_up_player_on_platform();
         game.place_block(round(game.player.pos) + p(1, 0), Block::Wall);
@@ -1939,6 +1983,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_snap_to_object_on_collision() {
         let mut game = set_up_player_on_platform();
         game.place_block(round(game.player.pos) + p(2, 0), Block::Wall);
@@ -1953,6 +1998,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_move_player_slowly() {
         let mut game = set_up_player_on_platform();
         game.player.max_run_speed = 0.49;
@@ -1971,6 +2017,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_move_player_quickly() {
         let mut game = set_up_player_on_platform();
         game.player.max_run_speed = 2.0;
@@ -1984,6 +2031,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_fast_player_collision_between_frames() {
         let mut game = set_up_player_on_platform();
         // Player should not teleport through this block
@@ -1997,6 +2045,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_can_jump() {
         let mut game = set_up_player_on_platform();
         let start_pos = game.player.pos;
@@ -2007,6 +2056,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_gravity() {
         let mut game = Game::new(30, 30);
         game.place_player(15.0, 11.0);
@@ -2019,6 +2069,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_land_after_jump() {
         let mut game = set_up_player_on_platform();
         let start_pos = game.player.pos;
@@ -2031,6 +2082,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_slide_on_angled_collision() {
         let mut game = Game::new(30, 30);
         game.place_line_of_blocks((10, 10), (20, 10), Block::Wall);
@@ -2044,6 +2096,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_decellerate_when_already_moving_faster_than_max_speed() {
         let mut game = set_up_player_on_platform();
         game.player.max_run_speed = 1.0;
@@ -2055,6 +2108,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_no_double_jump() {
         let mut game = set_up_player_on_platform();
         game.player_jump_if_possible();
@@ -2066,6 +2120,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_respawn_button() {
         let mut game = Game::new(30, 30);
         game.handle_event(Event::Key(Key::Char('r')));
@@ -2074,6 +2129,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_wall_grab() {
         let mut game = set_up_player_hanging_on_wall_on_left();
         game.tick_physics();
@@ -2081,6 +2137,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_simple_wall_jump() {
         let mut game = set_up_player_hanging_on_wall_on_left();
         game.player_jump_if_possible();
@@ -2090,6 +2147,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_no_running_up_walls_immediately_after_spawn() {
         let mut game = set_up_player_hanging_on_wall_on_left();
         game.player.vel = p(-1.0, 1.0);
@@ -2099,6 +2157,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_dont_grab_wall_while_moving_up() {
         let mut game = set_up_player_hanging_on_wall_on_left();
         game.player.vel.set_y(1.0);
@@ -2106,6 +2165,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_no_friction_when_sliding_up_wall() {
         let mut game = set_up_player_on_platform();
         let wall_x = game.player.pos.x() as i32 - 2;
@@ -2128,6 +2188,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_coyote_frames() {
         let mut game = set_up_just_player();
         let start_pos = game.player.pos;
@@ -2141,6 +2202,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_coyote_frames_dont_assist_jump() {
         let mut game1 = set_up_player_on_platform();
         let mut game2 = set_up_player_on_platform();
@@ -2159,6 +2221,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_does_not_spawn_with_coyote_frames() {
         let mut game = set_up_just_player();
         let start_pos = game.player.pos;
@@ -2168,6 +2231,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_wall_jump_while_running_up_wall() {
         let mut game = set_up_player_hanging_on_wall_on_left();
         game.player.vel.set_y(1.0);
@@ -2176,6 +2240,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_draw_to_output_buffer() {
         let mut game = set_up_player_on_platform();
         game.update_output_buffer();
@@ -2192,6 +2257,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_horizontal_sub_glyph_positioning_on_left() {
         let mut game = set_up_player_on_platform();
         game.player.pos.add_assign(p(-0.2, 0.0));
@@ -2204,6 +2270,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_horizontal_sub_glyph_positioning_on_left_above_rounding_point() {
         let mut game = set_up_player_on_platform();
         game.player.pos.add_assign(p(-0.49, 0.0));
@@ -2216,6 +2283,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_horizontal_sub_glyph_positioning_on_left_rounding_down() {
         let mut game = set_up_player_on_platform();
         game.player.pos.add_assign(p(-0.5, 0.0));
@@ -2228,6 +2296,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_vertical_sub_glyph_positioning_upwards() {
         let mut game = set_up_player_on_platform();
         game.player.pos.add_assign(p(0.0, 0.49));
@@ -2244,6 +2313,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_vertical_sub_glyph_positioning_downwards() {
         let mut game = set_up_player_on_platform();
         game.player.pos.add_assign(p(0.0, -0.2));
@@ -2260,6 +2330,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_glyph_when_rounding_to_zero_for_both_axes() {
         let mut game = set_up_just_player();
         game.player.pos.add_assign(p(-0.24, 0.01));
@@ -2273,6 +2344,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_glyphs_when_rounding_to_zero_for_x_and_half_step_up_for_y() {
         let mut game = set_up_just_player();
         game.player.pos.add_assign(p(0.24, 0.26));
@@ -2286,6 +2358,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_glyphs_when_rounding_to_zero_for_x_and_exactly_half_step_up_for_y() {
         let mut game = set_up_just_player();
         game.player.pos.add_assign(p(0.24, 0.25));
@@ -2299,6 +2372,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_glyphs_when_rounding_to_zero_for_x_and_exactly_half_step_down_for_y() {
         let mut game = set_up_just_player();
         game.player.pos.add_assign(p(-0.2, -0.25));
@@ -2312,6 +2386,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_glyphs_when_rounding_to_zero_for_y_and_half_step_right_for_x() {
         let mut game = set_up_just_player();
         game.player.pos.add_assign(p(0.3, 0.1));
@@ -2325,6 +2400,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_glyphs_when_rounding_to_zero_for_y_and_half_step_left_for_x() {
         let mut game = set_up_just_player();
         game.player.pos.add_assign(p(-0.3, 0.2));
@@ -2338,6 +2414,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_glyphs_for_half_step_up_and_right() {
         let mut game = set_up_just_player();
         game.player.pos.add_assign(p(0.3, 0.4));
@@ -2355,6 +2432,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_glyphs_for_half_step_up_and_left() {
         let mut game = set_up_just_player();
         game.player.pos.add_assign(p(-0.4, 0.26));
@@ -2371,6 +2449,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_glyphs_for_half_step_down_and_left() {
         let mut game = set_up_just_player();
         game.player.pos.add_assign(p(-0.26, -0.4999));
@@ -2387,6 +2466,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_glyphs_for_half_step_down_and_right() {
         let mut game = set_up_just_player();
         game.player.pos.add_assign(p(0.26, -0.4));
@@ -2403,6 +2483,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_off_alignment_player_coarse_rendering_given_diagonal_offset() {
         let mut game = set_up_just_player();
 
@@ -2422,6 +2503,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     // The timing of when to slide to a stop should give the player precision positioning
     fn test_dont_snap_to_grid_when_sliding_to_a_halt() {
         let mut game = set_up_player_on_platform();
@@ -2436,6 +2518,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_dash_no_direction_does_nothing() {
         let mut game = set_up_player_on_platform();
         let start_vel = game.player.vel;
@@ -2444,6 +2527,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_dash_right_on_ground() {
         let mut game = set_up_player_on_platform();
         game.player.desired_direction = p(1, 0);
@@ -2452,6 +2536,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_slow_down_to_exactly_max_speed_horizontally_midair() {
         let mut game = set_up_player_barely_fighting_air_friction_to_the_right_in_zero_g();
         game.tick_physics();
@@ -2459,6 +2544,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_slow_down_to_exactly_max_speed_vertically_midair() {
         let mut game = set_up_player_barely_fighting_air_friction_up_in_zero_g();
         game.tick_physics();
@@ -2466,6 +2552,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_do_not_grab_wall_while_standing_on_ground() {
         let mut game = set_up_player_on_platform();
         let wall_x = game.player.pos.x() as i32 - 1;
@@ -2477,6 +2564,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_direction_buttons() {
         let mut game = set_up_player_on_platform();
         game.handle_event(Event::Key(Key::Char('a')));
@@ -2501,6 +2589,7 @@ mod tests {
     #[ignore]
     // switching to particle bursts
     #[test]
+    #[timeout(100)]
     fn test_different_color_when_go_fast() {
         let mut game = set_up_player_on_platform();
         let stopped_color = game.get_player_glyphs()[1][1].clone().unwrap().fg_color;
@@ -2511,6 +2600,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_draw_visual_braille_line_without_rounding() {
         let mut game = set_up_player_on_platform();
         let start = game.player.pos + p(0.51, 0.1);
@@ -2550,6 +2640,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_drawn_braille_adds_instead_of_overwrites() {
         let mut game = set_up_game();
         let start_square = p(12, 5);
@@ -2575,6 +2666,7 @@ mod tests {
         assert!(game.get_buffered_glyph(start_square + p(2, 0)).character == '\u{2842}');
     }
     #[test]
+    #[timeout(100)]
     fn test_braille_point() {
         let mut game = set_up_game();
         // Expected braille:
@@ -2593,6 +2685,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_braille_left_behind_when_go_fast() {
         let mut game = set_up_player_on_platform_in_box();
         game.player.vel = p(game.player.color_change_speed_threshold * 5.0, 0.0);
@@ -2608,12 +2701,14 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_recent_poses_starts_empty() {
         let game = set_up_player_on_platform();
         assert!(game.player.recent_poses.is_empty());
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_recent_poses_are_saved() {
         let mut game = set_up_player_on_platform();
         let p0 = game.player.pos;
@@ -2632,6 +2727,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_dash_sets_velocity_rather_than_adds_to_it_if_set() {
         let mut game = set_up_just_player();
         game.player.dash_adds_to_vel = false;
@@ -2642,6 +2738,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_dash_adds_velocity_rather_than_sets_it_if_set() {
         let mut game = set_up_just_player();
         game.player.dash_adds_to_vel = true;
@@ -2652,6 +2749,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_prevent_clip_into_wall_when_colliding_with_internal_block_edge() {
         // data comes from observed bug reproduction
         let start_pos = p(35.599968, 16.5);
@@ -2674,6 +2772,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn update_color_threshold_with_jump_delta_v_update() {
         let mut game = set_up_game();
         let start_thresh = game.player.color_change_speed_threshold;
@@ -2682,6 +2781,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn update_color_threshold_with_speed_update() {
         let mut game = set_up_game();
         let start_thresh = game.player.color_change_speed_threshold;
@@ -2690,6 +2790,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_no_high_speed_color_with_normal_move_and_jump() {
         let mut game = set_up_player_on_platform();
         game.player.vel = p(game.player.max_run_speed, 0.0);
@@ -2701,6 +2802,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_no_high_speed_color_with_normal_wall_jump() {
         let mut game = set_up_player_hanging_on_wall_on_left();
         game.player_jump_if_possible();
@@ -2709,6 +2811,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_toggle_bullet_time() {
         let mut game = set_up_player_on_platform();
         assert!(!game.is_bullet_time);
@@ -2719,6 +2822,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_bullet_time_slows_down_motion() {
         let mut game = set_up_player_in_zero_g();
         game.player.acceleration_from_floor_traction = 0.0;
@@ -2732,6 +2836,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_bullet_time_slows_down_acceleration_from_gravity() {
         let mut game = set_up_just_player();
         game.player.acceleration_from_gravity = 1.0;
@@ -2745,6 +2850,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_no_passing_max_speed_horizontally_in_midair() {
         let mut game = set_up_just_player();
         game.player.vel = p(game.player.max_run_speed, 0.0);
@@ -2754,6 +2860,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_can_turn_around_midair_around_after_a_wall_jump() {
         let mut game = set_up_player_hanging_on_wall_on_left();
         game.player.deceleration_from_air_friction = 0.0;
@@ -2773,6 +2880,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn show_dash_visuals_even_if_hit_wall_in_first_frame() {
         let mut game = set_up_player_on_platform();
         game.player.pos.add_assign(p(10.0, 0.0));
@@ -2786,6 +2894,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn do_not_hang_onto_ceiling() {
         let mut game = set_up_player_on_platform();
         game.player.pos.add_assign(p(0.0, -2.0));
@@ -2796,6 +2905,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_movement_compensates_for_non_square_grid() {
         let mut game = set_up_player_in_zero_g_frictionless_vacuum();
         let start_pos = game.player.pos;
@@ -2807,6 +2917,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_particles__movement_compensates_for_non_square_grid() {
         let mut game = set_up_game();
         game.place_particle_with_velocity_and_lifetime(p(5.0, 5.0), p(1.0, 1.0), 500.0);
@@ -2819,6 +2930,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_no_jump_if_not_touching_floor() {
         let mut game = set_up_player_on_platform();
         game.player.pos.add_assign(p(0.0, 0.1));
@@ -2826,6 +2938,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_not_standing_on_block_if_slightly_above_block() {
         let mut game = set_up_player_on_platform();
         game.player.pos.add_assign(p(0.0, 0.1));
@@ -2833,6 +2946,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_place_particle() {
         let mut game = set_up_game();
         let pos = p(5.0, 5.0);
@@ -2841,6 +2955,7 @@ mod tests {
         assert!(game.particles[0].pos == pos);
     }
     #[test]
+    #[timeout(100)]
     fn test_draw_placed_particle() {
         let mut game = set_up_game();
         let pos = p(5.0, 5.0);
@@ -2853,6 +2968,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_speed_lines_are_particles() {
         let mut game = set_up_just_player();
         game.player.desired_direction = p(1, 0);
@@ -2862,6 +2978,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_get_particles_in_square() {
         let mut game = set_up_game();
         game.place_particle(p(0.0, 0.0));
@@ -2880,6 +2997,7 @@ mod tests {
         assert!(game.get_indexes_of_particles_in_square(p(-7, -5)).len() == 0);
     }
     #[test]
+    #[timeout(100)]
     fn test_count_braille_dots_in_square() {
         let mut game = set_up_game();
         game.place_particle(p(0.0, 0.0));
@@ -2902,6 +3020,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_particle_lines_can_visually_fill_square() {
         let mut game = set_up_game();
         game.place_line_of_particles(p(5.1, 6.0), p(5.1, 4.0));
@@ -2911,6 +3030,7 @@ mod tests {
         assert!(game.count_braille_dots_in_square(p(5, 5)) == 8);
     }
     #[test]
+    #[timeout(100)]
     fn test_particles__can_expire() {
         let point = p(5.0, 5.0);
         let mut game = set_up_game();
@@ -2924,6 +3044,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_dead_particles_are_not_drawn() {
         let point = p(5.0, 5.0);
         let mut game = set_up_game();
@@ -2934,6 +3055,7 @@ mod tests {
         assert!(game.get_buffered_glyph(snap_to_grid(point)).character == Block::Air.character());
     }
     #[test]
+    #[timeout(100)]
     fn test_particles__move_around() {
         let point = p(5.0, 5.0);
         let mut game = set_up_game();
@@ -2947,6 +3069,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_particles__die_when_out_of_map() {
         let mut game = set_up_game();
         let point = p(50.0, 50.0);
@@ -2956,6 +3079,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_particles__random_movement_slowed_by_bullet_time() {
         let mut game1 = set_up_game();
         let mut game2 = set_up_game();
@@ -2990,6 +3114,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_track_last_collision() {
         let mut game = set_up_player_in_corner_of_big_L();
         be_in_frictionless_space(&mut game);
@@ -3034,6 +3159,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_last_collision_tracking_accounts_for_bullet_time() {
         let mut game = set_up_player_on_platform();
         game.player.vel = p(0.0, -1.0);
@@ -3057,6 +3183,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_compresses_like_a_spring_when_colliding_at_high_speed() {
         let mut game = set_up_player_on_platform();
         game.player.vel = p(0.0, -10.0);
@@ -3067,6 +3194,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_compression_overrides_visuals() {
         let mut game = set_up_just_player();
         game.player.last_collision = Some(CollisionWithBlock {
@@ -3082,6 +3210,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_compress_horizontally_on_wall_collision() {
         let mut game = set_up_just_player();
         game.player.last_collision = Some(CollisionWithBlock {
@@ -3097,6 +3226,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_compression_characters_for_floor_collision_appear_in_correct_sequence() {
         let mut game = set_up_player_on_platform();
         game.player.vel = p(0.0, -10.0);
@@ -3126,6 +3256,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_leaving_floor_cancels_vertical_compression() {
         // Assignment
         let mut game = set_up_player_on_platform();
@@ -3143,6 +3274,7 @@ mod tests {
         assert!(game.get_player_compression_fraction() == 1.0);
     }
     #[test]
+    #[timeout(100)]
     fn test_leaving_ceiling_cancels_vertical_compression() {
         // Assignment
         let mut game = set_up_player_under_platform();
@@ -3158,6 +3290,7 @@ mod tests {
         assert!(game.get_player_compression_fraction() == 1.0);
     }
     #[test]
+    #[timeout(100)]
     fn test_leaving_wall_cancels_horizontal_compression() {
         // Assignment
         let mut game = set_up_player_touching_wall_on_right();
@@ -3176,6 +3309,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_particles__visuals_do_not_cover_blocks() {
         let mut game = set_up_game();
         let square = p(5, 5);
@@ -3190,6 +3324,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_remembers_movement_normal_to_last_collision__vertical_collision() {
         let mut game = set_up_player_on_platform();
         game.player.vel = p(0.0, -1.0);
@@ -3202,6 +3337,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_remembers_movement_normal_to_last_collision__horizontal_collision() {
         let mut game = set_up_player_touching_wall_on_right();
         game.player.vel = p(1.0, 0.0);
@@ -3215,6 +3351,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_forgets_normal_movement_to_collision_upon_new_collision() {
         let mut game = set_up_player_on_platform_in_frictionless_vacuum();
         game.player.moved_normal_to_collision_since_collision = true;
@@ -3224,6 +3361,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_coyote_frames_respect_bullet_time() {
         let mut game = set_up_player_supported_by_coyote_frames();
         assert!(game.player.remaining_coyote_time == game.player.max_coyote_time);
@@ -3233,6 +3371,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_particles__velocity() {
         let mut game = set_up_game();
         let start_pos = p(5.0, 5.0);
@@ -3246,6 +3385,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_compresses_when_sliding_up_wall() {
         let mut game = set_up_player_almost_touching_wall_on_right();
         game.player.desired_direction = p(1, 0);
@@ -3257,6 +3397,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_pushing_into_a_wall_is_not_a_collision() {
         let mut game = set_up_player_in_corner_of_backward_L();
         assert!(game.player.last_collision.is_none());
@@ -3266,6 +3407,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_exactly_touching_block_down_straight() {
         let mut game = set_up_just_player();
         let rel_wall_pos = p(0, -1);
@@ -3275,6 +3417,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_exactly_not_touching_block_down_left_diagonal() {
         let mut game = set_up_just_player();
         let rel_wall_pos = p(-1, -1);
@@ -3283,6 +3426,7 @@ mod tests {
         assert!(!game.player_exactly_touching_wall_in_direction(p(0, -1)));
     }
     #[test]
+    #[timeout(100)]
     fn test_player_exactly_touching_block_down_left_supported() {
         let mut game = set_up_just_player();
         game.player.pos.add_assign(p(-0.01, 0.0));
@@ -3292,6 +3436,7 @@ mod tests {
         assert!(game.player_exactly_touching_wall_in_direction(p(0, -1)));
     }
     #[test]
+    #[timeout(100)]
     fn test_player_exactly_touching_block_on_right() {
         let mut game = set_up_just_player();
         let rel_wall_pos = p(1, 0);
@@ -3301,6 +3446,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_bullet_time_slows_down_traction_acceleration() {
         let mut game1 = set_up_player_starting_to_move_right_on_platform();
         let mut game2 = set_up_player_starting_to_move_right_on_platform();
@@ -3313,6 +3459,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_collision_compression_starts_on_first_tick_of_collision() {
         let mut game = set_up_player_one_tick_from_platform_impact();
         assert!(game.get_player_compression_fraction() == 1.0);
@@ -3321,6 +3468,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_moment_of_collision_has_subtick_precision() {
         let mut game = set_up_player_on_platform();
         be_in_frictionless_space(&mut game);
@@ -3333,6 +3481,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_moment_of_collision_with_subtick_precision_accounts_for_non_square_grid() {
         let mut game1 = set_up_player_on_platform();
         let mut game2 = set_up_player_touching_wall_on_right();
@@ -3354,6 +3503,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_player_supported_by_block_if_mostly_off_edge() {
         let mut game = set_up_player_on_block_more_overhanging_than_not_on_right();
         game.player.remaining_coyote_time = 0.0;
@@ -3363,15 +3513,18 @@ mod tests {
 
     #[ignore]
     #[test]
+    #[timeout(100)]
     // The general case of this is pressing jump any time before landing causing an instant jump when possible
     fn test_allow_early_jump() {}
 
     #[ignore]
     #[test]
+    #[timeout(100)]
     // The general case of this is allowing a single jump anytime while falling after walking (not jumping!) off a platform
     fn test_allow_late_jump() {}
 
     #[test]
+    #[timeout(100)]
     // This should allow high skill to lead to really fast wall climbing (like in N+)
     fn test_wall_jump_adds_velocity_instead_of_sets_it() {
         let mut game1 = set_up_player_hanging_on_wall_on_left();
@@ -3385,6 +3538,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_burst_speed_line_particles_have_velocity() {
         let mut game = set_up_player_just_dashed_right_in_zero_g();
         game.player.speed_line_behavior = SpeedLineType::BurstChain;
@@ -3397,6 +3551,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_stationary_speed_line_particles_have_no_velocity() {
         let mut game = set_up_player_just_dashed_right_in_zero_g();
         game.player.speed_line_behavior = SpeedLineType::StillLine;
@@ -3409,6 +3564,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_can_slow_down_midair_after_dash() {
         let mut game1 = set_up_player_just_dashed_right_in_zero_g();
         let mut game2 = set_up_player_just_dashed_right_in_zero_g();
@@ -3421,10 +3577,12 @@ mod tests {
 
     #[ignore]
     #[test]
+    #[timeout(100)]
     // Once we have vertical subsquare positioning up and running, a slow slide down will look cool.
     fn test_slowly_slide_down_when_grabbing_wall() {}
 
     #[test]
+    #[timeout(100)]
     fn test_be_fastest_at_very_start_of_jump() {
         let mut game = set_up_player_running_full_speed_to_right_on_platform();
         assert!(game.player.max_run_speed >= game.player.max_midair_move_speed);
@@ -3438,19 +3596,23 @@ mod tests {
     }
     #[ignore]
     #[test]
+    #[timeout(100)]
     fn test_fps_display() {}
 
     #[ignore]
     // like a spring
     #[test]
+    #[timeout(100)]
     fn test_jump_bonus_if_jump_when_coming_out_of_compression() {}
 
     #[ignore]
     // just as the spring giveth, so doth the spring taketh away(-eth)
     #[test]
+    #[timeout(100)]
     fn test_jump_penalty_if_jump_when_entering_compression() {}
 
     #[test]
+    #[timeout(100)]
     fn test_perpendicular_speed_lines_move_perpendicular() {
         let dir = direction(p(1.25, 3.38)); // arbitrary
         let mut game = set_up_player_flying_fast_through_space_in_direction(dir);
@@ -3467,6 +3629,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_particle_wall_collision_behavior__pass_through() {
         let mut game = set_up_particle_moving_right_and_about_to_hit_wall();
         let particle_start_pos = game.particles[0].pos;
@@ -3478,6 +3641,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_particle_wall_collision_behavior__vanish() {
         let mut game = set_up_particle_moving_right_and_about_to_hit_wall();
         game.particles[0].wall_collision_behavior = ParticleWallCollisionBehavior::Vanish;
@@ -3486,6 +3650,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_particle_wall_collision_behavior__bounce() {
         let mut game = set_up_particle_moving_right_and_about_to_hit_wall();
         //let particle_start_pos = game.particles[0].pos;
@@ -3500,6 +3665,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_particles_combine_into_blocks() {
         let mut game = set_up_30_particles_about_to_move_one_square_right();
         let start_square = p(0, 0);
@@ -3514,6 +3680,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_particles_do_not_amalgamate_in_starting_square() {
         let mut game = set_up_30_particles_moving_slowly_right_from_origin();
         let start_square = p(0, 0);
@@ -3522,6 +3689,7 @@ mod tests {
         assert!(matches!(game.get_block(start_square), Block::Air));
     }
     #[test]
+    #[timeout(100)]
     fn test_particle_amalgams_absorb_particles_when_particle_lands_inside() {
         let mut game = set_up_particle_moving_right_and_about_to_hit_particle_amalgam();
         let block_square = p(5, 5);
@@ -3534,6 +3702,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_perpendicular_speed_lines_have_the_same_number_of_particles_in_bullet_time() {
         let dir = direction(p(1.234, 6.845)); // arbitrary
         let mut game1 = set_up_player_flying_fast_through_space_in_direction(dir);
@@ -3555,6 +3724,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_squarecast__hit_some_blocks() {
         let game = set_up_four_wall_blocks_at_5_and_6();
         let start_pos = p(3.0, 5.3);
@@ -3565,6 +3735,7 @@ mod tests {
         assert!(collision.unwrap().normal == p(-1, 0));
     }
     #[test]
+    #[timeout(100)]
     fn test_squarecast__hit_some_blocks_with_a_point() {
         let game = set_up_four_wall_blocks_at_5_and_6();
         let start_pos = p(3.0, 5.3);
@@ -3597,6 +3768,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_linecast_hit_between_blocks() {
         let game = set_up_four_wall_blocks_at_5_and_6();
         let start_pos = p(10.0, 10.0);
@@ -3608,6 +3780,7 @@ mod tests {
         assert!(collision.unwrap().normal == p(1, 0));
     }
     #[test]
+    #[timeout(100)]
     fn test_linecast__hit_near_corner_at_grid_bottom() {
         let plus_center = p(7, 0);
         let mut game = set_up_plus_sign_wall_blocks_at_square(plus_center);
@@ -3620,6 +3793,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_particle__double_bounce_in_corner() {
         let mut game = set_up_particle_about_to_hit_concave_corner();
         let start_vel = game.particles[0].vel;
@@ -3631,30 +3805,35 @@ mod tests {
     }
 
     #[test]
+    #[timeout(100)]
     fn test_particle_bounce_off_wall_at_bottom_of_grid() {
         let mut game =
             set_up_particle_moving_in_direction_about_to_hit_wall_at_square(down_f(), p(15, 0));
         game.tick_physics();
     }
     #[test]
+    #[timeout(100)]
     fn test_particle_bounce_off_wall_at_top_of_grid() {
         let mut game =
             set_up_particle_moving_in_direction_about_to_hit_wall_at_square(up_f(), p(15, 29));
         game.tick_physics();
     }
     #[test]
+    #[timeout(100)]
     fn test_particle_bounce_off_wall_at_right_of_grid() {
         let mut game =
             set_up_particle_moving_in_direction_about_to_hit_wall_at_square(right_f(), p(29, 15));
         game.tick_physics();
     }
     #[test]
+    #[timeout(100)]
     fn test_particle_bounce_off_wall_at_left_of_grid() {
         let mut game =
             set_up_particle_moving_in_direction_about_to_hit_wall_at_square(left_f(), p(0, 15));
         game.tick_physics();
     }
     #[test]
+    #[timeout(100)]
     fn test_linecast_straight_into_wall_seam() {
         let start_pos = p(0.0, 0.5);
         let end_pos = p(5.0, 0.5);
@@ -3664,5 +3843,45 @@ mod tests {
         let collision = game.linecast(start_pos, end_pos);
         dbg!(&collision);
         assert!(collision.is_some());
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_occupancy_with_no_walls() {
+        let game = set_up_game();
+        assert!(game.get_occupancy_of_nearby_walls(p(5, 5)) == [[false; 3]; 3]);
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_occupancy_with_all_walls() {
+        let game = set_up_game_filled_with_walls();
+        assert!(game.get_occupancy_of_nearby_walls(p(5, 5)) == [[true; 3]; 3]);
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_occupancy_with_some_walls() {
+        let mut game = set_up_game();
+        game.place_wall_block(p(5, 5));
+        game.place_wall_block(p(5, 6));
+        game.place_wall_block(p(6, 5));
+
+        // TODO: make this array formatting for convenient for xy coordinates
+        assert!(
+            game.get_occupancy_of_nearby_walls(p(5, 5))
+                == [
+                    [false, false, false],
+                    [false, true, true],
+                    [false, true, false],
+                ]
+        );
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_occupancy_on_grid_edges() {
+        let game = set_up_game();
+        assert!(game.get_occupancy_of_nearby_walls(p(0, 0)) == [[false; 3]; 3]);
+        assert!(
+            game.get_occupancy_of_nearby_walls(p(game.width() as i32, game.height() as i32))
+                == [[false; 3]; 3]
+        );
     }
 }
