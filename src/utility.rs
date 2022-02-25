@@ -67,6 +67,7 @@ pub fn single_block_squarecast_with_filled_cracks(
     let movement_line = geo::Line::new(start_point, end_point);
     //println!("movement_line: {:?}", movement_line);
     let mut expanded_corner_offsets = vec![];
+    let combined_square_side_length = 1.0 + moving_square_side_length;
     for i in 0..4 {
         let indexes_for_relative_up = quarter_turns::<i32>(p(0, 1), i) + p(1, 1);
         let indexes_for_relative_right = quarter_turns::<i32>(p(1, 0), i) + p(1, 1);
@@ -75,7 +76,7 @@ pub fn single_block_squarecast_with_filled_cracks(
         let relative_right_occupied = adjacent_squares_occupied
             [indexes_for_relative_right.x() as usize][indexes_for_relative_right.y() as usize];
 
-        let mut unrotated_new_corner = p(1.0, 1.0) * (0.5 + moving_square_side_length / 2.0);
+        let mut unrotated_new_corner = p(1.0, 1.0) * (combined_square_side_length / 2.0);
         if relative_up_occupied {
             unrotated_new_corner.add_assign(up_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE);
         } else {
@@ -125,14 +126,19 @@ pub fn single_block_squarecast_with_filled_cracks(
             .unwrap()
     });
     //println!("intersections: {:?}", candidate_edge_intersections);
-    let collision_point = candidate_edge_intersections[0];
+    let true_collision_point = candidate_edge_intersections[0];
+    let rounded_collision_point = snap_to_square_perimeter(
+        true_collision_point,
+        floatify(grid_square_center),
+        combined_square_side_length,
+    );
     //println!("collision_point: {:?}", collision_point);
     //println!("rounded_dir_number: {:?}", round_to_direction_number( collision_point - floatify(grid_square_center)));
     let collision_normal = orthogonal_direction(round_to_direction_number(
-        collision_point - floatify(grid_square_center),
+        rounded_collision_point - floatify(grid_square_center),
     ));
     return Some(SquarecastCollision {
-        collider_pos: collision_point,
+        collider_pos: rounded_collision_point,
         normal: collision_normal,
         collided_block_square: grid_square_center,
     });
@@ -557,6 +563,30 @@ pub fn nearly_equal(a: f32, b: f32) -> bool {
         dbg!(a, b);
     }
     result
+}
+
+pub fn snap_to_square_perimeter(
+    point_to_snap: Point<f32>,
+    square_center: Point<f32>,
+    square_side_length: f32,
+) -> Point<f32> {
+    let square_radius = square_side_length / 2.0;
+    let relative_normalized_point = ((point_to_snap - square_center) / square_radius).x_y();
+    let rel_norm_array = vec![relative_normalized_point.0, relative_normalized_point.1];
+    let (primary_index, secondary_index) = if rel_norm_array[0].abs() > rel_norm_array[1].abs() {
+        (0, 1)
+    } else {
+        (1, 0)
+    };
+    let direction_on_primary_axis = if rel_norm_array[primary_index] > 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    let mut output_rel_norm_array = vec![0.0, 0.0];
+    output_rel_norm_array[primary_index] = 1.0 * direction_on_primary_axis;
+    output_rel_norm_array[secondary_index] = clamp(rel_norm_array[secondary_index], -1.0, 1.0);
+    p(output_rel_norm_array[0], output_rel_norm_array[1]) * square_radius + square_center
 }
 
 #[cfg(test)]
@@ -1230,5 +1260,13 @@ mod tests {
     fn test_quarter_turns() {
         assert!(quarter_turns(p(1.0, 2.0), 1) == p(-2.0, 1.0));
         assert!(quarter_turns(p(1, 2), 1) == p(-2, 1));
+    }
+    #[test]
+    fn test_snap_to_square_perimeter() {
+        assert!(snap_to_square_perimeter(p(1.1, 1.0), p(0.5, 0.5), 1.0) == p(1.0, 1.0));
+        assert!(snap_to_square_perimeter(p(1.1, 0.7), p(0.5, 0.5), 1.0) == p(1.0, 0.7));
+        assert!(snap_to_square_perimeter(p(1.000001, 1.0), p(0.5, 0.5), 1.0) == p(1.0, 1.0));
+        assert!(snap_to_square_perimeter(p(0.5, 1.0), p(0.0, 0.0), 1.0) == p(0.5, 0.5));
+        assert!(snap_to_square_perimeter(p(6.0, 5.7), p(5.0, 5.0), 1.0) == p(5.5, 5.5));
     }
 }

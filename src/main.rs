@@ -1917,22 +1917,22 @@ mod tests {
         let mut game = Game::new(30, 30);
         game.place_line_of_blocks((10, 10), (20, 10), Block::Wall);
 
-        assert!(
-            game.unit_squarecast(p(15.0, 9.0), p(17.0, 11.0))
-                == Some(SquarecastCollision {
-                    collider_pos: p(15.0, 9.0),
-                    normal: p(0, -1),
-                    collided_block_square: p(15, 10),
-                })
-        );
-        assert!(
-            game.unit_squarecast(p(15.0, 9.0), p(17.0, 110.0))
-                == Some(SquarecastCollision {
-                    collider_pos: p(15.0, 9.0),
-                    normal: p(0, -1),
-                    collided_block_square: p(15, 10),
-                })
-        );
+        let squarecast_result = game.unit_squarecast(p(15.0, 9.0), p(17.0, 11.0)).unwrap();
+        assert!(points_nearly_equal(
+            squarecast_result.collider_pos,
+            p(15.0, 9.0)
+        ));
+        assert!(squarecast_result.normal == p(0, -1));
+        assert!(squarecast_result.collided_block_square == p(15, 10));
+
+        let squarecast_result = game.unit_squarecast(p(15.0, 9.0), p(17.0, 110.0)).unwrap();
+        assert!(points_nearly_equal(
+            squarecast_result.collider_pos,
+            p(15.0, 9.0)
+        ));
+        assert!(squarecast_result.normal == p(0, -1));
+        assert!(squarecast_result.collided_block_square == p(15, 10));
+
         assert!(game.unit_squarecast(p(1.0, 9.0), p(-17.0, 9.0)) == None);
         assert!(game.unit_squarecast(p(15.0, 9.0), p(17.0, -11.0)) == None);
     }
@@ -3292,7 +3292,7 @@ mod tests {
         game.tick_physics();
 
         // Assertion
-        assert!(nearly_equal(game.get_player_compression_fraction(), 1.0));
+        assert!(game.get_player_compression_fraction() == 1.0);
     }
     #[test]
     #[timeout(100)]
