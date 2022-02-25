@@ -1320,12 +1320,14 @@ impl Game {
                 if self.in_world(*overlapping_square)
                     && self.get_block(*overlapping_square) == Block::Wall
                 {
+                    let adjacent_occupancy =
+                        self.get_occupancy_of_nearby_walls(*overlapping_square);
                     if let Some(collision) = single_block_squarecast_with_filled_cracks(
                         start_pos,
                         end_pos,
                         *overlapping_square,
                         moving_square_side_length,
-                        self.get_occupancy_of_nearby_walls(*overlapping_square),
+                        adjacent_occupancy,
                     ) {
                         collisions.push(collision);
                     }
@@ -1346,11 +1348,13 @@ impl Game {
                     && self.in_world(normal_square)
                     && self.get_block(normal_square) == Block::Wall
                 {
-                    if let Some(collision) = single_block_squarecast(
+                    let adjacent_occupancy = self.get_occupancy_of_nearby_walls(normal_square);
+                    if let Some(collision) = single_block_squarecast_with_filled_cracks(
                         start_pos,
                         end_pos,
                         normal_square,
                         moving_square_side_length,
+                        adjacent_occupancy,
                     ) {
                         return Some(collision);
                     } else {
@@ -3825,7 +3829,7 @@ mod tests {
     #[timeout(100)]
     fn test_linecast__hit_near_corner_at_grid_bottom() {
         let plus_center = p(7, 0);
-        let mut game = set_up_plus_sign_wall_blocks_at_square(plus_center);
+        let game = set_up_plus_sign_wall_blocks_at_square(plus_center);
         let start_pos = floatify(plus_center) + p(-1.0, 1.0);
         let end_pos = floatify(plus_center) + p(0.0, -0.001);
         let collision = game.linecast(start_pos, end_pos);

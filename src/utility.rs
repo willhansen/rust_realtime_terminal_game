@@ -132,8 +132,6 @@ pub fn single_block_squarecast_with_filled_cracks(
         floatify(grid_square_center),
         combined_square_side_length,
     );
-    //println!("collision_point: {:?}", collision_point);
-    //println!("rounded_dir_number: {:?}", round_to_direction_number( collision_point - floatify(grid_square_center)));
     let collision_normal = orthogonal_direction(round_to_direction_number(
         rounded_collision_point - floatify(grid_square_center),
     ));
@@ -1268,6 +1266,5 @@ mod tests {
         assert!(snap_to_square_perimeter(p(1.000001, 1.0), p(0.5, 0.5), 1.0) == p(1.0, 1.0));
         assert!(snap_to_square_perimeter(p(0.5, 1.0), p(0.0, 0.0), 1.0) == p(0.5, 0.5));
         assert!(snap_to_square_perimeter(p(6.0, 5.7), p(5.0, 5.0), 1.0) == p(5.5, 5.5));
-        assert!(snap_to_square_perimeter(p(0.500001, 0.5), p(1.0, 1.0), 1.0) == p(0.5, 0.5));
     }
 }
