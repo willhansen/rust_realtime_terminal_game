@@ -1268,5 +1268,6 @@ mod tests {
         assert!(snap_to_square_perimeter(p(1.000001, 1.0), p(0.5, 0.5), 1.0) == p(1.0, 1.0));
         assert!(snap_to_square_perimeter(p(0.5, 1.0), p(0.0, 0.0), 1.0) == p(0.5, 0.5));
         assert!(snap_to_square_perimeter(p(6.0, 5.7), p(5.0, 5.0), 1.0) == p(5.5, 5.5));
+        assert!(snap_to_square_perimeter(p(0.500001, 0.5), p(1.0, 1.0), 1.0) == p(0.5, 0.5));
     }
 }
