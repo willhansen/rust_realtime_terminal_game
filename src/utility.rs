@@ -127,10 +127,11 @@ pub fn single_block_squarecast_with_filled_cracks(
     });
     //println!("intersections: {:?}", candidate_edge_intersections);
     let true_collision_point = candidate_edge_intersections[0];
-    let rounded_collision_point = snap_to_square_perimeter(
+    let rounded_collision_point = snap_to_square_perimeter_with_forbidden_sides(
         true_collision_point,
         floatify(grid_square_center),
         combined_square_side_length,
+        adjacent_squares_occupied,
     );
     let collision_normal = orthogonal_direction(round_to_direction_number(
         rounded_collision_point - floatify(grid_square_center),
@@ -158,13 +159,30 @@ pub fn single_block_unit_squarecast(
     single_block_squarecast(start_point, end_point, grid_square_center, 1.0)
 }
 
-pub fn orthogonal_direction<T: CoordNum + num::Signed + std::fmt::Display>(dir_num: T) -> Point<T> {
+pub fn orthogonal_direction<T: 'static + CoordNum + num::Signed + std::fmt::Display>(
+    dir_num: T,
+) -> Point<T> {
     let dir_num_int = dir_num.to_i32().unwrap() % 4;
+    quarter_turns(Point::<T>::new(T::one(), T::zero()), dir_num_int)
+}
+pub fn diagonal_direction<T: 'static + CoordNum + num::Signed + std::fmt::Display>(
+    dir_num: T,
+) -> Point<T> {
+    let dir_num_int = dir_num.to_i32().unwrap() % 4;
+    quarter_turns(Point::<T>::new(T::one(), T::one()), dir_num_int)
+}
+
+pub fn adjacent_direction<T: CoordNum + num::Signed + std::fmt::Display>(dir_num: T) -> Point<T> {
+    let dir_num_int = dir_num.to_i32().unwrap() % 8;
     match dir_num_int {
         0 => Point::<T>::new(T::one(), T::zero()),
-        1 => Point::<T>::new(T::zero(), T::one()),
-        2 => Point::<T>::new(-T::one(), T::zero()),
-        3 => Point::<T>::new(T::zero(), -T::one()),
+        1 => Point::<T>::new(T::one(), T::one()),
+        2 => Point::<T>::new(T::zero(), T::one()),
+        3 => Point::<T>::new(-T::one(), T::one()),
+        4 => Point::<T>::new(-T::one(), T::zero()),
+        5 => Point::<T>::new(-T::one(), -T::one()),
+        6 => Point::<T>::new(T::zero(), -T::one()),
+        7 => Point::<T>::new(T::one(), -T::one()),
         _ => panic!("bad direction number: {}", dir_num),
     }
 }
@@ -562,29 +580,59 @@ pub fn nearly_equal(a: f32, b: f32) -> bool {
     }
     result
 }
+pub fn snap_to_square_perimeter_with_forbidden_sides(
+    point_to_snap: Point<f32>,
+    square_center: Point<f32>,
+    square_side_length: f32,
+    forbidden_sides: AdjacentOccupancyMask,
+) -> Point<f32> {
+    let square_radius = square_side_length / 2.0;
+    let relative_normalized_point = (point_to_snap - square_center) / square_radius;
+    let mut candidate_rel_norm_snap_points = vec![];
+    for i in 0..8 {
+        let candidate_direction = adjacent_direction(i);
+        let i = (candidate_direction.x() + 1) as usize;
+        let j = (candidate_direction.y() + 1) as usize;
+        let candidate_direction_is_valid = !forbidden_sides[i][j];
+        if candidate_direction_is_valid {
+            let rel_norm_snap_point = if candidate_direction.x() == 0 {
+                p(
+                    relative_normalized_point.x().clamp(-1.0, 1.0),
+                    candidate_direction.y() as f32,
+                )
+            } else if candidate_direction.y() == 0 {
+                p(
+                    candidate_direction.x() as f32,
+                    relative_normalized_point.y().clamp(-1.0, 1.0),
+                )
+            } else {
+                floatify(candidate_direction)
+            };
+            candidate_rel_norm_snap_points.push(rel_norm_snap_point);
+        }
+    }
+    let chosen_rel_norm_snap_point = *candidate_rel_norm_snap_points
+        .iter()
+        .min_by(|&&a, &&b| {
+            magnitude(relative_normalized_point - a)
+                .partial_cmp(&magnitude(relative_normalized_point - b))
+                .unwrap()
+        })
+        .unwrap();
+    chosen_rel_norm_snap_point * square_radius + square_center
+}
 
 pub fn snap_to_square_perimeter(
     point_to_snap: Point<f32>,
     square_center: Point<f32>,
     square_side_length: f32,
 ) -> Point<f32> {
-    let square_radius = square_side_length / 2.0;
-    let relative_normalized_point = ((point_to_snap - square_center) / square_radius).x_y();
-    let rel_norm_array = vec![relative_normalized_point.0, relative_normalized_point.1];
-    let (primary_index, secondary_index) = if rel_norm_array[0].abs() > rel_norm_array[1].abs() {
-        (0, 1)
-    } else {
-        (1, 0)
-    };
-    let direction_on_primary_axis = if rel_norm_array[primary_index] > 0.0 {
-        1.0
-    } else {
-        -1.0
-    };
-    let mut output_rel_norm_array = vec![0.0, 0.0];
-    output_rel_norm_array[primary_index] = 1.0 * direction_on_primary_axis;
-    output_rel_norm_array[secondary_index] = clamp(rel_norm_array[secondary_index], -1.0, 1.0);
-    p(output_rel_norm_array[0], output_rel_norm_array[1]) * square_radius + square_center
+    snap_to_square_perimeter_with_forbidden_sides(
+        point_to_snap,
+        square_center,
+        square_side_length,
+        [[false; 3]; 3],
+    )
 }
 
 #[cfg(test)]
@@ -807,6 +855,19 @@ mod tests {
         assert!(orthogonal_direction(4.0) == p(1.0, 0.0));
         assert!(orthogonal_direction(4) == p(1, 0));
     }
+
+    #[test]
+    fn test_chess_direction() {
+        assert!(adjacent_direction(0) == p(1, 0));
+        assert!(adjacent_direction(3.0) == p(-1.0, 1.0));
+    }
+
+    #[test]
+    fn test_diagonal_direction() {
+        assert!(diagonal_direction(0) == p(1, 1));
+        assert!(diagonal_direction(2.0) == p(-1.0, -1.0));
+    }
+
     #[test]
     fn test_projection() {
         assert!(project(p(1.0, 0.0), p(5.0, 0.0)) == p(1.0, 0.0));
@@ -1266,5 +1327,28 @@ mod tests {
         assert!(snap_to_square_perimeter(p(1.000001, 1.0), p(0.5, 0.5), 1.0) == p(1.0, 1.0));
         assert!(snap_to_square_perimeter(p(0.5, 1.0), p(0.0, 0.0), 1.0) == p(0.5, 0.5));
         assert!(snap_to_square_perimeter(p(6.0, 5.7), p(5.0, 5.0), 1.0) == p(5.5, 5.5));
+    }
+    #[test]
+    fn test_snap_to_square_perimeter_with_forbidden_sides() {
+        let mut top_filled: AdjacentOccupancyMask = [[false; 3]; 3];
+        top_filled[1][2] = true;
+
+        let square = p(1, 1);
+        let square_side_length = 1.0;
+        let start_point = p(0.5001, 1.5);
+        let good_end_point = p(0.5, 1.5);
+
+        assert!(
+            snap_to_square_perimeter(start_point, floatify(square), square_side_length)
+                == start_point
+        );
+        assert!(
+            snap_to_square_perimeter_with_forbidden_sides(
+                start_point,
+                floatify(square),
+                square_side_length,
+                top_filled
+            ) == good_end_point
+        );
     }
 }

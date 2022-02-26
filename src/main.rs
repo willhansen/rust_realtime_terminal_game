@@ -719,6 +719,7 @@ impl Game {
                     if let Some(collision) = self.linecast(start_pos, end_pos) {
                         if particle.wall_collision_behavior == ParticleWallCollisionBehavior::Bounce
                         {
+                            //dbg!(&particle, &collision);
                             let new_start = collision.collider_pos;
                             let step_taken = new_start - start_pos;
                             step.add_assign(-step_taken);
