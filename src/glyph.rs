@@ -76,6 +76,14 @@ impl Glyph {
         }
     }
 
+    pub fn reset_colors() -> String {
+        format!(
+            "{}{}",
+            Glyph::fg_color_from_name(ColorName::Reset),
+            Glyph::bg_color_from_name(ColorName::Reset)
+        )
+    }
+
     pub fn fg_color_from_name(color_name: ColorName) -> String {
         match color_name {
             ColorName::Red => color::Fg(color::Red).to_string(),

@@ -1,12 +1,13 @@
 extern crate geo;
 extern crate rand;
 
-use crate::{AdjacentOccupancyMask, RADIUS_OF_EXACTLY_TOUCHING_ZONE};
+use crate::{fpoint, AdjacentOccupancyMask, RADIUS_OF_EXACTLY_TOUCHING_ZONE};
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Point};
 use num::clamp;
 use num::traits::Pow;
+use ordered_float::OrderedFloat;
 use rand::Rng;
 
 pub fn p<T: 'static>(x: T, y: T) -> Point<T>
@@ -33,6 +34,9 @@ pub fn up_f() -> Point<f32> {
 #[allow(dead_code)]
 pub fn down_f() -> Point<f32> {
     p(0.0, -1.0)
+}
+pub fn zero_f() -> Point<f32> {
+    p(0.0, 0.0)
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -133,9 +137,32 @@ pub fn single_block_squarecast_with_filled_cracks(
         combined_square_side_length,
         adjacent_squares_occupied,
     );
-    let collision_normal = orthogonal_direction(round_to_direction_number(
-        rounded_collision_point - floatify(grid_square_center),
-    ));
+
+    let mut candidate_normals = vec![];
+    for i in 0..4 {
+        // TODO: also have diagonals?
+        let dir = orthogonal_direction(i);
+        let i = (dir.x() + 1) as usize;
+        let j = (dir.y() + 1) as usize;
+        let direction_has_no_block = !adjacent_squares_occupied[i][j];
+        if direction_has_no_block {
+            candidate_normals.push(dir);
+        }
+    }
+    if candidate_normals.is_empty() {
+        panic!("No candidate normals for collision");
+    }
+    let collision_normal = *candidate_normals
+        .iter()
+        .min_by_key(|&&candidate_normal| {
+            OrderedFloat(magnitude(
+                rounded_collision_point
+                    - (floatify(candidate_normal) * combined_square_side_length / 2.0
+                        + floatify(grid_square_center)),
+            ))
+        })
+        .unwrap();
+
     return Some(SquarecastCollision {
         collider_pos: rounded_collision_point,
         normal: collision_normal,
@@ -439,16 +466,10 @@ pub fn accelerate_to_target_vel(start_vel: f32, target_vel: f32, acceleration: f
     }
 }
 
-pub fn compensate_for_vertical_stretch(
-    before: Point<f32>,
-    vertical_stretch_factor: f32,
-) -> Point<f32> {
+pub fn world_space_to_grid_space(before: Point<f32>, vertical_stretch_factor: f32) -> Point<f32> {
     p(before.x(), before.y() / vertical_stretch_factor)
 }
-pub fn uncompensate_for_vertical_stretch(
-    before: Point<f32>,
-    vertical_stretch_factor: f32,
-) -> Point<f32> {
+pub fn grid_space_to_world_space(before: Point<f32>, vertical_stretch_factor: f32) -> Point<f32> {
     p(before.x(), before.y() * vertical_stretch_factor)
 }
 
@@ -485,10 +506,10 @@ pub fn floating_square_orthogonally_touching_fixed_square(
 pub fn points_in_line_with_max_gap(
     start: Point<f32>,
     end: Point<f32>,
-    max_gap: f32,
+    max_linear_density: f32,
 ) -> Vec<Point<f32>> {
     let blocks = magnitude(end - start);
-    let num_inner_points: i32 = (blocks * max_gap).ceil() as i32 - 1;
+    let num_inner_points: i32 = (blocks * max_linear_density).ceil() as i32 - 1;
     let mut output = vec![];
     output.push(start);
     for i in 1..num_inner_points {
@@ -496,6 +517,18 @@ pub fn points_in_line_with_max_gap(
     }
     output.push(end);
     return output;
+}
+
+pub fn lin_space_from_start_2d(start: fpoint, end: fpoint, density: f32) -> Vec<fpoint> {
+    // end point is not included.  Start point is included
+
+    let num_points_to_check = (magnitude(end - start) * density).floor() as i32;
+    let mut points = Vec::<Point<f32>>::new();
+    let dir = direction(end - start);
+    for i in 0..num_points_to_check {
+        points.push(start + dir * (i as f32 / density));
+    }
+    points
 }
 
 pub fn lerp_2d(a: Point<f32>, b: Point<f32>, t: f32) -> Point<f32> {
@@ -613,11 +646,7 @@ pub fn snap_to_square_perimeter_with_forbidden_sides(
     }
     let chosen_rel_norm_snap_point = *candidate_rel_norm_snap_points
         .iter()
-        .min_by(|&&a, &&b| {
-            magnitude(relative_normalized_point - a)
-                .partial_cmp(&magnitude(relative_normalized_point - b))
-                .unwrap()
-        })
+        .min_by_key(|&&a| OrderedFloat(magnitude(relative_normalized_point - a)))
         .unwrap();
     chosen_rel_norm_snap_point * square_radius + square_center
 }
@@ -980,7 +1009,7 @@ mod tests {
 
     #[test]
     fn test_compensate_for_vertical_stretch() {
-        assert!(compensate_for_vertical_stretch(p(5.0, 2.0), 2.0) == p(5.0, 1.0));
+        assert!(world_space_to_grid_space(p(5.0, 2.0), 2.0) == p(5.0, 1.0));
     }
 
     #[test]
@@ -1350,5 +1379,30 @@ mod tests {
                 top_filled
             ) == good_end_point
         );
+    }
+
+    #[test]
+    fn test_single_block_squarecast_filled_cracks__no_normal_within_wall() {
+        // data from observed failure
+        let start_point = p(8.5, 12.5);
+        let end_point = p(8.199999, 12.5);
+        let grid_square_center = p(8, 13);
+        let moving_square_side_length = 0.0;
+        let adjacent_squares_occupied = [
+            [false, false, false],
+            [true, true, true],
+            [false, false, false],
+        ]; // vertical wall
+
+        let collision = single_block_squarecast_with_filled_cracks(
+            start_point,
+            end_point,
+            grid_square_center,
+            moving_square_side_length,
+            adjacent_squares_occupied,
+        )
+        .unwrap();
+        assert!(collision.normal.x() != 0);
+        assert!(collision.normal.y() == 0);
     }
 }

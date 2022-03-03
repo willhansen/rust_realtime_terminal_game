@@ -34,6 +34,9 @@ use termion::raw::IntoRawMode;
 use glyph::*;
 use utility::*;
 
+type fpoint = Point<f32>;
+type ipoint = Point<i32>;
+
 // const player_jump_height: i32 = 3;
 // const player_jump_hang_frames: i32 = 4;
 const MAX_FPS: i32 = 60; // frames per second
@@ -158,7 +161,7 @@ impl Particle {
 }
 
 #[derive(Debug)]
-struct CollisionWithBlock {
+struct PlayerBlockCollision {
     time_in_ticks: f32,
     normal: Point<i32>,
     collider_velocity: Point<f32>,
@@ -198,7 +201,7 @@ struct Player {
     max_coyote_time: f32,
     dash_vel: f32,
     dash_adds_to_vel: bool,
-    last_collision: Option<CollisionWithBlock>,
+    last_collision: Option<PlayerBlockCollision>,
     moved_normal_to_collision_since_collision: bool,
     speed_line_lifetime_in_ticks: f32,
     speed_line_behavior: SpeedLineType,
@@ -699,11 +702,12 @@ impl Game {
     }
 
     fn apply_particle_velocities(&mut self, dt_in_ticks: f32) {
+        //dbg!(self.time_from_start_in_ticks);
         let mut particle_indexes_to_delete = vec![];
         for i in 0..self.particles.len() {
             let particle = self.particles[i].clone();
 
-            let mut step = compensate_for_vertical_stretch(
+            let mut step = world_space_to_grid_space(
                 particle.vel * dt_in_ticks
                     + direction(random_direction())
                         * particle.random_walk_speed
@@ -1049,6 +1053,21 @@ impl Game {
         return &self.output_on_screen[pos.x() as usize][pos.y() as usize];
     }
 
+    fn print_output_buffer(&self) {
+        for y in 0..self.height() {
+            let reverse_y = self.height() - 1 - y;
+            let mut row_string = String::new();
+            for x in 0..self.width() {
+                row_string += &self.output_buffer[x][reverse_y].to_string();
+            }
+            row_string += &Glyph::reset_colors();
+            if reverse_y % 5 == 0 {
+                row_string += &format!("-- {}", reverse_y);
+            }
+            println!("{}", row_string);
+        }
+    }
+
     fn update_screen(
         &mut self,
         stdout: &mut MouseTerminal<termion::raw::RawTerminal<std::io::Stdout>>,
@@ -1151,26 +1170,27 @@ impl Game {
     }
 
     fn apply_player_kinematics(&mut self, dt_in_ticks: f32) {
+        //dbg!(self.player.vel);
         let start_point = self.player.pos;
-        let mut remaining_step: Point<f32> =
-            compensate_for_vertical_stretch(self.player.vel, VERTICAL_STRETCH_FACTOR) * dt_in_ticks;
+        let mut planned_displacement: Point<f32> =
+            world_space_to_grid_space(self.player.vel, VERTICAL_STRETCH_FACTOR) * dt_in_ticks;
         let mut fraction_of_movement_remaining = 1.0;
         let mut current_start_point = start_point;
-        let actual_endpoint: Point<f32>;
-        let mut current_target = start_point + remaining_step;
+        let mut current_target = start_point + planned_displacement;
         let mut collision_occurred = false;
         loop {
             if let Some(collision) = self.unit_squarecast(current_start_point, current_target) {
+                //dbg!(&current_start_point, &current_target, &collision);
+
                 collision_occurred = true;
+
                 let step_taken_to_this_collision = collision.collider_pos - current_start_point;
                 let fraction_through_remaining_movement_just_moved =
-                    magnitude(step_taken_to_this_collision) / magnitude(remaining_step);
+                    magnitude(step_taken_to_this_collision) / magnitude(planned_displacement);
                 fraction_of_movement_remaining -=
                     fraction_of_movement_remaining * fraction_through_remaining_movement_just_moved;
 
-                remaining_step.add_assign(-step_taken_to_this_collision);
-
-                self.player.last_collision = Some(CollisionWithBlock {
+                self.player.last_collision = Some(PlayerBlockCollision {
                     time_in_ticks: self.time_in_ticks()
                         - dt_in_ticks * fraction_of_movement_remaining,
                     normal: collision.normal,
@@ -1179,33 +1199,31 @@ impl Game {
                     collided_block_square: collision.collided_block_square,
                 });
 
-                if collision.normal.x() != 0 {
-                    self.player.vel.set_x(0.0);
-                    remaining_step = project(remaining_step, p(0.0, 1.0));
-                }
-                if collision.normal.y() != 0 {
-                    self.player.vel.set_y(0.0);
-                    remaining_step = project(remaining_step, p(1.0, 0.0));
-                }
+                (current_start_point, planned_displacement, self.player.vel) = self
+                    .deflect_off_collision_plane(
+                        collision,
+                        current_start_point,
+                        planned_displacement,
+                        self.player.vel,
+                    );
 
-                current_start_point = collision.collider_pos;
-                current_target = current_start_point + remaining_step;
+                current_target = current_start_point + planned_displacement;
             } else {
                 // should exit loop after this else
-                actual_endpoint = current_target;
+                current_start_point = current_target;
                 break;
             }
         }
 
-        if !self.in_world(snap_to_grid(actual_endpoint)) {
+        if !self.in_world(snap_to_grid(current_start_point)) {
             // Player went out of bounds and died
             self.kill_player();
             return;
         }
 
-        let step_taken = actual_endpoint - self.player.pos;
+        let step_taken = current_start_point - self.player.pos;
         self.save_recent_player_pose(self.player.pos);
-        self.player.pos = actual_endpoint;
+        self.player.pos = current_start_point;
 
         if collision_occurred {
             self.player.moved_normal_to_collision_since_collision = false;
@@ -1230,6 +1248,30 @@ impl Game {
                 self.player.remaining_coyote_time = 0.0;
             }
         }
+    }
+
+    fn deflect_off_collision_plane(
+        &mut self,
+        collision: SquarecastCollision,
+        move_start: fpoint,
+        relative_target: fpoint,
+        vel: fpoint,
+    ) -> (fpoint, fpoint, fpoint) {
+        let step_taken_to_this_collision = collision.collider_pos - move_start;
+
+        let mut new_relative_target = relative_target - step_taken_to_this_collision;
+        let mut new_vel = vel;
+        if collision.normal.x() != 0 {
+            new_vel.set_x(0.0);
+            new_relative_target = project(relative_target, right_f());
+        } else if collision.normal.y() != 0 {
+            new_vel.set_y(0.0);
+            new_relative_target = project(relative_target, up_f());
+        } else {
+            panic!("collision has zero normal");
+        }
+        let new_move_start = collision.collider_pos;
+        (new_move_start, new_relative_target, new_vel)
     }
 
     fn save_recent_player_pose(&mut self, pos: Point<f32>) {
@@ -1298,17 +1340,11 @@ impl Game {
     ) -> Option<SquarecastCollision> {
         let ideal_step = end_pos - start_pos;
 
-        let collision_checks_per_block_travelled =
-            self.num_positions_per_block_to_check_for_collisions;
-        let num_points_to_check =
-            (magnitude(ideal_step) * collision_checks_per_block_travelled).floor() as i32;
-        let mut intermediate_player_positions_to_check = Vec::<Point<f32>>::new();
-        for i in 0..num_points_to_check {
-            intermediate_player_positions_to_check.push(
-                start_pos
-                    + direction(ideal_step) * (i as f32 / collision_checks_per_block_travelled),
-            );
-        }
+        let mut intermediate_player_positions_to_check = lin_space_from_start_2d(
+            start_pos,
+            end_pos,
+            self.num_positions_per_block_to_check_for_collisions,
+        );
         // needed for very small steps
         intermediate_player_positions_to_check.push(end_pos);
         for point_to_check in &intermediate_player_positions_to_check {
@@ -1357,6 +1393,7 @@ impl Game {
                         moving_square_side_length,
                         adjacent_occupancy,
                     ) {
+                        //dbg!( start_pos, end_pos, normal_square, moving_square_side_length, adjacent_occupancy, &collision );
                         return Some(collision);
                     } else {
                         panic!("No collision with wall block normal to collision");
@@ -1412,39 +1449,45 @@ impl Game {
             && pos.y() >= 0
             && pos.y() < self.terminal_size.1 as i32
     }
-    fn init_world(&mut self) {
-        self.set_player_jump_delta_v(1.0);
-        self.player.acceleration_from_gravity = 0.05;
-        self.player.acceleration_from_floor_traction = 0.6;
-        self.set_player_max_run_speed(0.7);
+}
+fn init_world(width: u16, height: u16) -> Game {
+    //let mut game = Game::new(width, height);
+    let mut game = Game::new(10, 40);
+    game.set_player_jump_delta_v(1.0);
+    game.player.acceleration_from_gravity = 0.05;
+    game.player.acceleration_from_floor_traction = 0.6;
+    game.set_player_max_run_speed(0.7);
 
-        self.place_boundary_wall();
+    game.place_boundary_wall();
 
-        let bottom_left = (
-            (self.terminal_size.0 / 5) as i32,
-            (self.terminal_size.1 / 4) as i32,
-        );
-        self.place_line_of_blocks(
-            bottom_left,
-            ((4 * self.terminal_size.0 / 5) as i32, bottom_left.1),
-            Block::Wall,
-        );
-        self.place_line_of_blocks(
-            bottom_left,
-            (bottom_left.0, 3 * (self.terminal_size.1 / 4) as i32),
-            Block::Wall,
-        );
-        self.place_player(
-            self.terminal_size.0 as f32 / 2.0,
-            self.terminal_size.1 as f32 / 2.0,
-        );
-    }
+    //let bottom_left = (
+    //(game.terminal_size.0 * 2 / 5) as i32,
+    //(game.terminal_size.1 / 4) as i32,
+    //);
+    //game.place_line_of_blocks(
+    //bottom_left,
+    //((4 * game.terminal_size.0 / 5) as i32, bottom_left.1),
+    //Block::Wall,
+    //);
+    //game.place_line_of_blocks(
+    //bottom_left,
+    //(bottom_left.0, 3 * (game.terminal_size.1 / 4) as i32),
+    //Block::Wall,
+    //);
+    game.place_player(
+        game.terminal_size.0 as f32 / 2.0,
+        game.terminal_size.1 as f32 / 2.0,
+    );
+    game.player.vel.set_x(0.1);
+    game
 }
 
 fn main() {
     let stdin = stdin();
     let (width, height) = termion::terminal_size().unwrap();
-    let mut game = Game::new(width, height);
+    let mut game = init_world(width, height);
+    // time saver
+    //let mut game = Game::new(20, 40);
     let mut stdout = MouseTerminal::from(stdout().into_raw_mode().unwrap());
 
     write!(
@@ -1465,9 +1508,6 @@ fn main() {
             tx.send(evt).unwrap();
         }
     });
-
-    // time saver
-    game.init_world();
 
     while game.running {
         let start_time = Instant::now();
@@ -1495,6 +1535,35 @@ mod tests {
         Game::new(30, 30)
     }
 
+    fn set_up_tall_drop() -> Game {
+        let mut game = Game::new(20, 40);
+        game.player.acceleration_from_gravity = 0.05;
+        game.player.acceleration_from_floor_traction = 0.6;
+        game.set_player_max_run_speed(0.7);
+
+        game.place_boundary_wall();
+
+        let bottom_left = (
+            (game.terminal_size.0 * 2 / 5) as i32,
+            (game.terminal_size.1 / 4) as i32,
+        );
+        game.place_line_of_blocks(
+            bottom_left,
+            ((4 * game.terminal_size.0 / 5) as i32, bottom_left.1),
+            Block::Wall,
+        );
+        game.place_line_of_blocks(
+            bottom_left,
+            (bottom_left.0, 3 * (game.terminal_size.1 / 4) as i32),
+            Block::Wall,
+        );
+        game.place_player(
+            game.terminal_size.0 as f32 / 2.0,
+            game.terminal_size.1 as f32 / 2.0,
+        );
+        game
+    }
+
     fn set_up_game_filled_with_walls() -> Game {
         let mut game = Game::new(30, 30);
         for y in 0..game.height() {
@@ -1504,6 +1573,12 @@ mod tests {
                 Block::Wall,
             );
         }
+        game
+    }
+    fn set_up_player_in_bottom_right_wall_corner() -> Game {
+        let mut game = Game::new(30, 30);
+        game.place_boundary_wall();
+        game.place_player(1.0, game.width() as f32 - 2.0);
         game
     }
 
@@ -1736,6 +1811,14 @@ mod tests {
         }
         game
     }
+    fn set_up_particle_about_to_hit_concave_corner_exactly() -> Game {
+        let plus_center = p(7, 7);
+        let mut game = set_up_plus_sign_wall_blocks_at_square(plus_center);
+        let start_pos = floatify(plus_center) + p(-0.51, -0.51);
+        let start_vel = p(0.1, 0.1);
+        game.place_particle_with_velocity(start_pos, start_vel);
+        game
+    }
 
     fn set_up_particle_about_to_hit_concave_corner() -> Game {
         let plus_center = p(7, 7);
@@ -1918,7 +2001,7 @@ mod tests {
 
     #[test]
     #[timeout(100)]
-    fn test_squarecast() {
+    fn test_unit_squarecast_to_upper_right() {
         let mut game = Game::new(30, 30);
         game.place_line_of_blocks((10, 10), (20, 10), Block::Wall);
 
@@ -1928,15 +2011,56 @@ mod tests {
             p(15.0, 9.0)
         ));
         assert!(squarecast_result.normal == p(0, -1));
-        assert!(squarecast_result.collided_block_square == p(15, 10));
+        assert!(squarecast_result.collided_block_square.y() == 10);
+    }
 
+    #[test]
+    #[timeout(100)]
+    fn test_unit_squarecast_to_right() {
+        let mut game = Game::new(30, 30);
+        let wall_square = p(10, 10);
+        game.place_wall_block(wall_square);
+
+        let squarecast_result = game
+            .unit_squarecast(
+                floatify(wall_square + p(-5, 0)),
+                floatify(wall_square + p(5, 0)),
+            )
+            .unwrap();
+        assert!(points_nearly_equal(
+            squarecast_result.collider_pos,
+            floatify(wall_square) - p(1.0, 0.0)
+        ));
+        assert!(squarecast_result.normal == p(-1, 0));
+        assert!(squarecast_result.collided_block_square.y() == wall_square.y());
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_unit_squarecast__move_up_away_from_exactly_touching() {
+        let mut game = Game::new(30, 30);
+        let wall_square = p(10, 10);
+        game.place_wall_block(wall_square);
+
+        let squarecast_result = game.unit_squarecast(
+            floatify(wall_square + p(0, 1)),
+            floatify(wall_square + p(0, 5)),
+        );
+        assert!(squarecast_result.is_none());
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_unit_squarecast_to_far_upper_right() {
+        let mut game = Game::new(30, 30);
+        game.place_line_of_blocks((10, 10), (20, 10), Block::Wall);
         let squarecast_result = game.unit_squarecast(p(15.0, 9.0), p(17.0, 110.0)).unwrap();
         assert!(points_nearly_equal(
             squarecast_result.collider_pos,
             p(15.0, 9.0)
         ));
         assert!(squarecast_result.normal == p(0, -1));
-        assert!(squarecast_result.collided_block_square == p(15, 10));
+        assert!(squarecast_result.collided_block_square.y() == 10);
 
         assert!(game.unit_squarecast(p(1.0, 9.0), p(-17.0, 9.0)) == None);
         assert!(game.unit_squarecast(p(15.0, 9.0), p(17.0, -11.0)) == None);
@@ -2102,8 +2226,10 @@ mod tests {
         game.place_line_of_blocks((10, 10), (20, 10), Block::Wall);
         game.place_line_of_blocks((14, 10), (14, 20), Block::Wall);
 
-        game.place_player(15.0, 11.0);
+        game.place_player(15.1, 11.0);
         game.player.vel = p(-2.0, 2.0);
+        game.update_output_buffer();
+        game.print_output_buffer();
         game.tick_physics();
         assert!(game.player.vel.x() == 0.0);
         assert!(game.player.vel.y() > 0.0);
@@ -3111,11 +3237,11 @@ mod tests {
         let end_pos_2 = game2.particles[0].pos;
         let distorted_diff1 = end_pos_1 - start_pos;
         let distorted_diff2 = end_pos_2 - start_pos;
-        let diff1 = uncompensate_for_vertical_stretch(
+        let diff1 = grid_space_to_world_space(
             distorted_diff1 / game1.bullet_time_factor.sqrt(),
             VERTICAL_STRETCH_FACTOR,
         );
-        let diff2 = uncompensate_for_vertical_stretch(distorted_diff2, VERTICAL_STRETCH_FACTOR);
+        let diff2 = grid_space_to_world_space(distorted_diff2, VERTICAL_STRETCH_FACTOR);
 
         assert!(end_pos_1 != end_pos_2);
 
@@ -3217,7 +3343,7 @@ mod tests {
     #[timeout(100)]
     fn test_player_compression_overrides_visuals() {
         let mut game = set_up_just_player();
-        game.player.last_collision = Some(CollisionWithBlock {
+        game.player.last_collision = Some(PlayerBlockCollision {
             time_in_ticks: game.time_in_ticks() - DEFAULT_TICKS_TO_MAX_COMPRESSION / 2.0,
             normal: p(0, 1),
             collider_velocity: p(0.0, -3.0),
@@ -3233,7 +3359,7 @@ mod tests {
     #[timeout(100)]
     fn test_compress_horizontally_on_wall_collision() {
         let mut game = set_up_just_player();
-        game.player.last_collision = Some(CollisionWithBlock {
+        game.player.last_collision = Some(PlayerBlockCollision {
             time_in_ticks: game.time_in_ticks() - DEFAULT_TICKS_TO_MAX_COMPRESSION / 2.0,
             normal: p(1, 0),
             collider_velocity: p(0.0, -3.0),
@@ -3850,6 +3976,17 @@ mod tests {
         let end_vel = game.particles[0].vel;
         assert!(end_vel == -start_vel);
     }
+    #[test]
+    #[timeout(100)]
+    fn test_particle__hit_inner_corner_exactly() {
+        let mut game = set_up_particle_about_to_hit_concave_corner_exactly();
+        let start_vel = game.particles[0].vel;
+
+        game.tick_physics();
+
+        let end_vel = game.particles[0].vel;
+        assert!(end_vel == -start_vel);
+    }
 
     #[test]
     #[timeout(100)]
@@ -3930,5 +4067,25 @@ mod tests {
             game.get_occupancy_of_nearby_walls(p(game.width() as i32, game.height() as i32))
                 == [[false; 3]; 3]
         );
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_fall_until_particles_hit_wall_on_left() {
+        let mut game = set_up_tall_drop();
+        for _ in 0..100 {
+            game.tick_physics();
+        }
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_dash_right_then_up_in_corner() {
+        let mut game = set_up_player_in_bottom_right_wall_corner();
+        game.player.desired_direction = p(1, 0);
+        game.player_dash();
+        game.tick_physics();
+        game.player.desired_direction = p(0, 1);
+        game.player_dash();
+        game.tick_physics();
     }
 }
