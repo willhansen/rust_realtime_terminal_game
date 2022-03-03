@@ -19,7 +19,7 @@ use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::Point;
 use num::traits::FloatConst;
 use std::char;
-use std::cmp::min;
+use std::cmp::{max, min};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
@@ -355,6 +355,17 @@ impl Game {
         self.place_line_of_blocks((xmax, ymin), (xmax, ymax), Block::Wall);
         self.place_line_of_blocks((xmax, ymax), (xmin, ymax), Block::Wall);
         self.place_line_of_blocks((xmin, ymax), (xmin, ymin), Block::Wall);
+    }
+
+    fn place_wall_rect(&mut self, corner1: ipoint, corner2: ipoint) {
+        let xmin = min(corner1.x(), corner2.x());
+        let xmax = max(corner1.x(), corner2.x());
+        let ymin = min(corner1.y(), corner2.y());
+        let ymax = max(corner1.y(), corner2.y());
+
+        for y in ymin..=ymax {
+            self.place_line_of_blocks((xmin, y), (xmax, y), Block::Wall);
+        }
     }
 
     fn place_block(&mut self, pos: Point<i32>, block: Block) {
@@ -1199,6 +1210,9 @@ impl Game {
                     collided_block_square: collision.collided_block_square,
                 });
 
+                let prev_start_point = current_start_point;
+                let prev_planned_displacement = planned_displacement;
+                let prev_vel = self.player.vel;
                 (current_start_point, planned_displacement, self.player.vel) = self
                     .deflect_off_collision_plane(
                         collision,
@@ -1206,6 +1220,21 @@ impl Game {
                         planned_displacement,
                         self.player.vel,
                     );
+
+                if current_start_point == prev_start_point
+                    && prev_planned_displacement == planned_displacement
+                {
+                    dbg!(
+                        "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+                        prev_start_point,
+                        current_start_point,
+                        prev_planned_displacement,
+                        planned_displacement,
+                        prev_vel,
+                        self.player.vel
+                    );
+                    panic!("start point and planned movement did not change from collision");
+                }
 
                 current_target = current_start_point + planned_displacement;
             } else {
@@ -1263,10 +1292,10 @@ impl Game {
         let mut new_vel = vel;
         if collision.normal.x() != 0 {
             new_vel.set_x(0.0);
-            new_relative_target = project(relative_target, right_f());
+            new_relative_target = project(relative_target, up_f());
         } else if collision.normal.y() != 0 {
             new_vel.set_y(0.0);
-            new_relative_target = project(relative_target, up_f());
+            new_relative_target = project(relative_target, right_f());
         } else {
             panic!("collision has zero normal");
         }
@@ -1451,8 +1480,8 @@ impl Game {
     }
 }
 fn init_world(width: u16, height: u16) -> Game {
-    //let mut game = Game::new(width, height);
-    let mut game = Game::new(10, 40);
+    let mut game = Game::new(width, height);
+    //let mut game = Game::new(10, 40);
     game.set_player_jump_delta_v(1.0);
     game.player.acceleration_from_gravity = 0.05;
     game.player.acceleration_from_floor_traction = 0.6;
@@ -1460,20 +1489,26 @@ fn init_world(width: u16, height: u16) -> Game {
 
     game.place_boundary_wall();
 
-    //let bottom_left = (
-    //(game.terminal_size.0 * 2 / 5) as i32,
-    //(game.terminal_size.1 / 4) as i32,
-    //);
-    //game.place_line_of_blocks(
-    //bottom_left,
-    //((4 * game.terminal_size.0 / 5) as i32, bottom_left.1),
-    //Block::Wall,
-    //);
-    //game.place_line_of_blocks(
-    //bottom_left,
-    //(bottom_left.0, 3 * (game.terminal_size.1 / 4) as i32),
-    //Block::Wall,
-    //);
+    let bottom_left = (
+        (game.terminal_size.0 * 2 / 5) as i32,
+        (game.terminal_size.1 / 4) as i32,
+    );
+    game.place_line_of_blocks(
+        bottom_left,
+        ((4 * game.terminal_size.0 / 5) as i32, bottom_left.1),
+        Block::Wall,
+    );
+    game.place_line_of_blocks(
+        bottom_left,
+        (bottom_left.0, 3 * (game.terminal_size.1 / 4) as i32),
+        Block::Wall,
+    );
+
+    game.place_wall_rect(
+        p(game.width() as i32 / 6, game.height() as i32 / 6),
+        p(game.width() as i32 / 5, game.height() as i32 / 5),
+    );
+
     game.place_player(
         game.terminal_size.0 as f32 / 2.0,
         game.terminal_size.1 as f32 / 2.0,
@@ -2228,8 +2263,10 @@ mod tests {
 
         game.place_player(15.1, 11.0);
         game.player.vel = p(-2.0, 2.0);
+
         game.update_output_buffer();
         game.print_output_buffer();
+
         game.tick_physics();
         assert!(game.player.vel.x() == 0.0);
         assert!(game.player.vel.y() > 0.0);
