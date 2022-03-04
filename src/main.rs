@@ -1407,6 +1407,8 @@ impl Game {
                 });
                 let closest_collision_to_start = collisions[0];
 
+                dbg!(&collisions);
+
                 // might have missed one
                 let normal_square = closest_collision_to_start.collided_block_square
                     + closest_collision_to_start.normal;
@@ -1415,6 +1417,7 @@ impl Game {
                     && self.get_block(normal_square) == Block::Wall
                 {
                     let adjacent_occupancy = self.get_occupancy_of_nearby_walls(normal_square);
+                    dbg!(&adjacent_occupancy);
                     if let Some(collision) = single_block_squarecast_with_filled_cracks(
                         start_pos,
                         end_pos,
@@ -3979,10 +3982,18 @@ mod tests {
 
     #[test]
     #[timeout(100)]
-    fn test_linecast_hit_between_blocks() {
+    fn test_linecast_should_hit_very_tip_of_corner_when_next_to_other_block() {
         let game = set_up_four_wall_blocks_at_5_and_6();
         let start_pos = p(10.0, 10.0);
-        let end_pos = p(6.4999, 5.4999);
+        let nominal_corner = p(6.5, 5.5);
+        let offset_to_edge_of_exact_touch_border_corner =
+            left_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE;
+        let additional_offset_for_test =
+            (down_f() + left_f()) * RADIUS_OF_EXACTLY_TOUCHING_ZONE * 2.0;
+        let end_pos = nominal_corner
+            + offset_to_edge_of_exact_touch_border_corner
+            + additional_offset_for_test;
+
         let collision = game.linecast(start_pos, end_pos);
         assert!(collision.is_some());
         assert!(nearly_equal(collision.unwrap().collider_pos.x(), 6.5));

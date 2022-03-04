@@ -73,8 +73,9 @@ pub fn single_block_squarecast_with_filled_cracks(
     let mut expanded_corner_offsets = vec![];
     let combined_square_side_length = 1.0 + moving_square_side_length;
     for i in 0..4 {
-        let indexes_for_relative_up = quarter_turns::<i32>(p(0, 1), i) + p(1, 1);
-        let indexes_for_relative_right = quarter_turns::<i32>(p(1, 0), i) + p(1, 1);
+        let indexes_for_relative_up = quarter_turns_counter_clockwise::<i32>(p(0, 1), i) + p(1, 1);
+        let indexes_for_relative_right =
+            quarter_turns_counter_clockwise::<i32>(p(1, 0), i) + p(1, 1);
         let relative_up_occupied = adjacent_squares_occupied[indexes_for_relative_up.x() as usize]
             [indexes_for_relative_up.y() as usize];
         let relative_right_occupied = adjacent_squares_occupied
@@ -92,7 +93,7 @@ pub fn single_block_squarecast_with_filled_cracks(
             unrotated_new_corner.add_assign(-right_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE);
         }
 
-        let new_corner = quarter_turns(unrotated_new_corner, i);
+        let new_corner = quarter_turns_counter_clockwise(unrotated_new_corner, i);
 
         expanded_corner_offsets.push(new_corner);
     }
@@ -101,67 +102,46 @@ pub fn single_block_squarecast_with_filled_cracks(
         .iter()
         .map(|&rel_p| floatify(grid_square_center) + rel_p)
         .collect();
-    let expanded_square_edges = vec![
+    let expanded_square_edges_counter_clockwise = vec![
         geo::Line::new(expanded_square_corners[0], expanded_square_corners[1]),
         geo::Line::new(expanded_square_corners[1], expanded_square_corners[2]),
         geo::Line::new(expanded_square_corners[2], expanded_square_corners[3]),
         geo::Line::new(expanded_square_corners[3], expanded_square_corners[0]),
     ];
     //println!("expanded_edges: {:?}", expanded_square_edges);
-    let mut candidate_edge_intersections = Vec::<Point<f32>>::new();
-    for edge in expanded_square_edges {
+    let mut candidate_edge_intersections_paired_with_normals =
+        Vec::<(Point<f32>, Point<i32>)>::new();
+    for edge in expanded_square_edges_counter_clockwise {
         if let Some(LineIntersection::SinglePoint {
             intersection: coord,
             is_proper: _,
         }) = line_intersection(movement_line, edge)
         {
-            candidate_edge_intersections.push(coord.into());
+            let edge_as_vect: fpoint = (edge.end - edge.start).into();
+            let normal = snap_to_grid(direction(quarter_turns_counter_clockwise(edge_as_vect, 3)));
+            candidate_edge_intersections_paired_with_normals.push((coord.into(), normal));
         }
     }
-    if candidate_edge_intersections.is_empty() {
+    if candidate_edge_intersections_paired_with_normals.is_empty() {
         return None;
     }
 
     // four intersections with extended walls of stationary square
-    candidate_edge_intersections.sort_by(|a, b| {
+    candidate_edge_intersections_paired_with_normals.sort_by(|a, b| {
         start_point
-            .euclidean_distance(a)
-            .partial_cmp(&start_point.euclidean_distance(b))
+            .euclidean_distance(&a.0)
+            .partial_cmp(&start_point.euclidean_distance(&b.0))
             .unwrap()
     });
     //println!("intersections: {:?}", candidate_edge_intersections);
-    let true_collision_point = candidate_edge_intersections[0];
+    let true_collision_point = candidate_edge_intersections_paired_with_normals[0].0;
+    let collision_normal = candidate_edge_intersections_paired_with_normals[0].1;
     let rounded_collision_point = snap_to_square_perimeter_with_forbidden_sides(
         true_collision_point,
         floatify(grid_square_center),
         combined_square_side_length,
         adjacent_squares_occupied,
     );
-
-    let mut candidate_normals = vec![];
-    for i in 0..4 {
-        // TODO: also have diagonals?
-        let dir = orthogonal_direction(i);
-        let i = (dir.x() + 1) as usize;
-        let j = (dir.y() + 1) as usize;
-        let direction_has_no_block = !adjacent_squares_occupied[i][j];
-        if direction_has_no_block {
-            candidate_normals.push(dir);
-        }
-    }
-    if candidate_normals.is_empty() {
-        panic!("No candidate normals for collision");
-    }
-    let collision_normal = *candidate_normals
-        .iter()
-        .min_by_key(|&&candidate_normal| {
-            OrderedFloat(magnitude(
-                rounded_collision_point
-                    - (floatify(candidate_normal) * combined_square_side_length / 2.0
-                        + floatify(grid_square_center)),
-            ))
-        })
-        .unwrap();
 
     return Some(SquarecastCollision {
         collider_pos: rounded_collision_point,
@@ -190,13 +170,13 @@ pub fn orthogonal_direction<T: 'static + CoordNum + num::Signed + std::fmt::Disp
     dir_num: T,
 ) -> Point<T> {
     let dir_num_int = dir_num.to_i32().unwrap() % 4;
-    quarter_turns(Point::<T>::new(T::one(), T::zero()), dir_num_int)
+    quarter_turns_counter_clockwise(Point::<T>::new(T::one(), T::zero()), dir_num_int)
 }
 pub fn diagonal_direction<T: 'static + CoordNum + num::Signed + std::fmt::Display>(
     dir_num: T,
 ) -> Point<T> {
     let dir_num_int = dir_num.to_i32().unwrap() % 4;
-    quarter_turns(Point::<T>::new(T::one(), T::one()), dir_num_int)
+    quarter_turns_counter_clockwise(Point::<T>::new(T::one(), T::one()), dir_num_int)
 }
 
 pub fn adjacent_direction<T: CoordNum + num::Signed + std::fmt::Display>(dir_num: T) -> Point<T> {
@@ -551,7 +531,7 @@ pub fn int_to_T<T: num::Signed>(x: i32) -> T {
         _ => panic!(),
     }
 }
-pub fn quarter_turns<T: 'static + CoordNum + num::Signed + std::fmt::Display>(
+pub fn quarter_turns_counter_clockwise<T: 'static + CoordNum + num::Signed + std::fmt::Display>(
     vect: Point<T>,
     quarter_periods: i32,
 ) -> Point<T> {
@@ -1346,8 +1326,8 @@ mod tests {
     }
     #[test]
     fn test_quarter_turns() {
-        assert!(quarter_turns(p(1.0, 2.0), 1) == p(-2.0, 1.0));
-        assert!(quarter_turns(p(1, 2), 1) == p(-2, 1));
+        assert!(quarter_turns_counter_clockwise(p(1.0, 2.0), 1) == p(-2.0, 1.0));
+        assert!(quarter_turns_counter_clockwise(p(1, 2), 1) == p(-2, 1));
     }
     #[test]
     fn test_snap_to_square_perimeter() {
