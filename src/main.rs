@@ -34,8 +34,8 @@ use termion::raw::IntoRawMode;
 use glyph::*;
 use utility::*;
 
-type fpoint = Point<f32>;
-type ipoint = Point<i32>;
+type fPoint = Point<f32>;
+type iPoint = Point<i32>;
 
 // const player_jump_height: i32 = 3;
 // const player_jump_hang_frames: i32 = 4;
@@ -357,7 +357,7 @@ impl Game {
         self.place_line_of_blocks((xmin, ymax), (xmin, ymin), Block::Wall);
     }
 
-    fn place_wall_rect(&mut self, corner1: ipoint, corner2: ipoint) {
+    fn place_wall_rect(&mut self, corner1: iPoint, corner2: iPoint) {
         let xmin = min(corner1.x(), corner2.x());
         let xmax = max(corner1.x(), corner2.x());
         let ymin = min(corner1.y(), corner2.y());
@@ -713,7 +713,6 @@ impl Game {
     }
 
     fn apply_particle_velocities(&mut self, dt_in_ticks: f32) {
-        //dbg!(self.time_from_start_in_ticks);
         let mut particle_indexes_to_delete = vec![];
         for i in 0..self.particles.len() {
             let particle = self.particles[i].clone();
@@ -725,7 +724,6 @@ impl Game {
                         * dt_in_ticks.sqrt(),
                 VERTICAL_STRETCH_FACTOR,
             );
-            //dbg!(&step);
             let mut start_pos = particle.pos;
             let mut end_pos = start_pos + step;
 
@@ -734,7 +732,6 @@ impl Game {
                     if let Some(collision) = self.linecast(start_pos, end_pos) {
                         if particle.wall_collision_behavior == ParticleWallCollisionBehavior::Bounce
                         {
-                            //dbg!(&particle, &collision);
                             let new_start = collision.collider_pos;
                             let step_taken = new_start - start_pos;
                             step.add_assign(-step_taken);
@@ -1181,7 +1178,6 @@ impl Game {
     }
 
     fn apply_player_kinematics(&mut self, dt_in_ticks: f32) {
-        //dbg!(self.player.vel);
         let start_point = self.player.pos;
         let mut planned_displacement: Point<f32> =
             world_space_to_grid_space(self.player.vel, VERTICAL_STRETCH_FACTOR) * dt_in_ticks;
@@ -1191,8 +1187,6 @@ impl Game {
         let mut collision_occurred = false;
         loop {
             if let Some(collision) = self.unit_squarecast(current_start_point, current_target) {
-                //dbg!(&current_start_point, &current_target, &collision);
-
                 collision_occurred = true;
 
                 let step_taken_to_this_collision = collision.collider_pos - current_start_point;
@@ -1282,10 +1276,10 @@ impl Game {
     fn deflect_off_collision_plane(
         &mut self,
         collision: SquarecastCollision,
-        move_start: fpoint,
-        relative_target: fpoint,
-        vel: fpoint,
-    ) -> (fpoint, fpoint, fpoint) {
+        move_start: fPoint,
+        relative_target: fPoint,
+        vel: fPoint,
+    ) -> (fPoint, fPoint, fPoint) {
         let step_taken_to_this_collision = collision.collider_pos - move_start;
 
         let mut new_relative_target = relative_target - step_taken_to_this_collision;
@@ -1406,8 +1400,7 @@ impl Game {
                     a_dist.partial_cmp(&b_dist).unwrap()
                 });
                 let closest_collision_to_start = collisions[0];
-
-                dbg!(&collisions);
+                dbg!(&closest_collision_to_start);
 
                 // might have missed one
                 let normal_square = closest_collision_to_start.collided_block_square
@@ -1417,7 +1410,6 @@ impl Game {
                     && self.get_block(normal_square) == Block::Wall
                 {
                     let adjacent_occupancy = self.get_occupancy_of_nearby_walls(normal_square);
-                    dbg!(&adjacent_occupancy);
                     if let Some(collision) = single_block_squarecast_with_filled_cracks(
                         start_pos,
                         end_pos,
@@ -1681,6 +1673,13 @@ mod tests {
         let mut game = set_up_player_on_platform();
         game.player.vel = right_f() * game.player.max_run_speed;
         game.player.desired_direction = p(1, 0);
+        game
+    }
+
+    fn set_up_player_about_to_run_into_block_on_platform() -> Game {
+        let mut game = set_up_player_running_full_speed_to_right_on_platform();
+        game.place_block(round(game.player.pos) + p(2, 0), Block::Wall);
+        game.player.pos.add_assign(p(0.999, 0.0));
         game
     }
 
@@ -2161,16 +2160,17 @@ mod tests {
     #[test]
     #[timeout(100)]
     fn test_snap_to_object_on_collision() {
-        let mut game = set_up_player_on_platform();
-        game.place_block(round(game.player.pos) + p(2, 0), Block::Wall);
-        game.player.pos.add_assign(p(0.999, 0.0));
-        game.player.desired_direction.set_x(1);
-        game.player.vel.set_x(5.0);
+        let mut game = set_up_player_about_to_run_into_block_on_platform();
+        let starting_square = snap_to_grid(game.player.pos);
+        let block_square = starting_square + p(1, 0);
+
+        game.update_output_buffer();
+        game.print_output_buffer();
 
         game.tick_physics();
 
-        assert!(game.player.pos == p(16.0, 11.0));
-        assert!(game.grid[17][11] == Block::Wall);
+        assert!(game.player.pos == floatify(starting_square));
+        assert!(game.get_block(block_square) == Block::Wall);
     }
 
     #[test]
@@ -3988,8 +3988,7 @@ mod tests {
         let nominal_corner = p(6.5, 5.5);
         let offset_to_edge_of_exact_touch_border_corner =
             left_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE;
-        let additional_offset_for_test =
-            (down_f() + left_f()) * RADIUS_OF_EXACTLY_TOUCHING_ZONE * 2.0;
+        let additional_offset_for_test = left_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE;
         let end_pos = nominal_corner
             + offset_to_edge_of_exact_touch_border_corner
             + additional_offset_for_test;

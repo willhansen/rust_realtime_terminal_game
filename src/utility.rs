@@ -1,7 +1,7 @@
 extern crate geo;
 extern crate rand;
 
-use crate::{fpoint, AdjacentOccupancyMask, RADIUS_OF_EXACTLY_TOUCHING_ZONE};
+use crate::{fPoint, iPoint, AdjacentOccupancyMask, RADIUS_OF_EXACTLY_TOUCHING_ZONE};
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Point};
@@ -35,6 +35,7 @@ pub fn up_f() -> Point<f32> {
 pub fn down_f() -> Point<f32> {
     p(0.0, -1.0)
 }
+#[allow(dead_code)]
 pub fn zero_f() -> Point<f32> {
     p(0.0, 0.0)
 }
@@ -45,6 +46,7 @@ pub struct SquarecastCollision {
     pub normal: Point<i32>,
     pub collided_block_square: Point<i32>,
 }
+#[allow(dead_code)]
 pub fn single_block_squarecast(
     start_point: Point<f32>,
     end_point: Point<f32>,
@@ -58,6 +60,15 @@ pub fn single_block_squarecast(
         moving_square_side_length,
         [[false; 3]; 3],
     )
+}
+
+pub fn single_block_linecast_with_filled_cracks(
+    start_point: Point<f32>,
+    end_point: Point<f32>,
+    grid_square_center: Point<i32>,
+    adjacent_squares_occupied: AdjacentOccupancyMask,
+) -> Option<SquarecastCollision> {
+    single_block_squarecast_with_filled_cracks(start_point, end_point, grid_square_center, 0.0, adjacent_squares_occupied)
 }
 
 pub fn single_block_squarecast_with_filled_cracks(
@@ -108,34 +119,46 @@ pub fn single_block_squarecast_with_filled_cracks(
         geo::Line::new(expanded_square_corners[2], expanded_square_corners[3]),
         geo::Line::new(expanded_square_corners[3], expanded_square_corners[0]),
     ];
+
+    // You can define structs IN a function!?  So convenient!
+    #[derive(Copy, Clone, PartialEq, Debug)]
+    struct EdgeCollision {
+        edge: geo::Line<f32>,
+        point_of_impact: fPoint,
+        normal: iPoint,
+    }
+
     //println!("expanded_edges: {:?}", expanded_square_edges);
-    let mut candidate_edge_intersections_paired_with_normals =
-        Vec::<(Point<f32>, Point<i32>)>::new();
+    let mut candidate_edge_collisions = Vec::<EdgeCollision>::new();
     for edge in expanded_square_edges_counter_clockwise {
         if let Some(LineIntersection::SinglePoint {
             intersection: coord,
             is_proper: _,
         }) = line_intersection(movement_line, edge)
         {
-            let edge_as_vect: fpoint = (edge.end - edge.start).into();
+            let edge_as_vect: fPoint = (edge.end - edge.start).into();
             let normal = snap_to_grid(direction(quarter_turns_counter_clockwise(edge_as_vect, 3)));
-            candidate_edge_intersections_paired_with_normals.push((coord.into(), normal));
+            candidate_edge_collisions.push(EdgeCollision {
+                edge,
+                point_of_impact: coord.into(),
+                normal,
+            });
         }
     }
-    if candidate_edge_intersections_paired_with_normals.is_empty() {
+    if candidate_edge_collisions.is_empty() {
         return None;
     }
 
     // four intersections with extended walls of stationary square
-    candidate_edge_intersections_paired_with_normals.sort_by(|a, b| {
+    candidate_edge_collisions.sort_by(|a, b| {
         start_point
-            .euclidean_distance(&a.0)
-            .partial_cmp(&start_point.euclidean_distance(&b.0))
+            .euclidean_distance(&a.point_of_impact)
+            .partial_cmp(&start_point.euclidean_distance(&b.point_of_impact))
             .unwrap()
     });
     //println!("intersections: {:?}", candidate_edge_intersections);
-    let true_collision_point = candidate_edge_intersections_paired_with_normals[0].0;
-    let collision_normal = candidate_edge_intersections_paired_with_normals[0].1;
+    let true_collision_point = candidate_edge_collisions[0].point_of_impact;
+    let collision_normal = candidate_edge_collisions[0].normal;
     let rounded_collision_point = snap_to_square_perimeter_with_forbidden_sides(
         true_collision_point,
         floatify(grid_square_center),
@@ -499,7 +522,7 @@ pub fn points_in_line_with_max_gap(
     return output;
 }
 
-pub fn lin_space_from_start_2d(start: fpoint, end: fpoint, density: f32) -> Vec<fpoint> {
+pub fn lin_space_from_start_2d(start: fPoint, end: fPoint, density: f32) -> Vec<fPoint> {
     // end point is not included.  Start point is included
 
     let num_points_to_check = (magnitude(end - start) * density).floor() as i32;
@@ -1385,4 +1408,6 @@ mod tests {
         assert!(collision.normal.x() != 0);
         assert!(collision.normal.y() == 0);
     }
+    #[test]
+    fn test_single_block_squarecast_filled_cracks__() {
 }
