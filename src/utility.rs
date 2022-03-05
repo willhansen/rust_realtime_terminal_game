@@ -62,13 +62,37 @@ pub fn single_block_squarecast(
     )
 }
 
+pub fn visible_xy_to_actual_xy(a: AdjacentOccupancyMask) -> AdjacentOccupancyMask {
+    // visible
+    // [ [ 7, 8, 9 ],
+    //   [ 4, 5, 6 ],
+    //   [ 1, 2, 3 ] ]
+    //
+    // but for [x][y] indexes, we need
+    //
+    // [ [ 1, 4, 7 ],
+    //   [ 2, 5, 8 ],
+    //   [ 3, 6, 9 ] ]
+    [
+        [a[2][0], a[1][0], a[0][0]],
+        [a[2][1], a[1][1], a[0][1]],
+        [a[2][2], a[1][2], a[0][2]],
+    ]
+}
+
 pub fn single_block_linecast_with_filled_cracks(
     start_point: Point<f32>,
     end_point: Point<f32>,
     grid_square_center: Point<i32>,
     adjacent_squares_occupied: AdjacentOccupancyMask,
 ) -> Option<SquarecastCollision> {
-    single_block_squarecast_with_filled_cracks(start_point, end_point, grid_square_center, 0.0, adjacent_squares_occupied)
+    single_block_squarecast_with_filled_cracks(
+        start_point,
+        end_point,
+        grid_square_center,
+        0.0,
+        adjacent_squares_occupied,
+    )
 }
 
 pub fn single_block_squarecast_with_filled_cracks(
@@ -81,44 +105,13 @@ pub fn single_block_squarecast_with_filled_cracks(
     // formulates the problem as a point crossing the boundary of an r=1 square
     let movement_line = geo::Line::new(start_point, end_point);
     //println!("movement_line: {:?}", movement_line);
-    let mut expanded_corner_offsets = vec![];
     let combined_square_side_length = 1.0 + moving_square_side_length;
-    for i in 0..4 {
-        let indexes_for_relative_up = quarter_turns_counter_clockwise::<i32>(p(0, 1), i) + p(1, 1);
-        let indexes_for_relative_right =
-            quarter_turns_counter_clockwise::<i32>(p(1, 0), i) + p(1, 1);
-        let relative_up_occupied = adjacent_squares_occupied[indexes_for_relative_up.x() as usize]
-            [indexes_for_relative_up.y() as usize];
-        let relative_right_occupied = adjacent_squares_occupied
-            [indexes_for_relative_right.x() as usize][indexes_for_relative_right.y() as usize];
 
-        let mut unrotated_new_corner = p(1.0, 1.0) * (combined_square_side_length / 2.0);
-        if relative_up_occupied {
-            unrotated_new_corner.add_assign(up_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE);
-        } else {
-            unrotated_new_corner.add_assign(-up_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE);
-        }
-        if relative_right_occupied {
-            unrotated_new_corner.add_assign(right_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE);
-        } else {
-            unrotated_new_corner.add_assign(-right_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE);
-        }
-
-        let new_corner = quarter_turns_counter_clockwise(unrotated_new_corner, i);
-
-        expanded_corner_offsets.push(new_corner);
-    }
-
-    let expanded_square_corners: Vec<Point<f32>> = expanded_corner_offsets
-        .iter()
-        .map(|&rel_p| floatify(grid_square_center) + rel_p)
-        .collect();
-    let expanded_square_edges_counter_clockwise = vec![
-        geo::Line::new(expanded_square_corners[0], expanded_square_corners[1]),
-        geo::Line::new(expanded_square_corners[1], expanded_square_corners[2]),
-        geo::Line::new(expanded_square_corners[2], expanded_square_corners[3]),
-        geo::Line::new(expanded_square_corners[3], expanded_square_corners[0]),
-    ];
+    let counter_clockwise_collision_edges = get_counter_clockwise_collision_edges_for_expansions(
+        floatify(grid_square_center),
+        combined_square_side_length,
+        adjacent_squares_occupied,
+    );
 
     // You can define structs IN a function!?  So convenient!
     #[derive(Copy, Clone, PartialEq, Debug)]
@@ -130,7 +123,7 @@ pub fn single_block_squarecast_with_filled_cracks(
 
     //println!("expanded_edges: {:?}", expanded_square_edges);
     let mut candidate_edge_collisions = Vec::<EdgeCollision>::new();
-    for edge in expanded_square_edges_counter_clockwise {
+    for edge in counter_clockwise_collision_edges {
         if let Some(LineIntersection::SinglePoint {
             intersection: coord,
             is_proper: _,
@@ -171,6 +164,62 @@ pub fn single_block_squarecast_with_filled_cracks(
         normal: collision_normal,
         collided_block_square: grid_square_center,
     });
+}
+
+pub fn get_counter_clockwise_collision_edges_for_expansions(
+    center: fPoint,
+    nominal_side_length: f32,
+    expansion_map: AdjacentOccupancyMask,
+) -> Vec<geo::Line<f32>> {
+    let inner_halflength = nominal_side_length / 2.0 - RADIUS_OF_EXACTLY_TOUCHING_ZONE;
+    let outer_halflength = nominal_side_length / 2.0 + RADIUS_OF_EXACTLY_TOUCHING_ZONE;
+
+    let outer_left = center.x() - outer_halflength;
+    let inner_left = center.x() - inner_halflength;
+    let outer_right = center.x() + outer_halflength;
+    let inner_right = center.x() + inner_halflength;
+    let outer_bottom = center.y() - outer_halflength;
+    let inner_bottom = center.y() - inner_halflength;
+    let outer_top = center.y() + outer_halflength;
+    let inner_top = center.y() + inner_halflength;
+
+    let mut expanded_corner_offsets = vec![];
+    for i in 0..4 {
+        let indexes_for_relative_up = quarter_turns_counter_clockwise::<i32>(p(0, 1), i) + p(1, 1);
+        let indexes_for_relative_right =
+            quarter_turns_counter_clockwise::<i32>(p(1, 0), i) + p(1, 1);
+        let relative_up_occupied = expansion_map[indexes_for_relative_up.x() as usize]
+            [indexes_for_relative_up.y() as usize];
+        let relative_right_occupied = expansion_map[indexes_for_relative_right.x() as usize]
+            [indexes_for_relative_right.y() as usize];
+
+        let mut unrotated_new_corner = p(1.0, 1.0) * (nominal_side_length / 2.0);
+        if relative_up_occupied {
+            unrotated_new_corner.add_assign(up_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE);
+        } else {
+            unrotated_new_corner.add_assign(-up_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE);
+        }
+        if relative_right_occupied {
+            unrotated_new_corner.add_assign(right_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE);
+        } else {
+            unrotated_new_corner.add_assign(-right_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE);
+        }
+
+        let new_corner = quarter_turns_counter_clockwise(unrotated_new_corner, i);
+
+        expanded_corner_offsets.push(new_corner);
+    }
+
+    let expanded_square_corners: Vec<Point<f32>> = expanded_corner_offsets
+        .iter()
+        .map(|&rel_p| center + rel_p)
+        .collect();
+    vec![
+        geo::Line::new(expanded_square_corners[0], expanded_square_corners[1]),
+        geo::Line::new(expanded_square_corners[1], expanded_square_corners[2]),
+        geo::Line::new(expanded_square_corners[2], expanded_square_corners[3]),
+        geo::Line::new(expanded_square_corners[3], expanded_square_corners[0]),
+    ]
 }
 
 pub fn single_block_linecast(
@@ -1390,18 +1439,16 @@ mod tests {
         let start_point = p(8.5, 12.5);
         let end_point = p(8.199999, 12.5);
         let grid_square_center = p(8, 13);
-        let moving_square_side_length = 0.0;
         let adjacent_squares_occupied = [
             [false, false, false],
             [true, true, true],
             [false, false, false],
         ]; // vertical wall
 
-        let collision = single_block_squarecast_with_filled_cracks(
+        let collision = single_block_linecast_with_filled_cracks(
             start_point,
             end_point,
             grid_square_center,
-            moving_square_side_length,
             adjacent_squares_occupied,
         )
         .unwrap();
@@ -1409,5 +1456,26 @@ mod tests {
         assert!(collision.normal.y() == 0);
     }
     #[test]
-    fn test_single_block_squarecast_filled_cracks__() {
+    fn test_single_block_squarecast_filled_cracks__do_not_expand_corner_when_surrounded_orthogonally(
+    ) {
+        let start_point = p(-10.0, -10.0);
+        let grid_square_center = p(0, 0);
+        let top_left_corner_of_block = floatify(grid_square_center) + p(-0.5, 0.5);
+        let endpoint_offset_for_test =
+            (right_f() + down_f()) * RADIUS_OF_EXACTLY_TOUCHING_ZONE / 2.0;
+        let end_point = top_left_corner_of_block + endpoint_offset_for_test;
+        let adjacent_squares_occupied = visible_xy_to_actual_xy([
+            [false, true, false],
+            [true, true, true],
+            [false, true, false],
+        ]); // orthogonally surrounded
+        let maybe_collision = single_block_linecast_with_filled_cracks(
+            start_point,
+            end_point,
+            grid_square_center,
+            adjacent_squares_occupied,
+        );
+        dbg!(&maybe_collision);
+        assert!(maybe_collision.is_none());
+    }
 }
