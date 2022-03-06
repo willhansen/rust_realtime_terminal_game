@@ -1,14 +1,19 @@
 extern crate geo;
 extern crate rand;
 
-use crate::{fPoint, iPoint, AdjacentOccupancyMask, RADIUS_OF_EXACTLY_TOUCHING_ZONE};
+use crate::{AdjacentOccupancyMask, RADIUS_OF_EXACTLY_TOUCHING_ZONE};
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
-use geo::{point, CoordNum, Point};
+use geo::{point, CoordNum, Line, Point};
 use num::clamp;
 use num::traits::Pow;
 use ordered_float::OrderedFloat;
 use rand::Rng;
+
+pub type fPoint = Point<f32>;
+pub type iPoint = Point<i32>;
+pub type iLine = Line<i32>;
+pub type fLine = Line<f32>;
 
 pub fn p<T: 'static>(x: T, y: T) -> Point<T>
 where
@@ -42,6 +47,7 @@ pub fn zero_f() -> Point<f32> {
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub struct SquarecastCollision {
+    pub unrounded_collider_pos: Point<f32>,
     pub collider_pos: Point<f32>,
     pub normal: Point<i32>,
     pub collided_block_square: Point<i32>,
@@ -107,11 +113,12 @@ pub fn single_block_squarecast_with_filled_cracks(
     //println!("movement_line: {:?}", movement_line);
     let combined_square_side_length = 1.0 + moving_square_side_length;
 
-    let counter_clockwise_collision_edges = get_counter_clockwise_collision_edges_for_expansions(
-        floatify(grid_square_center),
-        combined_square_side_length,
-        adjacent_squares_occupied,
-    );
+    let counter_clockwise_collision_edges =
+        get_counter_clockwise_collision_edges_with_known_adjacency(
+            floatify(grid_square_center),
+            combined_square_side_length,
+            adjacent_squares_occupied,
+        );
 
     // You can define structs IN a function!?  So convenient!
     #[derive(Copy, Clone, PartialEq, Debug)]
@@ -159,67 +166,118 @@ pub fn single_block_squarecast_with_filled_cracks(
         adjacent_squares_occupied,
     );
 
-    return Some(SquarecastCollision {
+    Some(SquarecastCollision {
+        unrounded_collider_pos: true_collision_point,
         collider_pos: rounded_collision_point,
         normal: collision_normal,
         collided_block_square: grid_square_center,
-    });
+    })
 }
 
-pub fn get_counter_clockwise_collision_edges_for_expansions(
+pub fn get_counter_clockwise_collision_edges_with_known_adjacency(
     center: fPoint,
     nominal_side_length: f32,
-    expansion_map: AdjacentOccupancyMask,
+    adjacency_map: AdjacentOccupancyMask,
 ) -> Vec<geo::Line<f32>> {
+    // ┌────────────────┐
+    // │                │
+    // ├────────────────┼────┐
+    // │                │    │
+    // │                │    │
+    // │                │    │
+    // │                │    │
+    // │                │    │
+    // │                │    │
+    // ├────────────────┼────┘
+    // │                │
+    // └────────────────┘
+
     let inner_halflength = nominal_side_length / 2.0 - RADIUS_OF_EXACTLY_TOUCHING_ZONE;
     let outer_halflength = nominal_side_length / 2.0 + RADIUS_OF_EXACTLY_TOUCHING_ZONE;
 
-    let outer_left = center.x() - outer_halflength;
-    let inner_left = center.x() - inner_halflength;
-    let outer_right = center.x() + outer_halflength;
-    let inner_right = center.x() + inner_halflength;
-    let outer_bottom = center.y() - outer_halflength;
-    let inner_bottom = center.y() - inner_halflength;
-    let outer_top = center.y() + outer_halflength;
-    let inner_top = center.y() + inner_halflength;
-
-    let mut expanded_corner_offsets = vec![];
+    let mut output_lines = Vec::<fLine>::new();
+    // for every orthogonal direction
     for i in 0..4 {
-        let indexes_for_relative_up = quarter_turns_counter_clockwise::<i32>(p(0, 1), i) + p(1, 1);
-        let indexes_for_relative_right =
-            quarter_turns_counter_clockwise::<i32>(p(1, 0), i) + p(1, 1);
-        let relative_up_occupied = expansion_map[indexes_for_relative_up.x() as usize]
-            [indexes_for_relative_up.y() as usize];
-        let relative_right_occupied = expansion_map[indexes_for_relative_right.x() as usize]
-            [indexes_for_relative_right.y() as usize];
+        let this_edge_dir = orthogonal_direction(i);
+        let left_corner_dir = this_edge_dir + quarter_turns_counter_clockwise(this_edge_dir, 1);
+        let right_corner_dir = this_edge_dir + quarter_turns_counter_clockwise(this_edge_dir, 3);
+        let left_edge_dir = quarter_turns_counter_clockwise(this_edge_dir, 1);
+        let right_edge_dir = quarter_turns_counter_clockwise(this_edge_dir, 3);
 
-        let mut unrotated_new_corner = p(1.0, 1.0) * (nominal_side_length / 2.0);
-        if relative_up_occupied {
-            unrotated_new_corner.add_assign(up_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE);
-        } else {
-            unrotated_new_corner.add_assign(-up_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE);
+        let dir_to_expansion_val =
+            |v: iPoint| -> bool { adjacency_map[(v.x() + 1) as usize][(v.y() + 1) as usize] };
+
+        let block_at_this_edge = dir_to_expansion_val(this_edge_dir);
+        let block_at_left_edge = dir_to_expansion_val(left_edge_dir);
+        let block_at_right_edge = dir_to_expansion_val(right_edge_dir);
+        let block_at_left_corner = dir_to_expansion_val(left_corner_dir);
+        let block_at_right_corner = dir_to_expansion_val(right_corner_dir);
+
+        let should_expand_this_edge = block_at_this_edge;
+        let should_expand_left_edge = block_at_left_edge;
+        let should_expand_right_edge = block_at_right_edge;
+
+        let should_expand_right_corner =
+            should_expand_this_edge && should_expand_right_edge && block_at_right_corner;
+        let should_expand_left_corner =
+            should_expand_this_edge && should_expand_left_edge && block_at_left_corner;
+
+        let need_outer_edge =
+            should_expand_this_edge || should_expand_right_corner || should_expand_left_corner;
+
+        let need_inner_edge = !should_expand_this_edge
+            || (!should_expand_right_corner && should_expand_right_edge)
+            || (!should_expand_left_corner && should_expand_left_edge);
+
+        let wide_right_corner = center
+            + floatify(this_edge_dir) * inner_halflength
+            + floatify(right_edge_dir) * outer_halflength;
+        let wide_left_corner = center
+            + floatify(this_edge_dir) * inner_halflength
+            + floatify(left_edge_dir) * outer_halflength;
+        let tall_right_corner = center
+            + floatify(this_edge_dir) * outer_halflength
+            + floatify(right_edge_dir) * inner_halflength;
+        let tall_left_corner = center
+            + floatify(this_edge_dir) * outer_halflength
+            + floatify(left_edge_dir) * inner_halflength;
+        let far_right_corner = center + floatify(right_corner_dir) * outer_halflength;
+        let far_left_corner = center + floatify(left_corner_dir) * outer_halflength;
+        let near_right_corner = center + floatify(right_corner_dir) * inner_halflength;
+        let near_left_corner = center + floatify(left_corner_dir) * inner_halflength;
+
+        if need_outer_edge {
+            let start_point = if should_expand_right_corner {
+                far_right_corner
+            } else {
+                tall_right_corner
+            };
+            let end_point = if should_expand_left_corner {
+                far_left_corner
+            } else {
+                tall_left_corner
+            };
+            let far_collision_edge = geo::Line::new(start_point, end_point);
+            output_lines.push(far_collision_edge);
         }
-        if relative_right_occupied {
-            unrotated_new_corner.add_assign(right_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE);
-        } else {
-            unrotated_new_corner.add_assign(-right_f() * RADIUS_OF_EXACTLY_TOUCHING_ZONE);
+
+        if need_inner_edge {
+            // Need to start with right side so output lines are counter-clockwise
+            let start_point = if should_expand_right_edge {
+                wide_right_corner
+            } else {
+                near_right_corner
+            };
+            let end_point = if should_expand_left_edge {
+                wide_left_corner
+            } else {
+                near_left_corner
+            };
+            let close_collision_edge = geo::Line::new(start_point, end_point);
+            output_lines.push(close_collision_edge);
         }
-
-        let new_corner = quarter_turns_counter_clockwise(unrotated_new_corner, i);
-
-        expanded_corner_offsets.push(new_corner);
     }
-
-    let expanded_square_corners: Vec<Point<f32>> = expanded_corner_offsets
-        .iter()
-        .map(|&rel_p| center + rel_p)
-        .collect();
-    vec![
-        geo::Line::new(expanded_square_corners[0], expanded_square_corners[1]),
-        geo::Line::new(expanded_square_corners[1], expanded_square_corners[2]),
-        geo::Line::new(expanded_square_corners[2], expanded_square_corners[3]),
-        geo::Line::new(expanded_square_corners[3], expanded_square_corners[0]),
-    ]
+    output_lines
 }
 
 pub fn single_block_linecast(
@@ -1456,18 +1514,18 @@ mod tests {
         assert!(collision.normal.y() == 0);
     }
     #[test]
-    fn test_single_block_squarecast_filled_cracks__do_not_expand_corner_when_surrounded_orthogonally(
+    fn test_single_block_squarecast_filled_cracks__do_not_expand_corner_when_only_surrounded_orthogonally(
     ) {
-        let start_point = p(-10.0, -10.0);
         let grid_square_center = p(0, 0);
+        let start_point = floatify(grid_square_center) + p(-10.0, 10.0);
         let top_left_corner_of_block = floatify(grid_square_center) + p(-0.5, 0.5);
         let endpoint_offset_for_test =
             (right_f() + down_f()) * RADIUS_OF_EXACTLY_TOUCHING_ZONE / 2.0;
         let end_point = top_left_corner_of_block + endpoint_offset_for_test;
         let adjacent_squares_occupied = visible_xy_to_actual_xy([
-            [false, true, false],
+            [false, true, true],
             [true, true, true],
-            [false, true, false],
+            [false, false, false],
         ]); // orthogonally surrounded
         let maybe_collision = single_block_linecast_with_filled_cracks(
             start_point,
@@ -1475,7 +1533,7 @@ mod tests {
             grid_square_center,
             adjacent_squares_occupied,
         );
-        dbg!(&maybe_collision);
+        dbg!(start_point, end_point, &maybe_collision);
         assert!(maybe_collision.is_none());
     }
 }

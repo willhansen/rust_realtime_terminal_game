@@ -34,9 +34,6 @@ use termion::raw::IntoRawMode;
 use glyph::*;
 use utility::*;
 
-type fPoint = Point<f32>;
-type iPoint = Point<i32>;
-
 // const player_jump_height: i32 = 3;
 // const player_jump_hang_frames: i32 = 4;
 const MAX_FPS: i32 = 60; // frames per second
@@ -1400,7 +1397,7 @@ impl Game {
                     a_dist.partial_cmp(&b_dist).unwrap()
                 });
                 let closest_collision_to_start = collisions[0];
-                dbg!(&closest_collision_to_start);
+                //dbg!(&closest_collision_to_start);
 
                 // might have missed one
                 let normal_square = closest_collision_to_start.collided_block_square
@@ -1420,7 +1417,7 @@ impl Game {
                         //dbg!( start_pos, end_pos, normal_square, moving_square_side_length, adjacent_occupancy, &collision );
                         return Some(collision);
                     } else {
-                        panic!("No collision with wall block normal to collision");
+                        //panic!("No collision with wall block normal to collision");
                     }
                 }
                 return Some(closest_collision_to_start);
