@@ -69,6 +69,7 @@ const DEFAULT_PARTICLE_LIFETIME_IN_SECONDS: f32 = 0.5;
 const DEFAULT_PARTICLE_LIFETIME_IN_TICKS: f32 =
     DEFAULT_PARTICLE_LIFETIME_IN_SECONDS * MAX_FPS as f32;
 const DEFAULT_PARTICLE_STEP_PER_TICK: f32 = 0.1;
+const DEFAULT_PARTICLE_TURN_RADIANS_PER_TICK: f32 = 0.001;
 const DEFAULT_MAX_COMPRESSION: f32 = 0.2;
 const DEFAULT_TICKS_TO_MAX_COMPRESSION: f32 = 5.0;
 const DEFAULT_TICKS_TO_END_COMPRESSION: f32 = 10.0;
@@ -643,6 +644,8 @@ impl Game {
     fn apply_particle_physics(&mut self, dt_in_ticks: f32) {
         self.apply_particle_lifetimes(dt_in_ticks);
 
+        self.turn_particles_towards_player(dt_in_ticks);
+
         self.apply_particle_velocities(dt_in_ticks);
 
         self.delete_out_of_bounds_particles();
@@ -706,6 +709,20 @@ impl Game {
 
         for i in indexes {
             self.particles.remove(i);
+        }
+    }
+
+    fn turn_particles_towards_player(&mut self, dt_in_ticks: f32) {
+        for i in 0..self.particles.len() {
+            let particle = &mut self.particles[i];
+            let vect_to_player = self.player.pos - particle.pos;
+            if particle.vel != zero_f() && vect_to_player != zero_f() {
+                particle.vel = rotate_vector_towards(
+                    particle.vel,
+                    vect_to_player,
+                    DEFAULT_PARTICLE_TURN_RADIANS_PER_TICK * dt_in_ticks,
+                );
+            }
         }
     }
 

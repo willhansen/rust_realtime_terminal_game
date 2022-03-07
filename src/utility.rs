@@ -726,6 +726,14 @@ pub fn to_standard_angle(a: f32) -> f32 {
     modulo(a, TAU)
 }
 
+pub fn angle_of_vector(v: fPoint) -> f32 {
+    v.y().atan2(v.x())
+}
+
+pub fn vector_from_radial(angle: f32, length: f32) -> fPoint {
+    p(angle.cos(), angle.sin()) * length
+}
+
 pub fn shortest_delta_to_angle(start_angle: f32, end_angle: f32) -> f32 {
     let a = to_standard_angle(start_angle);
     let b = to_standard_angle(end_angle);
@@ -745,6 +753,14 @@ pub fn rotate_angle_towards(start_angle: f32, target_angle: f32, max_step: f32) 
     } else {
         start_angle + diff.sign() * max_step
     }
+}
+
+pub fn rotate_vector_towards(start: fPoint, target: fPoint, max_angle_step: f32) -> fPoint {
+    let start_angle = angle_of_vector(start);
+    let start_length = magnitude(start);
+    let target_angle = angle_of_vector(target);
+    let end_angle = rotate_angle_towards(start_angle, target_angle, max_angle_step);
+    vector_from_radial(end_angle, start_length)
 }
 
 // for tests
