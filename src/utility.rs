@@ -9,6 +9,7 @@ use num::clamp;
 use num::traits::Pow;
 use ordered_float::OrderedFloat;
 use rand::Rng;
+use std::f32::consts::{PI, TAU};
 
 pub type fPoint = Point<f32>;
 pub type iPoint = Point<i32>;
@@ -645,12 +646,16 @@ pub fn lerp_2d(a: Point<f32>, b: Point<f32>, t: f32) -> Point<f32> {
     p(lerp(a.x(), b.x(), t), lerp(a.y(), b.y(), t))
 }
 
-pub fn rotated_degrees(vect: Point<f32>, degrees: f32) -> Point<f32> {
+pub fn rotated(vect: Point<f32>, radians: f32) -> Point<f32> {
     let (x, y) = vect.x_y();
     p(
-        x * degrees.to_radians().cos() - y * degrees.to_radians().sin(),
-        x * degrees.to_radians().sin() + y * degrees.to_radians().cos(),
+        x * radians.cos() - y * radians.sin(),
+        x * radians.sin() + y * radians.cos(),
     )
+}
+
+pub fn rotated_degrees(vect: Point<f32>, degrees: f32) -> Point<f32> {
+    rotated(vect, degrees.to_radians())
 }
 
 pub fn int_to_T<T: num::Signed>(x: i32) -> T {
@@ -712,10 +717,34 @@ pub fn time_synchronized_points_on_line(
 pub fn angle_between(v1: fPoint, v2: fPoint) -> f32 {
     (v1.dot(v2) / (magnitude(v1) * magnitude(v2))).acos()
 }
+pub fn modulo(a: f32, b: f32) -> f32 {
+    ((a % b) + b) % b
+}
 
+// [0, TAU)
+pub fn to_standard_angle(a: f32) -> f32 {
+    modulo(a, TAU)
+}
+
+pub fn shortest_delta_to_angle(start_angle: f32, end_angle: f32) -> f32 {
+    let a = to_standard_angle(start_angle);
+    let b = to_standard_angle(end_angle);
+    let b_plus = b + TAU;
+    let b_minus = b - TAU;
+    let b_closest = *vec![b, b_plus, b_minus]
+        .iter()
+        .min_by_key(|&&b| OrderedFloat((b - a).abs()))
+        .unwrap();
+    b_closest - a
+}
 // In radians
-pub fn rotate_angle_towards(start_angle: f32, target_angle: f32, rotation_speed: f32) -> f32 {
-    5.0
+pub fn rotate_angle_towards(start_angle: f32, target_angle: f32, max_step: f32) -> f32 {
+    let diff = shortest_delta_to_angle(start_angle, target_angle);
+    if max_step.abs() > diff.abs() {
+        target_angle
+    } else {
+        start_angle + diff.sign() * max_step
+    }
 }
 
 // for tests
@@ -1576,20 +1605,23 @@ mod tests {
     }
     #[test]
     fn test_rotate_angle_towards__modulo_two_pi() {
-        assert!(nearly_equal(rotate_angle_towards(4.0 * PI, 1.0, 0.1), 0.1));
+        assert!(nearly_equal(
+            to_standard_angle(rotate_angle_towards(4.0 * PI, 1.0, 0.1)),
+            0.1
+        ));
     }
     #[test]
     fn test_rotate_angle_towards__across_branch_point() {
         assert!(nearly_equal(
-            rotate_angle_towards(PI - 0.1, -PI + 0.1, 0.01),
-            PI - 0.09
+            rotate_angle_towards(0.1, TAU - 0.1, 0.01),
+            0.09
         ));
     }
     #[test]
     fn test_rotate_angle_towards__across_branch_point_reversed() {
         assert!(nearly_equal(
-            rotate_angle_towards(-PI + 0.1, PI - 0.1, 0.01),
-            -PI + 0.09
+            rotate_angle_towards(TAU - 0.1, 0.1, 0.01),
+            TAU - 0.09
         ));
     }
 }
