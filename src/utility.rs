@@ -645,7 +645,7 @@ pub fn lerp_2d(a: Point<f32>, b: Point<f32>, t: f32) -> Point<f32> {
     p(lerp(a.x(), b.x(), t), lerp(a.y(), b.y(), t))
 }
 
-pub fn rotated(vect: Point<f32>, degrees: f32) -> Point<f32> {
+pub fn rotated_degrees(vect: Point<f32>, degrees: f32) -> Point<f32> {
     let (x, y) = vect.x_y();
     p(
         x * degrees.to_radians().cos() - y * degrees.to_radians().sin(),
@@ -706,6 +706,16 @@ pub fn time_synchronized_points_on_line(
         output_points.push(lerp_2d(start_point, end_point, time_as_fraction));
     }
     output_points
+}
+
+// In radians
+pub fn angle_between(v1: fPoint, v2: fPoint) -> f32 {
+    (v1.dot(v2) / (magnitude(v1) * magnitude(v2))).acos()
+}
+
+// In radians
+pub fn rotate_angle_towards(start_angle: f32, target_angle: f32, rotation_speed: f32) -> f32 {
+    5.0
 }
 
 // for tests
@@ -779,6 +789,7 @@ mod tests {
     use super::*;
     use crate::RADIUS_OF_EXACTLY_TOUCHING_ZONE;
     use assert2::assert;
+    use std::f32::consts::PI;
 
     #[test]
     fn test_single_block_unit_squarecast__horizontal_hit() {
@@ -1269,45 +1280,45 @@ mod tests {
     #[test]
     fn test_rotated() {
         assert!(abs_diff_eq!(
-            rotated(p(1.0, 0.0), 90.0).x(),
+            rotated_degrees(p(1.0, 0.0), 90.0).x(),
             0.0,
             epsilon = 0.000001
         ));
         assert!(abs_diff_eq!(
-            rotated(p(1.0, 0.0), 90.0).y(),
+            rotated_degrees(p(1.0, 0.0), 90.0).y(),
             1.0,
             epsilon = 0.000001
         ));
 
         assert!(abs_diff_eq!(
-            rotated(p(0.0, 1.0), 90.0).x(),
+            rotated_degrees(p(0.0, 1.0), 90.0).x(),
             -1.0,
             epsilon = 0.000001
         ));
         assert!(abs_diff_eq!(
-            rotated(p(0.0, 1.0), 90.0).y(),
+            rotated_degrees(p(0.0, 1.0), 90.0).y(),
             0.0,
             epsilon = 0.000001
         ));
 
         assert!(abs_diff_eq!(
-            rotated(p(-1.0, 0.0), 90.0).x(),
+            rotated_degrees(p(-1.0, 0.0), 90.0).x(),
             0.0,
             epsilon = 0.000001
         ));
         assert!(abs_diff_eq!(
-            rotated(p(-1.0, 0.0), 90.0).y(),
+            rotated_degrees(p(-1.0, 0.0), 90.0).y(),
             -1.0,
             epsilon = 0.000001
         ));
 
         assert!(abs_diff_eq!(
-            rotated(p(0.0, -1.0), 90.0).x(),
+            rotated_degrees(p(0.0, -1.0), 90.0).x(),
             1.0,
             epsilon = 0.000001
         ));
         assert!(abs_diff_eq!(
-            rotated(p(0.0, -1.0), 90.0).y(),
+            rotated_degrees(p(0.0, -1.0), 90.0).y(),
             0.0,
             epsilon = 0.000001
         ));
@@ -1535,5 +1546,50 @@ mod tests {
         );
         dbg!(start_point, end_point, &maybe_collision);
         assert!(maybe_collision.is_none());
+    }
+
+    #[test]
+    fn test_angle_between() {
+        assert!(nearly_equal(angle_between(right_f(), right_f()), 0.0));
+        assert!(nearly_equal(angle_between(right_f(), up_f()), PI / 2.0));
+        assert!(nearly_equal(angle_between(down_f(), up_f()), PI));
+        assert!(nearly_equal(
+            angle_between(down_f(), p(-10.0, -10.0)),
+            PI / 4.0
+        ));
+    }
+    #[test]
+    fn test_rotate_angle_towards__simple_positive() {
+        assert!(nearly_equal(rotate_angle_towards(0.0, 1.0, 0.1), 0.1));
+    }
+    #[test]
+    fn test_rotate_angle_towards__no_overshoot_positive() {
+        assert!(nearly_equal(rotate_angle_towards(0.0, 1.0, 10.0), 1.0));
+    }
+    #[test]
+    fn test_rotate_angle_towards__simple_negative() {
+        assert!(nearly_equal(rotate_angle_towards(0.0, -1.0, 0.1), -0.1));
+    }
+    #[test]
+    fn test_rotate_angle_towards__do_something_for_180_degree_case() {
+        assert!(!nearly_equal(rotate_angle_towards(0.0, PI, 0.1), PI));
+    }
+    #[test]
+    fn test_rotate_angle_towards__modulo_two_pi() {
+        assert!(nearly_equal(rotate_angle_towards(4.0 * PI, 1.0, 0.1), 0.1));
+    }
+    #[test]
+    fn test_rotate_angle_towards__across_branch_point() {
+        assert!(nearly_equal(
+            rotate_angle_towards(PI - 0.1, -PI + 0.1, 0.01),
+            PI - 0.09
+        ));
+    }
+    #[test]
+    fn test_rotate_angle_towards__across_branch_point_reversed() {
+        assert!(nearly_equal(
+            rotate_angle_towards(-PI + 0.1, PI - 0.1, 0.01),
+            -PI + 0.09
+        ));
     }
 }

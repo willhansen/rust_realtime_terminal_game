@@ -575,7 +575,7 @@ impl Game {
                 Key::Char('1') => self.selected_block = Block::Air,
                 Key::Char('2') => self.selected_block = Block::Wall,
                 Key::Char('3') => self.selected_block = Block::Brick,
-                Key::Char('c') => self.clear(),
+                Key::Char('c') => self.particles.clear(),
                 Key::Char('r') => self.place_player(
                     self.terminal_size.0 as f32 / 2.0,
                     self.terminal_size.1 as f32 / 2.0,
@@ -980,8 +980,8 @@ impl Game {
             end_time,
             1.0 / time_frequency_of_speed_particles,
         ) {
-            self.place_particle_with_velocity(pos, rotated(particle_vel, -90.0));
-            self.place_particle_with_velocity(pos, rotated(particle_vel, 90.0));
+            self.place_particle_with_velocity(pos, rotated_degrees(particle_vel, -90.0));
+            self.place_particle_with_velocity(pos, rotated_degrees(particle_vel, 90.0));
         }
     }
 
@@ -1402,6 +1402,7 @@ impl Game {
                 // might have missed one
                 let normal_square = closest_collision_to_start.collided_block_square
                     + closest_collision_to_start.normal;
+                // TODO: have this account for block expansion from other adjacent blocks?
                 if !point_inside_square(start_pos, normal_square)
                     && self.in_world(normal_square)
                     && self.get_block(normal_square) == Block::Wall
@@ -1417,6 +1418,7 @@ impl Game {
                         //dbg!( start_pos, end_pos, normal_square, moving_square_side_length, adjacent_occupancy, &collision );
                         return Some(collision);
                     } else {
+                        // Need to disable this panic due to the case of internal corners.  the corner block expands upwards from having a block orthogonal, and the player may collide with that corner block when moving into a corner as a result.  The block normal to that collision is the block the player is standing on.
                         //panic!("No collision with wall block normal to collision");
                     }
                 }
@@ -1664,6 +1666,15 @@ mod tests {
         let platform_y = game.player.pos.y() as i32 - 1;
         game.place_line_of_blocks((10, platform_y), (20, platform_y), Block::Wall);
         return game;
+    }
+    fn set_up_particle_passing_over_player_on_platform() -> Game {
+        let mut game = set_up_player_on_platform();
+        let particle_start_pos = game.player.pos + up_f() * 5.0;
+        game.place_particle_with_velocity(
+            particle_start_pos,
+            right_f() * DEFAULT_PARTICLE_STEP_PER_TICK,
+        );
+        game
     }
 
     fn set_up_player_running_full_speed_to_right_on_platform() -> Game {
@@ -4131,5 +4142,23 @@ mod tests {
         game.player.desired_direction = p(0, 1);
         game.player_dash();
         game.tick_physics();
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_particles_should_slowly_turn_towards_player() {
+        let mut game = set_up_particle_passing_over_player_on_platform();
+        let start_particle_vel = game.particles[0].vel;
+
+        game.tick_physics();
+
+        // less vel right
+        assert!(game.particles[0].vel.x() < start_particle_vel.x());
+        // more vel down
+        assert!(game.particles[0].vel.y() < start_particle_vel.y());
+        // same speed
+        assert!(points_nearly_equal(
+            game.particles[0].vel,
+            start_particle_vel
+        ));
     }
 }
