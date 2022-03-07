@@ -254,6 +254,7 @@ struct Game {
     bullet_time_factor: f32,
     player: Player,
     particle_amalgamation_density: i32,
+    particle_rotation_speed_towards_player: f32,
 }
 
 impl Game {
@@ -274,6 +275,7 @@ impl Game {
             bullet_time_factor: 0.1,
             player: Player::new(),
             particle_amalgamation_density: DEFAULT_PARTICLE_AMALGAMATION_DENSITY,
+            particle_rotation_speed_towards_player: DEFAULT_PARTICLE_TURN_RADIANS_PER_TICK,
         }
     }
 
@@ -644,7 +646,9 @@ impl Game {
     fn apply_particle_physics(&mut self, dt_in_ticks: f32) {
         self.apply_particle_lifetimes(dt_in_ticks);
 
-        self.turn_particles_towards_player(dt_in_ticks);
+        if self.player.alive {
+            self.turn_particles_towards_player(dt_in_ticks);
+        }
 
         self.apply_particle_velocities(dt_in_ticks);
 
@@ -720,7 +724,7 @@ impl Game {
                 particle.vel = rotate_vector_towards(
                     particle.vel,
                     vect_to_player,
-                    DEFAULT_PARTICLE_TURN_RADIANS_PER_TICK * dt_in_ticks,
+                    self.particle_rotation_speed_towards_player * dt_in_ticks,
                 );
             }
         }
@@ -3848,6 +3852,7 @@ mod tests {
     fn test_perpendicular_speed_lines_move_perpendicular() {
         let dir = direction(p(1.25, 3.38)); // arbitrary
         let mut game = set_up_player_flying_fast_through_space_in_direction(dir);
+        game.particle_rotation_speed_towards_player = 0.0;
         game.player.speed_line_behavior = SpeedLineType::PerpendicularLines;
         let v1 = game.player.vel;
         game.tick_physics();
@@ -4173,9 +4178,9 @@ mod tests {
         // more vel down
         assert!(game.particles[0].vel.y() < start_particle_vel.y());
         // same speed
-        assert!(points_nearly_equal(
-            game.particles[0].vel,
-            start_particle_vel
+        assert!(nearly_equal(
+            magnitude(game.particles[0].vel),
+            magnitude(start_particle_vel)
         ));
     }
 }
