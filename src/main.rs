@@ -53,14 +53,14 @@ const DEFAULT_PLAYER_JUMP_DELTA_V: f32 = 1.0;
 const VERTICAL_STRETCH_FACTOR: f32 = 2.0; // because the grid is not really square
 
 const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
-const DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION: f32 = 1.0;
+const DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION: f32 = 0.6;
 const DEFAULT_PLAYER_ACCELERATION_FROM_AIR_TRACTION: f32 =
     DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION;
 const DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION: f32 =
     DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION / 5.0;
-const DEFAULT_PLAYER_MAX_RUN_SPEED: f32 = 0.5;
+const DEFAULT_PLAYER_MAX_RUN_SPEED: f32 = 0.7;
 const DEFAULT_PLAYER_GROUND_FRICTION_START_SPEED: f32 = 0.7;
-const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED * 3.0;
+const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED * 6.0;
 const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
 const DEFAULT_PLAYER_MIDAIR_MAX_MOVE_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED;
 const DEFAULT_PLAYER_AIR_FRICTION_START_SPEED: f32 = DEFAULT_PLAYER_DASH_SPEED;
@@ -186,7 +186,7 @@ struct Player {
     ground_friction_start_speed: f32,
     air_friction_start_speed: f32,
     max_midair_move_speed: f32,
-    color_change_speed_threshold: f32,
+    speed_of_blue: f32,
     vel: Point<f32>,
     desired_direction: Point<i32>,
     jump_delta_v: f32,
@@ -215,10 +215,7 @@ impl Player {
             ground_friction_start_speed: DEFAULT_PLAYER_GROUND_FRICTION_START_SPEED,
             air_friction_start_speed: DEFAULT_PLAYER_AIR_FRICTION_START_SPEED,
             max_midair_move_speed: DEFAULT_PLAYER_MIDAIR_MAX_MOVE_SPEED,
-            color_change_speed_threshold: magnitude(p(
-                DEFAULT_PLAYER_MAX_RUN_SPEED,
-                DEFAULT_PLAYER_JUMP_DELTA_V,
-            )),
+            speed_of_blue: DEFAULT_PLAYER_DASH_SPEED,
             vel: Point::<f32>::new(0.0, 0.0),
             desired_direction: p(0, 0),
             jump_delta_v: DEFAULT_PLAYER_JUMP_DELTA_V,
@@ -297,17 +294,10 @@ impl Game {
 
     fn set_player_jump_delta_v(&mut self, delta_v: f32) {
         self.player.jump_delta_v = delta_v;
-        self.update_player_color_change_speed_thresh();
     }
 
     fn set_player_max_run_speed(&mut self, speed: f32) {
         self.player.max_run_speed = speed;
-        self.update_player_color_change_speed_thresh();
-    }
-
-    fn update_player_color_change_speed_thresh(&mut self) {
-        self.player.color_change_speed_threshold =
-            magnitude(p(self.player.max_run_speed, self.player.jump_delta_v));
     }
 
     fn screen_to_world(&self, terminal_position: &(u16, u16)) -> (i32, i32) {
@@ -858,8 +848,7 @@ impl Game {
             inferred_speed = magnitude(self.player.pos - *last_pos);
         }
         let actual_speed = magnitude(self.player.vel);
-        actual_speed > self.player.color_change_speed_threshold
-            || inferred_speed > self.player.color_change_speed_threshold
+        actual_speed >= self.player.speed_of_blue || inferred_speed >= self.player.speed_of_blue
     }
 
     fn update_output_buffer(&mut self) {
@@ -1001,8 +990,16 @@ impl Game {
             end_time,
             1.0 / time_frequency_of_speed_particles,
         ) {
-            self.place_particle_with_velocity(pos, rotated_degrees(particle_vel, -90.0));
-            self.place_particle_with_velocity(pos, rotated_degrees(particle_vel, 90.0));
+            self.place_particle_with_velocity_and_lifetime(
+                pos,
+                rotated_degrees(particle_vel, -90.0),
+                self.player.speed_line_lifetime_in_ticks,
+            );
+            self.place_particle_with_velocity_and_lifetime(
+                pos,
+                rotated_degrees(particle_vel, 90.0),
+                self.player.speed_line_lifetime_in_ticks,
+            );
         }
     }
 
@@ -1497,10 +1494,10 @@ impl Game {
 fn init_world(width: u16, height: u16) -> Game {
     let mut game = Game::new(width, height);
     //let mut game = Game::new(10, 40);
-    game.set_player_jump_delta_v(1.0);
-    game.player.acceleration_from_gravity = 0.05;
-    game.player.acceleration_from_floor_traction = 0.6;
-    game.set_player_max_run_speed(0.7);
+    //game.set_player_jump_delta_v(1.0);
+    //game.player.acceleration_from_gravity = 0.05;
+    //game.player.acceleration_from_floor_traction = 0.6;
+    //game.set_player_max_run_speed(0.7);
 
     game.place_boundary_wall();
 
@@ -1728,7 +1725,7 @@ mod tests {
     fn set_up_player_flying_fast_through_space_in_direction(dir: Point<f32>) -> Game {
         let mut game = set_up_just_player();
         be_in_space(&mut game);
-        let vel = direction(dir) * game.player.color_change_speed_threshold * 1.1;
+        let vel = direction(dir) * game.player.speed_of_blue * 1.1;
         game.player.vel = vel;
         game
     }
@@ -2156,6 +2153,7 @@ mod tests {
     fn test_move_player() {
         let mut game = set_up_player_on_platform();
         game.player.max_run_speed = 1.0;
+        game.player.acceleration_from_floor_traction = 1.0;
         game.player.desired_direction.set_x(1);
 
         game.tick_physics();
@@ -2226,6 +2224,7 @@ mod tests {
     fn test_move_player_quickly() {
         let mut game = set_up_player_on_platform();
         game.player.max_run_speed = 2.0;
+        game.player.acceleration_from_floor_traction = 1.0;
         game.player.desired_direction.set_x(1);
 
         game.tick_physics();
@@ -2897,7 +2896,8 @@ mod tests {
     #[timeout(100)]
     fn test_braille_left_behind_when_go_fast() {
         let mut game = set_up_player_on_platform_in_box();
-        game.player.vel = p(game.player.color_change_speed_threshold * 5.0, 0.0);
+        game.player.vel = p(game.player.speed_of_blue * 5.0, 0.0);
+        game.player.speed_line_behavior = SpeedLineType::StillLine;
         let start_pos = game.player.pos;
         game.tick_physics();
         game.update_output_buffer();
@@ -2980,22 +2980,24 @@ mod tests {
         assert!(game.player.pos.x() == 35.0);
     }
 
+    #[ignore] // removed feature
     #[test]
     #[timeout(100)]
     fn update_color_threshold_with_jump_delta_v_update() {
         let mut game = set_up_game();
-        let start_thresh = game.player.color_change_speed_threshold;
+        let start_thresh = game.player.speed_of_blue;
         game.set_player_jump_delta_v(game.player.jump_delta_v + 1.0);
-        assert!(game.player.color_change_speed_threshold != start_thresh);
+        assert!(game.player.speed_of_blue != start_thresh);
     }
 
+    #[ignore] // removed feature
     #[test]
     #[timeout(100)]
     fn update_color_threshold_with_speed_update() {
         let mut game = set_up_game();
-        let start_thresh = game.player.color_change_speed_threshold;
+        let start_thresh = game.player.speed_of_blue;
         game.set_player_max_run_speed(game.player.max_run_speed + 1.0);
-        assert!(game.player.color_change_speed_threshold != start_thresh);
+        assert!(game.player.speed_of_blue != start_thresh);
     }
 
     #[test]
@@ -3095,7 +3097,7 @@ mod tests {
         game.player.pos.add_assign(p(10.0, 0.0));
         game.player.desired_direction = p(0, -1);
         game.player.dash_vel = 100.0;
-        game.player.color_change_speed_threshold = 9.0;
+        game.player.speed_of_blue = 9.0;
 
         game.player_dash();
         game.tick_physics();
@@ -4170,6 +4172,7 @@ mod tests {
     fn test_particles_should_slowly_turn_towards_player() {
         let mut game = set_up_particle_passing_over_player_on_platform();
         let start_particle_vel = game.particles[0].vel;
+        game.particle_rotation_speed_towards_player = 0.01;
 
         game.tick_physics();
 
