@@ -1461,27 +1461,15 @@ impl Game {
         }
         return None;
     }
-
     fn player_exactly_touching_wall_in_direction(&self, direction: Point<i32>) -> bool {
-        for rel_x in -1..=1 {
-            for rel_y in -1..=1 {
-                let rel_square = p(rel_x, rel_y);
-                if rel_square != p(0, 0) && direction.dot(rel_square) > 0 {
-                    let target_square = snap_to_grid(self.player.pos) + rel_square;
-                    if let Some(block) = self.get_block_relative_to_player(rel_square) {
-                        if block == Block::Wall
-                            && floating_square_orthogonally_touching_fixed_square(
-                                self.player.pos,
-                                target_square,
-                            )
-                        {
-                            return true;
-                        }
-                    }
-                }
-            }
+        let direction_f = floatify(direction);
+        if let Some(collision) =
+            self.unit_squarecast(self.player.pos, self.player.pos + direction_f * 0.1)
+        {
+            project(collision.collider_pos, direction_f) == project(self.player.pos, direction_f)
+        } else {
+            false
         }
-        false
     }
 
     fn in_world(&self, pos: Point<i32>) -> bool {
@@ -4185,5 +4173,19 @@ mod tests {
             magnitude(game.particles[0].vel),
             magnitude(start_particle_vel)
         ));
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_player_does_not_get_stuck_on_nothing_on_flat_floor() {
+        let N = 100;
+        for i in 0..N {
+            let mut game = set_up_player_starting_to_move_right_on_platform();
+            let dx = i as f32 / N as f32 * 1.0;
+            game.player.pos.add_assign(right_f() * dx);
+            let start_pos = game.player.pos;
+            game.tick_physics();
+            assert!(game.player.pos != start_pos);
+        }
     }
 }
