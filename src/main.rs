@@ -65,11 +65,11 @@ const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
 const DEFAULT_PLAYER_MIDAIR_MAX_MOVE_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED;
 const DEFAULT_PLAYER_AIR_FRICTION_START_SPEED: f32 = DEFAULT_PLAYER_DASH_SPEED;
 
-const DEFAULT_PARTICLE_LIFETIME_IN_SECONDS: f32 = 0.5;
+const DEFAULT_PARTICLE_LIFETIME_IN_SECONDS: f32 = f32::INFINITY;
 const DEFAULT_PARTICLE_LIFETIME_IN_TICKS: f32 =
     DEFAULT_PARTICLE_LIFETIME_IN_SECONDS * MAX_FPS as f32;
 const DEFAULT_PARTICLE_STEP_PER_TICK: f32 = 0.1;
-const DEFAULT_PARTICLE_TURN_RADIANS_PER_TICK: f32 = 0.001;
+const DEFAULT_PARTICLE_TURN_RADIANS_PER_TICK: f32 = 0.0001;
 const DEFAULT_MAX_COMPRESSION: f32 = 0.2;
 const DEFAULT_TICKS_TO_MAX_COMPRESSION: f32 = 5.0;
 const DEFAULT_TICKS_TO_END_COMPRESSION: f32 = 10.0;
@@ -230,7 +230,7 @@ impl Player {
             dash_adds_to_vel: false,
             last_collision: None,
             moved_normal_to_collision_since_collision: false,
-            speed_line_lifetime_in_ticks: 0.5 * MAX_FPS as f32,
+            speed_line_lifetime_in_ticks: DEFAULT_PARTICLE_LIFETIME_IN_TICKS,
             speed_line_behavior: SpeedLineType::PerpendicularLines,
         }
     }
@@ -284,7 +284,7 @@ impl Game {
         return self.time_in_ticks() - t;
     }
 
-    fn time_since_last_player_collision(&self) -> Option<f32> {
+    fn ticks_since_last_player_collision(&self) -> Option<f32> {
         if self.player.last_collision.is_some() {
             Some(self.time_since(self.player.last_collision.as_ref().unwrap().time_in_ticks))
         } else {
@@ -816,12 +816,21 @@ impl Game {
         }
     }
 
+    fn get_player_coming_out_of_compression(&self) -> bool {
+        self.player_is_in_compression()
+            && self.ticks_since_last_player_collision().unwrap() > DEFAULT_TICKS_TO_MAX_COMPRESSION
+    }
+
+    fn player_is_in_compression(&self) -> bool {
+        self.get_player_compression_fraction() < 1.0
+    }
+
     fn get_player_compression_fraction(&self) -> f32 {
         if self.player.moved_normal_to_collision_since_collision {
             return 1.0;
         }
 
-        if let Some(ticks_from_collision) = self.time_since_last_player_collision() {
+        if let Some(ticks_from_collision) = self.ticks_since_last_player_collision() {
             return if ticks_from_collision < DEFAULT_TICKS_TO_MAX_COMPRESSION {
                 lerp(
                     1.0,
@@ -1376,8 +1385,6 @@ impl Game {
         end_pos: Point<f32>,
         moving_square_side_length: f32,
     ) -> Option<SquarecastCollision> {
-        let ideal_step = end_pos - start_pos;
-
         let mut intermediate_player_positions_to_check = lin_space_from_start_2d(
             start_pos,
             end_pos,
@@ -1673,6 +1680,27 @@ mod tests {
         game.place_line_of_blocks((10, platform_y), (20, platform_y), Block::Wall);
         return game;
     }
+
+    fn get_vertical_jump_landing_player_block_collision() -> PlayerBlockCollision {
+        PlayerBlockCollision {
+            time_in_ticks: 0.0,
+            normal: p(0, 1),
+            collider_velocity: down_f() * DEFAULT_PLAYER_JUMP_DELTA_V,
+            collider_pos: p(5.0, 6.0),
+            collided_block_square: p(5, 5),
+        }
+    }
+
+    fn set_up_player_decompressing_on_platform() -> Game {
+        let mut game = set_up_player_on_platform();
+        let mut collision = get_vertical_jump_landing_player_block_collision();
+        collision.time_in_ticks = game.time_in_ticks()
+            - (DEFAULT_TICKS_TO_MAX_COMPRESSION
+                + (DEFAULT_TICKS_TO_END_COMPRESSION - DEFAULT_TICKS_TO_MAX_COMPRESSION) / 2.0);
+        game.player.last_collision = Some(collision);
+        game
+    }
+
     fn set_up_particle_passing_over_player_on_platform() -> Game {
         let mut game = set_up_player_on_platform();
         let particle_start_pos = game.player.pos + up_f() * 5.0;
@@ -3322,7 +3350,7 @@ mod tests {
         game.player.vel = collision_velocity;
         game.tick_physics();
         assert!(nearly_equal(
-            game.time_since_last_player_collision().unwrap(),
+            game.ticks_since_last_player_collision().unwrap(),
             1.0
         ));
         assert!(game.player.last_collision.as_ref().unwrap().normal == p(0, 1));
@@ -3336,7 +3364,7 @@ mod tests {
         );
         game.tick_physics();
         assert!(nearly_equal(
-            game.time_since_last_player_collision().unwrap(),
+            game.ticks_since_last_player_collision().unwrap(),
             2.0
         ));
         assert!(game.player.last_collision.as_ref().unwrap().normal == p(0, 1));
@@ -3351,7 +3379,7 @@ mod tests {
         let collision_velocity = p(-10.0, 0.0);
         game.player.vel = collision_velocity;
         game.tick_physics();
-        assert!(game.time_since_last_player_collision() == Some(1.0));
+        assert!(game.ticks_since_last_player_collision() == Some(1.0));
         assert!(game.player.last_collision.as_ref().unwrap().normal == p(1, 0));
         assert!(
             game.player
@@ -3371,18 +3399,18 @@ mod tests {
         game.tick_physics();
         let ticks_before_bullet_time = 1.0;
         assert!(nearly_equal(
-            game.time_since_last_player_collision().unwrap(),
+            game.ticks_since_last_player_collision().unwrap(),
             ticks_before_bullet_time
         ));
         game.toggle_bullet_time();
         game.tick_physics();
         assert!(nearly_equal(
-            game.time_since_last_player_collision().unwrap(),
+            game.ticks_since_last_player_collision().unwrap(),
             game.bullet_time_factor + ticks_before_bullet_time
         ));
         game.tick_physics();
         assert!(nearly_equal(
-            game.time_since_last_player_collision().unwrap(),
+            game.ticks_since_last_player_collision().unwrap(),
             game.bullet_time_factor * 2.0 + ticks_before_bullet_time
         ));
     }
@@ -3438,7 +3466,7 @@ mod tests {
         game.tick_physics();
         assert!(game.player.last_collision.is_some());
         assert!(nearly_equal(
-            game.time_since_last_player_collision().unwrap(),
+            game.ticks_since_last_player_collision().unwrap(),
             1.0
         ));
 
@@ -3472,7 +3500,7 @@ mod tests {
         game.player.vel = p(0.0, -10.0);
         game.tick_physics();
         assert!(nearly_equal(
-            game.time_since_last_player_collision().unwrap(),
+            game.ticks_since_last_player_collision().unwrap(),
             1.0
         ));
         assert!(game.get_player_compression_fraction() < 1.0);
@@ -3493,7 +3521,7 @@ mod tests {
         game.player.vel = p(0.0, 10.0);
         game.tick_physics();
         assert!(nearly_equal(
-            game.time_since_last_player_collision().unwrap(),
+            game.ticks_since_last_player_collision().unwrap(),
             1.0
         ));
 
@@ -3512,7 +3540,7 @@ mod tests {
         game.player.vel = p(10.0, 0.0);
         game.tick_physics();
         assert!(nearly_equal(
-            game.time_since_last_player_collision().unwrap(),
+            game.ticks_since_last_player_collision().unwrap(),
             1.0
         ));
         assert!(game.get_player_compression_fraction() < 1.0);
@@ -3547,7 +3575,7 @@ mod tests {
         game.player.vel = p(0.0, -1.0);
         game.tick_physics();
         assert!(nearly_equal(
-            game.time_since_last_player_collision().unwrap(),
+            game.ticks_since_last_player_collision().unwrap(),
             1.0
         ));
         assert!(game.player.moved_normal_to_collision_since_collision == false);
@@ -3564,7 +3592,7 @@ mod tests {
         game.player.desired_direction = p(1, 0);
         game.tick_physics();
         assert!(nearly_equal(
-            game.time_since_last_player_collision().unwrap(),
+            game.ticks_since_last_player_collision().unwrap(),
             1.0
         ));
         assert!(game.player.moved_normal_to_collision_since_collision == false);
@@ -3701,7 +3729,7 @@ mod tests {
         game.tick_physics();
 
         assert!(nearly_equal(
-            game.time_since_last_player_collision().unwrap(),
+            game.ticks_since_last_player_collision().unwrap(),
             0.5
         ));
     }
@@ -3723,8 +3751,8 @@ mod tests {
         game1.tick_physics();
         game2.tick_physics();
 
-        let game1_time_before_impact = 1.0 - game1.time_since_last_player_collision().unwrap();
-        let game2_time_before_impact = 1.0 - game2.time_since_last_player_collision().unwrap();
+        let game1_time_before_impact = 1.0 - game1.ticks_since_last_player_collision().unwrap();
+        let game2_time_before_impact = 1.0 - game2.ticks_since_last_player_collision().unwrap();
         assert!(game1_time_before_impact == game2_time_before_impact * VERTICAL_STRETCH_FACTOR);
     }
 
@@ -3825,11 +3853,21 @@ mod tests {
     #[timeout(100)]
     fn test_fps_display() {}
 
-    #[ignore]
-    // like a spring
+    /// like a spring
     #[test]
     #[timeout(100)]
-    fn test_jump_bonus_if_jump_when_coming_out_of_compression() {}
+    fn test_jump_bonus_if_jump_when_coming_out_of_compression() {
+        let mut game1 = set_up_player_on_platform();
+        let mut game2 = set_up_player_decompressing_on_platform();
+
+        game1.player_jump_if_possible();
+        game2.player_jump_if_possible();
+
+        game1.tick_physics();
+        game2.tick_physics();
+
+        assert!(game2.player.vel.y() > game1.player.vel.y());
+    }
 
     #[ignore]
     // just as the spring giveth, so doth the spring taketh away(-eth)
