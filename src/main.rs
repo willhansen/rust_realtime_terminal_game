@@ -525,6 +525,8 @@ impl Game {
         self.player.remaining_coyote_time = 0.0;
     }
     fn player_jump(&mut self) {
+        let compression_bonus = self.jump_bonus_vel_from_compression();
+
         if self.player_is_grabbing_wall() || self.player_is_running_up_wall() {
             let wall_direction = sign(self.player.desired_direction);
             self.player
@@ -533,6 +535,8 @@ impl Game {
             self.player.desired_direction = -wall_direction;
         }
         self.player.vel.add_assign(p(0.0, self.player.jump_delta_v));
+
+        self.player.vel.add_assign(compression_bonus);
     }
 
     fn player_can_jump(&self) -> bool {
@@ -816,7 +820,24 @@ impl Game {
         }
     }
 
-    fn get_player_coming_out_of_compression(&self) -> bool {
+    fn jump_bonus_vel_from_compression(&self) -> fPoint {
+        if let Some(collision) = &self.player.last_collision {
+            let max_stored_speed = -collision.collider_velocity;
+            // should have most jump bonus at full compression, with linear(?) fall-off as compression ends
+            let linear_closeness_to_max_compression = 1.0
+                - inverse_lerp(
+                    DEFAULT_MAX_COMPRESSION,
+                    1.0,
+                    self.get_player_compression_fraction(),
+                );
+            let bonus_sign = 1.0;
+            max_stored_speed * bonus_sign * linear_closeness_to_max_compression
+        } else {
+            zero_f()
+        }
+    }
+
+    fn get_player_is_coming_out_of_compression(&self) -> bool {
         self.player_is_in_compression()
             && self.ticks_since_last_player_collision().unwrap() > DEFAULT_TICKS_TO_MAX_COMPRESSION
     }
