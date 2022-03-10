@@ -46,6 +46,24 @@ pub fn zero_f() -> Point<f32> {
     p(0.0, 0.0)
 }
 
+pub fn right_i() -> iPoint {
+    p(1, 0)
+}
+pub fn left_i() -> iPoint {
+    p(-1, 0)
+}
+pub fn up_i() -> iPoint {
+    p(0, 1)
+}
+#[allow(dead_code)]
+pub fn down_i() -> iPoint {
+    p(0, -1)
+}
+#[allow(dead_code)]
+pub fn zero_i() -> iPoint {
+    p(0, 0)
+}
+
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub struct SquarecastCollision {
     pub unrounded_collider_pos: Point<f32>,
@@ -761,6 +779,13 @@ pub fn rotate_vector_towards(start: fPoint, target: fPoint, max_angle_step: f32)
     let target_angle = angle_of_vector(target);
     let end_angle = rotate_angle_towards(start_angle, target_angle, max_angle_step);
     vector_from_radial(end_angle, start_length)
+}
+
+pub fn flip_x(v: fPoint) -> fPoint {
+    p(-v.x(), v.y())
+}
+pub fn flip_y(v: fPoint) -> fPoint {
+    p(v.x(), -v.y())
 }
 
 // for tests
@@ -1639,5 +1664,17 @@ mod tests {
             rotate_angle_towards(TAU - 0.1, 0.1, 0.01),
             TAU - 0.09
         ));
+    }
+
+    #[test]
+    fn test_flip_x() {
+        assert!(flip_x(p(5.0, 8.0)) == p(-5.0, 8.0));
+        assert!(flip_x(p(-5.0, 8.0)) == p(5.0, 8.0));
+    }
+
+    #[test]
+    fn test_flip_y() {
+        assert!(flip_y(p(5.0, 8.0)) == p(5.0, -8.0));
+        assert!(flip_y(p(5.0, -8.0)) == p(5.0, 8.0));
     }
 }

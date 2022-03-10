@@ -73,6 +73,8 @@ const DEFAULT_PARTICLE_TURN_RADIANS_PER_TICK: f32 = 0.0001;
 const DEFAULT_MAX_COMPRESSION: f32 = 0.2;
 const DEFAULT_TICKS_TO_MAX_COMPRESSION: f32 = 5.0;
 const DEFAULT_TICKS_TO_END_COMPRESSION: f32 = 10.0;
+const DEFAULT_TICKS_FROM_MAX_TO_END_COMPRESSION: f32 =
+    DEFAULT_TICKS_TO_END_COMPRESSION - DEFAULT_TICKS_TO_MAX_COMPRESSION;
 
 const DEFAULT_PARTICLE_AMALGAMATION_DENSITY: i32 = 10;
 
@@ -822,7 +824,12 @@ impl Game {
 
     fn jump_bonus_vel_from_compression(&self) -> fPoint {
         if let Some(collision) = &self.player.last_collision {
-            let max_stored_speed = -collision.collider_velocity;
+            let max_bonus = project(-collision.collider_velocity, floatify(collision.normal));
+            if self.player_is_in_compression() {
+                return max_bonus;
+            } else {
+                return zero_f();
+            }
             // should have most jump bonus at full compression, with linear(?) fall-off as compression ends
             let linear_closeness_to_max_compression = 1.0
                 - inverse_lerp(
@@ -830,8 +837,7 @@ impl Game {
                     1.0,
                     self.get_player_compression_fraction(),
                 );
-            let bonus_sign = 1.0;
-            max_stored_speed * bonus_sign * linear_closeness_to_max_compression
+            max_bonus * linear_closeness_to_max_compression
         } else {
             zero_f()
         }
@@ -1712,13 +1718,32 @@ mod tests {
         }
     }
 
-    fn set_up_player_decompressing_on_platform() -> Game {
+    fn set_up_player_halfway_through_decompressing_from_vertical_jump_on_platform() -> Game {
         let mut game = set_up_player_on_platform();
         let mut collision = get_vertical_jump_landing_player_block_collision();
         collision.time_in_ticks = game.time_in_ticks()
-            - (DEFAULT_TICKS_TO_MAX_COMPRESSION
-                + (DEFAULT_TICKS_TO_END_COMPRESSION - DEFAULT_TICKS_TO_MAX_COMPRESSION) / 2.0);
+            - (DEFAULT_TICKS_TO_MAX_COMPRESSION + DEFAULT_TICKS_FROM_MAX_TO_END_COMPRESSION / 2.0);
         game.player.last_collision = Some(collision);
+        game
+    }
+
+    fn set_up_player_fully_compressed_from_vertical_jump_on_platform() -> Game {
+        let mut game = set_up_player_on_platform();
+        let mut collision = get_vertical_jump_landing_player_block_collision();
+        collision.time_in_ticks = game.time_in_ticks() - DEFAULT_TICKS_TO_MAX_COMPRESSION;
+        game.player.last_collision = Some(collision);
+        game
+    }
+    fn set_up_player_fully_compressed_from_vertical_jump_while_running_right_on_platform() -> Game {
+        let mut game = set_up_player_fully_compressed_from_vertical_jump_on_platform();
+        game.player.vel = right_f() * game.player.max_run_speed;
+        game.player
+            .last_collision
+            .as_mut()
+            .unwrap()
+            .collider_velocity
+            .set_x(game.player.vel.x());
+        game.player.desired_direction = right_i();
         game
     }
 
@@ -3879,15 +3904,50 @@ mod tests {
     #[timeout(100)]
     fn test_jump_bonus_if_jump_when_coming_out_of_compression() {
         let mut game1 = set_up_player_on_platform();
-        let mut game2 = set_up_player_decompressing_on_platform();
+        let mut game2 =
+            set_up_player_halfway_through_decompressing_from_vertical_jump_on_platform();
 
         game1.player_jump_if_possible();
         game2.player_jump_if_possible();
 
-        game1.tick_physics();
-        game2.tick_physics();
-
         assert!(game2.player.vel.y() > game1.player.vel.y());
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_full_jump_bonus_from_normal_jump_not_larger_than_normal_jump() {
+        let mut game1 = set_up_player_on_platform();
+        let mut game2 = set_up_player_fully_compressed_from_vertical_jump_on_platform();
+
+        game1.player_jump_if_possible();
+        game2.player_jump_if_possible();
+
+        assert!(game2.player.vel.y() <= game1.player.vel.y() * 2.0);
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_jump_bonus_only_perpendicular_to_collision__floor_collision() {
+        let mut game =
+            set_up_player_fully_compressed_from_vertical_jump_while_running_right_on_platform();
+        let start_vel = game.player.vel;
+        game.player_jump_if_possible();
+
+        assert!(game.player.vel.x() == start_vel.x());
+        assert!(game.player.vel.y() > start_vel.y());
+    }
+
+    #[ignore]
+    #[test]
+    #[timeout(100)]
+    fn test_jump_bonus_NOT_only_perpendicular_to_collision__wall_collision() {
+        let mut game =
+            set_up_player_fully_compressed_from_vertical_jump_while_running_right_on_platform();
+        let start_vel = game.player.vel;
+        game.player_jump_if_possible();
+
+        assert!(game.player.vel.x() == start_vel.x());
+        assert!(game.player.vel.y() > start_vel.y());
     }
 
     #[ignore]
