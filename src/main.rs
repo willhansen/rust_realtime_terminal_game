@@ -97,7 +97,17 @@ impl Block {
             Block::Air => ' ',
             Block::Brick => '▪',
             Block::Wall => '█',
-            Block::ParticleAmalgam(_) => '▒',
+            Block::ParticleAmalgam(num_particles) => {
+                if *num_particles < 20 {
+                    '░'
+                } else if *num_particles < 30 {
+                    '▒'
+                } else if *num_particles < 40 {
+                    '▓'
+                } else {
+                    '█'
+                }
+            }
         }
     }
     fn color(&self) -> ColorName {
@@ -824,7 +834,8 @@ impl Game {
 
     fn jump_bonus_vel_from_compression(&self) -> fPoint {
         if let Some(collision) = &self.player.last_collision {
-            let max_bonus = project(-collision.collider_velocity, floatify(collision.normal));
+            let max_bonus = -collision.collider_velocity;
+            //project(-collision.collider_velocity, floatify(collision.normal))
             if self.player_is_in_compression() {
                 return max_bonus;
             } else {
@@ -1717,6 +1728,15 @@ mod tests {
             collided_block_square: p(5, 5),
         }
     }
+    fn get_player_block_collision_from_running_into_wall_on_left() -> PlayerBlockCollision {
+        PlayerBlockCollision {
+            time_in_ticks: 0.0,
+            normal: p(1, 0),
+            collider_velocity: left_f() * DEFAULT_PLAYER_MAX_RUN_SPEED,
+            collider_pos: p(6.0, 5.0),
+            collided_block_square: p(5, 5),
+        }
+    }
 
     fn set_up_player_halfway_through_decompressing_from_vertical_jump_on_platform() -> Game {
         let mut game = set_up_player_on_platform();
@@ -1744,6 +1764,24 @@ mod tests {
             .collider_velocity
             .set_x(game.player.vel.x());
         game.player.desired_direction = right_i();
+        game
+    }
+    fn set_up_player_fully_compressed_from_leftwards_impact_on_wall() -> Game {
+        let mut game = set_up_player_hanging_on_wall_on_left();
+        let mut collision = get_player_block_collision_from_running_into_wall_on_left();
+        collision.time_in_ticks = game.time_in_ticks() - DEFAULT_TICKS_TO_MAX_COMPRESSION;
+        game.player.last_collision = Some(collision);
+        game
+    }
+    fn set_up_player_fully_compressed_from_down_leftwards_impact_on_wall() -> Game {
+        let mut game = set_up_player_hanging_on_wall_on_left();
+        let mut collision = get_player_block_collision_from_running_into_wall_on_left();
+        collision
+            .collider_velocity
+            .set_y(-DEFAULT_PLAYER_JUMP_DELTA_V);
+        collision.time_in_ticks = game.time_in_ticks() - DEFAULT_TICKS_TO_MAX_COMPRESSION;
+        game.player.last_collision = Some(collision);
+        game.player.vel = down_f() * DEFAULT_PLAYER_JUMP_DELTA_V;
         game
     }
 
@@ -3930,24 +3968,19 @@ mod tests {
     fn test_jump_bonus_only_perpendicular_to_collision__floor_collision() {
         let mut game =
             set_up_player_fully_compressed_from_vertical_jump_while_running_right_on_platform();
-        let start_vel = game.player.vel;
-        game.player_jump_if_possible();
-
-        assert!(game.player.vel.x() == start_vel.x());
-        assert!(game.player.vel.y() > start_vel.y());
+        let bonus = game.jump_bonus_vel_from_compression();
+        assert!(bonus.x() == 0.0);
+        assert!(bonus.y() > 0.0);
     }
 
-    #[ignore]
     #[test]
     #[timeout(100)]
     fn test_jump_bonus_NOT_only_perpendicular_to_collision__wall_collision() {
-        let mut game =
-            set_up_player_fully_compressed_from_vertical_jump_while_running_right_on_platform();
-        let start_vel = game.player.vel;
-        game.player_jump_if_possible();
+        let mut game = set_up_player_fully_compressed_from_down_leftwards_impact_on_wall();
 
-        assert!(game.player.vel.x() == start_vel.x());
-        assert!(game.player.vel.y() > start_vel.y());
+        let bonus = game.jump_bonus_vel_from_compression();
+        assert!(bonus.x() > 0.0);
+        assert!(bonus.y() > 0.0);
     }
 
     #[ignore]
