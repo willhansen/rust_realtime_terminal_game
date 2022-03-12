@@ -76,7 +76,10 @@ const DEFAULT_TICKS_TO_END_COMPRESSION: f32 = 10.0;
 const DEFAULT_TICKS_FROM_MAX_TO_END_COMPRESSION: f32 =
     DEFAULT_TICKS_TO_END_COMPRESSION - DEFAULT_TICKS_TO_MAX_COMPRESSION;
 
-const DEFAULT_PARTICLE_AMALGAMATION_DENSITY: i32 = 10;
+const DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION: i32 = 10;
+const DEFAULT_PARTICLES_TO_AMALGAMATION_CHANGE: i32 = 10;
+const DEFAULT_PARTICLES_IN_AMALGAMATION_FOR_EXPLOSION: i32 =
+    DEFAULT_PARTICLES_TO_AMALGAMATION_CHANGE * 5;
 
 const RADIUS_OF_EXACTLY_TOUCHING_ZONE: f32 = 0.000001;
 
@@ -93,29 +96,47 @@ enum Block {
 
 impl Block {
     fn character(&self) -> char {
-        match self {
-            Block::Air => ' ',
-            Block::Brick => '▪',
-            Block::Wall => '█',
-            Block::ParticleAmalgam(num_particles) => {
-                if *num_particles < 20 {
-                    '░'
-                } else if *num_particles < 30 {
-                    '▒'
-                } else if *num_particles < 40 {
-                    '▓'
-                } else {
-                    '█'
-                }
-            }
-        }
+        self.glyph().character
     }
     fn color(&self) -> ColorName {
+        self.glyph().fg_color
+    }
+
+    fn glyph(&self) -> Glyph {
         match self {
-            Block::Air => ColorName::Black,
-            Block::Wall => ColorName::White,
-            Block::Brick => ColorName::White,
-            Block::ParticleAmalgam(_) => ColorName::Blue,
+            Block::Air => Glyph::from_char(' '),
+            Block::Brick => Glyph::from_char('▪'),
+            Block::Wall => Glyph::from_char('█'),
+            Block::ParticleAmalgam(num_particles) => {
+                let amalgam_stage = num_particles / DEFAULT_PARTICLES_TO_AMALGAMATION_CHANGE;
+                match amalgam_stage {
+                    1 => Glyph {
+                        character: '░',
+                        fg_color: ColorName::Blue,
+                        bg_color: ColorName::Black,
+                    },
+                    2 => Glyph {
+                        character: '▒',
+                        fg_color: ColorName::Blue,
+                        bg_color: ColorName::Black,
+                    },
+                    3 => Glyph {
+                        character: '▓',
+                        fg_color: ColorName::Blue,
+                        bg_color: ColorName::Black,
+                    },
+                    4 => Glyph {
+                        character: '╳',
+                        fg_color: ColorName::Red,
+                        bg_color: ColorName::Blue,
+                    },
+                    _ => Glyph {
+                        character: 'x',
+                        fg_color: ColorName::Red,
+                        bg_color: ColorName::Blue,
+                    },
+                }
+            }
         }
     }
 
@@ -283,7 +304,7 @@ impl Game {
             is_bullet_time: false,
             bullet_time_factor: 0.1,
             player: Player::new(),
-            particle_amalgamation_density: DEFAULT_PARTICLE_AMALGAMATION_DENSITY,
+            particle_amalgamation_density: DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION,
             particle_rotation_speed_towards_player: DEFAULT_PARTICLE_TURN_RADIANS_PER_TICK,
         }
     }
@@ -661,6 +682,7 @@ impl Game {
         self.delete_out_of_bounds_particles();
 
         self.combine_dense_particles();
+        self.explode_overfull_particle_amalgams();
     }
 
     fn get_particle_histogram(&self) -> HashMap<Point<i32>, Vec<usize>> {
@@ -710,6 +732,24 @@ impl Game {
             }
         }
         self.delete_particles_at_indexes(particle_indexes_to_delete);
+    }
+
+    fn explode_overfull_particle_amalgams(&mut self) {
+        for x in 0..self.width() {
+            for y in 0..self.height() {
+                let pos = p(x as i32, y as i32);
+                if let Some(Block::ParticleAmalgam(num_particles)) = self.try_get_block(pos) {
+                    if num_particles >= DEFAULT_PARTICLES_IN_AMALGAMATION_FOR_EXPLOSION {
+                        self.place_particle_burst(
+                            floatify(pos),
+                            num_particles,
+                            DEFAULT_PARTICLE_STEP_PER_TICK,
+                        );
+                        self.set_block(pos, Block::Air);
+                    }
+                }
+            }
+        }
     }
 
     fn delete_particles_at_indexes(&mut self, mut indexes: Vec<usize>) {
@@ -1936,6 +1976,13 @@ mod tests {
 
     fn set_up_particle_moving_right_and_about_to_hit_particle_amalgam() -> Game {
         set_up_particle_moving_right_and_about_to_hit_block(Block::ParticleAmalgam(5))
+    }
+
+    fn set_up_particle_moving_right_and_about_to_hit_particle_amalgam_at_explosion_threshold(
+    ) -> Game {
+        set_up_particle_moving_right_and_about_to_hit_block(Block::ParticleAmalgam(
+            DEFAULT_PARTICLES_IN_AMALGAMATION_FOR_EXPLOSION - 1,
+        ))
     }
 
     fn set_up_30_particles_about_to_move_one_square_right() -> Game {
@@ -3963,6 +4010,7 @@ mod tests {
         assert!(game2.player.vel.y() <= game1.player.vel.y() * 2.0);
     }
 
+    #[ignore]
     #[test]
     #[timeout(100)]
     fn test_jump_bonus_only_perpendicular_to_collision__floor_collision() {
@@ -4339,5 +4387,22 @@ mod tests {
             game.tick_physics();
             assert!(game.player.pos != start_pos);
         }
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_particle_amalgam_block_changes_appearance_with_more_particles() {
+        assert!(Block::ParticleAmalgam(10).glyph() != Block::ParticleAmalgam(20).glyph());
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_particle_amalgams_explode_if_too_full() {
+        let mut game =
+            set_up_particle_moving_right_and_about_to_hit_particle_amalgam_at_explosion_threshold();
+        game.tick_physics();
+        assert!(game.particles.len() as i32 == DEFAULT_PARTICLES_IN_AMALGAMATION_FOR_EXPLOSION);
+        let particle_square = snap_to_grid(game.particles[0].pos);
+        assert!(game.get_block(particle_square) == Block::Air);
     }
 }
