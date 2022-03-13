@@ -60,7 +60,7 @@ const DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION: f32 =
     DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION / 5.0;
 const DEFAULT_PLAYER_MAX_RUN_SPEED: f32 = 0.7;
 const DEFAULT_PLAYER_GROUND_FRICTION_START_SPEED: f32 = 0.7;
-const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED * 6.0;
+const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED * 10.0;
 const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
 const DEFAULT_PLAYER_MIDAIR_MAX_MOVE_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED;
 const DEFAULT_PLAYER_AIR_FRICTION_START_SPEED: f32 = DEFAULT_PLAYER_DASH_SPEED;
@@ -146,8 +146,7 @@ impl Block {
             _ => true,
         }
     }
-    #[allow(dead_code)]
-    fn wall_grabbable(&self) -> bool {
+    fn collides_with_player(&self) -> bool {
         match self {
             Block::Air => false,
             _ => true,
@@ -380,7 +379,7 @@ impl Game {
         self.place_line_of_blocks((xmin, ymax), (xmin, ymin), Block::Wall);
     }
 
-    fn place_wall_rect(&mut self, corner1: iPoint, corner2: iPoint) {
+    fn place_wall_rect(&mut self, corner1: IPoint, corner2: IPoint) {
         let xmin = min(corner1.x(), corner2.x());
         let xmax = max(corner1.x(), corner2.x());
         let ymin = min(corner1.y(), corner2.y());
@@ -793,7 +792,7 @@ impl Game {
 
             if particle.wall_collision_behavior != ParticleWallCollisionBehavior::PassThrough {
                 while magnitude(step) > 0.00001 {
-                    if let Some(collision) = self.linecast(start_pos, end_pos) {
+                    if let Some(collision) = self.linecast_walls_only(start_pos, end_pos) {
                         if particle.wall_collision_behavior == ParticleWallCollisionBehavior::Bounce
                         {
                             let new_start = collision.collider_pos;
@@ -872,7 +871,7 @@ impl Game {
         }
     }
 
-    fn jump_bonus_vel_from_compression(&self) -> fPoint {
+    fn jump_bonus_vel_from_compression(&self) -> FPoint {
         if let Some(collision) = &self.player.last_collision {
             let max_bonus = -collision.collider_velocity;
             //project(-collision.collider_velocity, floatify(collision.normal))
@@ -1146,7 +1145,11 @@ impl Game {
             for j in 0..3 {
                 let rx = i as i32 - 1;
                 let ry = j as i32 - 1;
-                output[i][j] = matches!(self.try_get_block(square + p(rx, ry)), Some(Block::Wall));
+                output[i][j] = if let Some(block) = self.try_get_block(square + p(rx, ry)) {
+                    block != Block::Air
+                } else {
+                    false
+                };
             }
         }
         output
@@ -1378,10 +1381,10 @@ impl Game {
     fn deflect_off_collision_plane(
         &mut self,
         collision: SquarecastCollision,
-        move_start: fPoint,
-        relative_target: fPoint,
-        vel: fPoint,
-    ) -> (fPoint, fPoint, fPoint) {
+        move_start: FPoint,
+        relative_target: FPoint,
+        vel: FPoint,
+    ) -> (FPoint, FPoint, FPoint) {
         let step_taken_to_this_collision = collision.collider_pos - move_start;
 
         let mut new_relative_target = relative_target - step_taken_to_this_collision;
@@ -1456,12 +1459,45 @@ impl Game {
     fn linecast(&self, start_pos: Point<f32>, end_pos: Point<f32>) -> Option<SquarecastCollision> {
         self.squarecast(start_pos, end_pos, 0.0)
     }
+    fn linecast_walls_only(
+        &self,
+        start_pos: Point<f32>,
+        end_pos: Point<f32>,
+    ) -> Option<SquarecastCollision> {
+        self.squarecast_one_block_type(start_pos, end_pos, 0.0, Block::Wall)
+    }
+
+    fn squarecast_one_block_type(
+        &self,
+        start_pos: Point<f32>,
+        end_pos: Point<f32>,
+        moving_square_side_length: f32,
+        whitelisted_block: Block,
+    ) -> Option<SquarecastCollision> {
+        let filter = |block: Block| -> bool { block == whitelisted_block };
+        self.squarecast_with_filter(start_pos, end_pos, moving_square_side_length, &filter)
+    }
 
     fn squarecast(
         &self,
         start_pos: Point<f32>,
         end_pos: Point<f32>,
         moving_square_side_length: f32,
+    ) -> Option<SquarecastCollision> {
+        self.squarecast_with_filter(
+            start_pos,
+            end_pos,
+            moving_square_side_length,
+            &|block: Block| block.collides_with_player(),
+        )
+    }
+
+    fn squarecast_with_filter(
+        &self,
+        start_pos: Point<f32>,
+        end_pos: Point<f32>,
+        moving_square_side_length: f32,
+        filter: &dyn Fn(Block) -> bool,
     ) -> Option<SquarecastCollision> {
         let mut intermediate_player_positions_to_check = lin_space_from_start_2d(
             start_pos,
@@ -1477,19 +1513,19 @@ impl Game {
             );
             let mut collisions = Vec::<SquarecastCollision>::new();
             for overlapping_square in &overlapping_squares {
-                if self.in_world(*overlapping_square)
-                    && self.get_block(*overlapping_square) == Block::Wall
-                {
-                    let adjacent_occupancy =
-                        self.get_occupancy_of_nearby_walls(*overlapping_square);
-                    if let Some(collision) = single_block_squarecast_with_filled_cracks(
-                        start_pos,
-                        end_pos,
-                        *overlapping_square,
-                        moving_square_side_length,
-                        adjacent_occupancy,
-                    ) {
-                        collisions.push(collision);
+                if let Some(block) = self.try_get_block(*overlapping_square) {
+                    if block.collides_with_player() && filter(block) {
+                        let adjacent_occupancy =
+                            self.get_occupancy_of_nearby_walls(*overlapping_square);
+                        if let Some(collision) = single_block_squarecast_with_filled_cracks(
+                            start_pos,
+                            end_pos,
+                            *overlapping_square,
+                            moving_square_side_length,
+                            adjacent_occupancy,
+                        ) {
+                            collisions.push(collision);
+                        }
                     }
                 }
             }
@@ -1508,7 +1544,8 @@ impl Game {
                 // TODO: have this account for block expansion from other adjacent blocks?
                 if !point_inside_square(start_pos, normal_square)
                     && self.in_world(normal_square)
-                    && self.get_block(normal_square) == Block::Wall
+                    && self.get_block(normal_square).collides_with_player()
+                    && filter(self.get_block(normal_square))
                 {
                     let adjacent_occupancy = self.get_occupancy_of_nearby_walls(normal_square);
                     if let Some(collision) = single_block_squarecast_with_filled_cracks(
@@ -1756,6 +1793,16 @@ mod tests {
         let mut game = set_up_just_player();
         let platform_y = game.player.pos.y() as i32 - 1;
         game.place_line_of_blocks((10, platform_y), (20, platform_y), Block::Wall);
+        return game;
+    }
+    fn set_up_player_on_amalgam_platform() -> Game {
+        let mut game = set_up_just_player();
+        let platform_y = game.player.pos.y() as i32 - 1;
+        game.place_line_of_blocks(
+            (10, platform_y),
+            (20, platform_y),
+            Block::ParticleAmalgam(DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION),
+        );
         return game;
     }
 
@@ -4231,6 +4278,21 @@ mod tests {
         assert!(collision.unwrap().collided_block_square == plus_center + p(-1, 0));
         assert!(collision.unwrap().normal == p(0, 1));
     }
+    #[test]
+    #[timeout(100)]
+    fn test_linecast_walls_only() {
+        let mut game = set_up_game();
+        let start_square = p(5, 5);
+        let wall_square = start_square + right_i() * 2;
+        game.place_wall_block(wall_square);
+        game.place_block(start_square + right_i() * 1, Block::ParticleAmalgam(5));
+        let collision = game.linecast_walls_only(
+            floatify(start_square),
+            floatify(start_square + right_i() * 5),
+        );
+        assert!(collision.is_some());
+        assert!(collision.unwrap().collided_block_square == wall_square);
+    }
 
     #[test]
     #[timeout(100)]
@@ -4404,5 +4466,14 @@ mod tests {
         assert!(game.particles.len() as i32 == DEFAULT_PARTICLES_IN_AMALGAMATION_FOR_EXPLOSION);
         let particle_square = snap_to_grid(game.particles[0].pos);
         assert!(game.get_block(particle_square) == Block::Air);
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_player_collides_with_particle_amalgams() {
+        let mut game = set_up_player_on_amalgam_platform();
+        let start_y = game.player.pos.y();
+        game.tick_physics();
+        assert!(game.player.pos.y() == start_y);
     }
 }

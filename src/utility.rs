@@ -9,12 +9,12 @@ use num::clamp;
 use num::traits::Pow;
 use ordered_float::OrderedFloat;
 use rand::Rng;
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::TAU;
 
-pub type fPoint = Point<f32>;
-pub type iPoint = Point<i32>;
-pub type iLine = Line<i32>;
-pub type fLine = Line<f32>;
+pub type FPoint = Point<f32>;
+pub type IPoint = Point<i32>;
+pub type ILine = Line<i32>;
+pub type FLine = Line<f32>;
 
 pub fn p<T: 'static>(x: T, y: T) -> Point<T>
 where
@@ -46,21 +46,21 @@ pub fn zero_f() -> Point<f32> {
     p(0.0, 0.0)
 }
 
-pub fn right_i() -> iPoint {
+pub fn right_i() -> IPoint {
     p(1, 0)
 }
-pub fn left_i() -> iPoint {
+pub fn left_i() -> IPoint {
     p(-1, 0)
 }
-pub fn up_i() -> iPoint {
+pub fn up_i() -> IPoint {
     p(0, 1)
 }
 #[allow(dead_code)]
-pub fn down_i() -> iPoint {
+pub fn down_i() -> IPoint {
     p(0, -1)
 }
 #[allow(dead_code)]
-pub fn zero_i() -> iPoint {
+pub fn zero_i() -> IPoint {
     p(0, 0)
 }
 
@@ -143,8 +143,8 @@ pub fn single_block_squarecast_with_filled_cracks(
     #[derive(Copy, Clone, PartialEq, Debug)]
     struct EdgeCollision {
         edge: geo::Line<f32>,
-        point_of_impact: fPoint,
-        normal: iPoint,
+        point_of_impact: FPoint,
+        normal: IPoint,
     }
 
     //println!("expanded_edges: {:?}", expanded_square_edges);
@@ -155,7 +155,7 @@ pub fn single_block_squarecast_with_filled_cracks(
             is_proper: _,
         }) = line_intersection(movement_line, edge)
         {
-            let edge_as_vect: fPoint = (edge.end - edge.start).into();
+            let edge_as_vect: FPoint = (edge.end - edge.start).into();
             let normal = snap_to_grid(direction(quarter_turns_counter_clockwise(edge_as_vect, 3)));
             candidate_edge_collisions.push(EdgeCollision {
                 edge,
@@ -194,7 +194,7 @@ pub fn single_block_squarecast_with_filled_cracks(
 }
 
 pub fn get_counter_clockwise_collision_edges_with_known_adjacency(
-    center: fPoint,
+    center: FPoint,
     nominal_side_length: f32,
     adjacency_map: AdjacentOccupancyMask,
 ) -> Vec<geo::Line<f32>> {
@@ -214,7 +214,7 @@ pub fn get_counter_clockwise_collision_edges_with_known_adjacency(
     let inner_halflength = nominal_side_length / 2.0 - RADIUS_OF_EXACTLY_TOUCHING_ZONE;
     let outer_halflength = nominal_side_length / 2.0 + RADIUS_OF_EXACTLY_TOUCHING_ZONE;
 
-    let mut output_lines = Vec::<fLine>::new();
+    let mut output_lines = Vec::<FLine>::new();
     // for every orthogonal direction
     for i in 0..4 {
         let this_edge_dir = orthogonal_direction(i);
@@ -224,7 +224,7 @@ pub fn get_counter_clockwise_collision_edges_with_known_adjacency(
         let right_edge_dir = quarter_turns_counter_clockwise(this_edge_dir, 3);
 
         let dir_to_expansion_val =
-            |v: iPoint| -> bool { adjacency_map[(v.x() + 1) as usize][(v.y() + 1) as usize] };
+            |v: IPoint| -> bool { adjacency_map[(v.x() + 1) as usize][(v.y() + 1) as usize] };
 
         let block_at_this_edge = dir_to_expansion_val(this_edge_dir);
         let block_at_left_edge = dir_to_expansion_val(left_edge_dir);
@@ -648,7 +648,7 @@ pub fn points_in_line_with_max_gap(
     return output;
 }
 
-pub fn lin_space_from_start_2d(start: fPoint, end: fPoint, density: f32) -> Vec<fPoint> {
+pub fn lin_space_from_start_2d(start: FPoint, end: FPoint, density: f32) -> Vec<FPoint> {
     // end point is not included.  Start point is included
 
     let num_points_to_check = (magnitude(end - start) * density).floor() as i32;
@@ -732,7 +732,7 @@ pub fn time_synchronized_points_on_line(
 }
 
 // In radians
-pub fn angle_between(v1: fPoint, v2: fPoint) -> f32 {
+pub fn angle_between(v1: FPoint, v2: FPoint) -> f32 {
     (v1.dot(v2) / (magnitude(v1) * magnitude(v2))).acos()
 }
 pub fn modulo(a: f32, b: f32) -> f32 {
@@ -744,11 +744,11 @@ pub fn to_standard_angle(a: f32) -> f32 {
     modulo(a, TAU)
 }
 
-pub fn angle_of_vector(v: fPoint) -> f32 {
+pub fn angle_of_vector(v: FPoint) -> f32 {
     v.y().atan2(v.x())
 }
 
-pub fn vector_from_radial(angle: f32, length: f32) -> fPoint {
+pub fn vector_from_radial(angle: f32, length: f32) -> FPoint {
     p(angle.cos(), angle.sin()) * length
 }
 
@@ -773,7 +773,7 @@ pub fn rotate_angle_towards(start_angle: f32, target_angle: f32, max_step: f32) 
     }
 }
 
-pub fn rotate_vector_towards(start: fPoint, target: fPoint, max_angle_step: f32) -> fPoint {
+pub fn rotate_vector_towards(start: FPoint, target: FPoint, max_angle_step: f32) -> FPoint {
     let start_angle = angle_of_vector(start);
     let start_length = magnitude(start);
     let target_angle = angle_of_vector(target);
@@ -781,10 +781,10 @@ pub fn rotate_vector_towards(start: fPoint, target: fPoint, max_angle_step: f32)
     vector_from_radial(end_angle, start_length)
 }
 
-pub fn flip_x(v: fPoint) -> fPoint {
+pub fn flip_x(v: FPoint) -> FPoint {
     p(-v.x(), v.y())
 }
-pub fn flip_y(v: fPoint) -> fPoint {
+pub fn flip_y(v: FPoint) -> FPoint {
     p(v.x(), -v.y())
 }
 
