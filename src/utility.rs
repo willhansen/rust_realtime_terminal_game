@@ -788,6 +788,18 @@ pub fn flip_y(v: FPoint) -> FPoint {
     p(v.x(), -v.y())
 }
 
+pub fn jump_vel_to_height(jump_vel: f32, grav_accel: f32) -> f32 {
+    0.5 * jump_vel * jump_vel / grav_accel.abs()
+}
+
+pub fn time_to_jump_peak(jump_vel: f32, grav_accel: f32) -> f32 {
+    jump_vel.abs() / grav_accel.abs()
+}
+
+pub fn time_to_jump_landing(jump_vel: f32, grav_accel: f32) -> f32 {
+    time_to_jump_peak(jump_vel, grav_accel) * 2.0
+}
+
 // for tests
 pub fn points_nearly_equal(a: Point<f32>, b: Point<f32>) -> bool {
     let result = magnitude(a - b) < 0.0001;

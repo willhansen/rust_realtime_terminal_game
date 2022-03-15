@@ -36,8 +36,8 @@ use utility::*;
 
 // const player_jump_height: i32 = 3;
 // const player_jump_hang_frames: i32 = 4;
-const MAX_FPS: i32 = 60; // frames per second
-const IDEAL_FRAME_DURATION_MS: u128 = (1000.0 / MAX_FPS as f32) as u128;
+const MAX_FPS: f32 = 60.0; // frames per second
+const IDEAL_FRAME_DURATION_MS: u128 = (1000.0 / MAX_FPS) as u128;
 const PLAYER_COLOR: ColorName = ColorName::Red;
 const PLAYER_HIGH_SPEED_COLOR: ColorName = ColorName::Blue;
 const NUM_SAVED_PLAYER_POSES: i32 = 10;
@@ -45,30 +45,28 @@ const NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS: f32 = 8.0;
 
 // a block every two ticks
 const DEFAULT_PLAYER_COYOTE_TIME_DURATION_S: f32 = 0.1;
-const DEFAULT_PLAYER_MAX_COYOTE_TIME: f32 =
-    (DEFAULT_PLAYER_COYOTE_TIME_DURATION_S * MAX_FPS as f32) + 1.0;
+const DEFAULT_PLAYER_MAX_COYOTE_TIME: f32 = (DEFAULT_PLAYER_COYOTE_TIME_DURATION_S * MAX_FPS) + 1.0;
 
 const DEFAULT_PLAYER_JUMP_DELTA_V: f32 = 1.0;
 
 const VERTICAL_STRETCH_FACTOR: f32 = 2.0; // because the grid is not really square
 
 const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
-const DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION: f32 = 0.6;
+const DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION: f32 = 0.2;
 const DEFAULT_PLAYER_ACCELERATION_FROM_AIR_TRACTION: f32 =
     DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION;
 const DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION: f32 =
     DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION / 5.0;
 const DEFAULT_PLAYER_MAX_RUN_SPEED: f32 = 0.7;
 const DEFAULT_PLAYER_GROUND_FRICTION_START_SPEED: f32 = 0.7;
-const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED * 10.0;
+const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED * 3.0;
 const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
 const DEFAULT_PLAYER_MIDAIR_MAX_MOVE_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED;
 const DEFAULT_PLAYER_AIR_FRICTION_START_SPEED: f32 = DEFAULT_PLAYER_DASH_SPEED;
 
 const DEFAULT_PARTICLE_LIFETIME_IN_SECONDS: f32 = f32::INFINITY;
-const DEFAULT_PARTICLE_LIFETIME_IN_TICKS: f32 =
-    DEFAULT_PARTICLE_LIFETIME_IN_SECONDS * MAX_FPS as f32;
-const DEFAULT_PARTICLE_STEP_PER_TICK: f32 = 0.1;
+const DEFAULT_PARTICLE_LIFETIME_IN_TICKS: f32 = DEFAULT_PARTICLE_LIFETIME_IN_SECONDS * MAX_FPS;
+const DEFAULT_PARTICLE_SPEED: f32 = 0.1;
 const DEFAULT_PARTICLE_TURN_RADIANS_PER_TICK: f32 = 0.0001;
 const DEFAULT_MAX_COMPRESSION: f32 = 0.2;
 const DEFAULT_TICKS_TO_MAX_COMPRESSION: f32 = 5.0;
@@ -82,6 +80,10 @@ const DEFAULT_PARTICLES_IN_AMALGAMATION_FOR_EXPLOSION: i32 =
     DEFAULT_PARTICLES_TO_AMALGAMATION_CHANGE * 5;
 
 const RADIUS_OF_EXACTLY_TOUCHING_ZONE: f32 = 0.000001;
+
+const DEFAULT_MINIMUM_PARTICLE_GENERATION_TIME_AFTER_DASH_IN_SECONDS: f32 = 0.5;
+const DEFAULT_MINIMUM_PARTICLE_GENERATION_TIME_AFTER_DASH: f32 =
+    DEFAULT_MINIMUM_PARTICLE_GENERATION_TIME_AFTER_DASH_IN_SECONDS * MAX_FPS;
 
 pub type AdjacentOccupancyMask = [[bool; 3]; 3];
 
@@ -231,6 +233,7 @@ struct Player {
     max_coyote_time: f32,
     dash_vel: f32,
     dash_adds_to_vel: bool,
+    time_of_last_boost: Option<f32>,
     last_collision: Option<PlayerBlockCollision>,
     moved_normal_to_collision_since_collision: bool,
     speed_line_lifetime_in_ticks: f32,
@@ -260,6 +263,7 @@ impl Player {
             max_coyote_time: DEFAULT_PLAYER_MAX_COYOTE_TIME,
             dash_vel: DEFAULT_PLAYER_DASH_SPEED,
             dash_adds_to_vel: false,
+            time_of_last_boost: None,
             last_collision: None,
             moved_normal_to_collision_since_collision: false,
             speed_line_lifetime_in_ticks: DEFAULT_PARTICLE_LIFETIME_IN_TICKS,
@@ -591,6 +595,7 @@ impl Game {
             } else {
                 self.player.vel = dash_vel;
             }
+            self.player.time_of_last_boost = Some(self.time_in_ticks());
         }
     }
     fn toggle_bullet_time(&mut self) {
@@ -612,10 +617,10 @@ impl Game {
                 Key::Char(' ') => self.player_jump_if_possible(),
                 Key::Char('f') => self.player_dash(),
                 Key::Char('g') => self.toggle_bullet_time(),
-                Key::Char('w') | Key::Up => self.player.desired_direction = p(0, 1),
-                Key::Char('a') | Key::Left => self.player.desired_direction = p(-1, 0),
-                Key::Char('s') | Key::Down => self.player.desired_direction = p(0, -1),
-                Key::Char('d') | Key::Right => self.player.desired_direction = p(1, 0),
+                Key::Char('w') | Key::Up => self.player.desired_direction = up_i(),
+                Key::Char('a') | Key::Left => self.player.desired_direction = left_i(),
+                Key::Char('s') | Key::Down => self.player.desired_direction = down_i(),
+                Key::Char('d') | Key::Right => self.player.desired_direction = right_i(),
                 _ => {}
             },
             Event::Mouse(me) => match me {
@@ -644,7 +649,7 @@ impl Game {
         if self.player.alive {
             self.apply_forces_to_player(dt_in_ticks);
             self.apply_player_kinematics(dt_in_ticks);
-            if self.player_is_officially_fast() {
+            if self.player_is_in_boost() {
                 self.generate_speed_particles();
             }
         }
@@ -742,7 +747,7 @@ impl Game {
                         self.place_particle_burst(
                             floatify(pos),
                             num_particles,
-                            DEFAULT_PARTICLE_STEP_PER_TICK,
+                            DEFAULT_PARTICLE_SPEED,
                         );
                         self.set_block(pos, Block::Air);
                     }
@@ -864,7 +869,7 @@ impl Game {
     }
 
     fn get_player_color(&self) -> ColorName {
-        if self.player_is_officially_fast() {
+        if self.player_is_in_boost() {
             PLAYER_HIGH_SPEED_COLOR
         } else {
             PLAYER_COLOR
@@ -873,8 +878,8 @@ impl Game {
 
     fn jump_bonus_vel_from_compression(&self) -> FPoint {
         if let Some(collision) = &self.player.last_collision {
-            let max_bonus = -collision.collider_velocity;
-            //project(-collision.collider_velocity, floatify(collision.normal))
+            let max_bonus = project(-collision.collider_velocity, floatify(collision.normal));
+            //-collision.collider_velocity;
             if self.player_is_in_compression() {
                 return max_bonus;
             } else {
@@ -926,6 +931,12 @@ impl Game {
             };
         }
         1.0
+    }
+
+    fn player_is_in_boost(&self) -> bool {
+        self.player.time_of_last_boost.is_some()
+            && self.time_since(self.player.time_of_last_boost.unwrap())
+                <= DEFAULT_MINIMUM_PARTICLE_GENERATION_TIME_AFTER_DASH
     }
 
     fn player_is_officially_fast(&self) -> bool {
@@ -1064,7 +1075,7 @@ impl Game {
         start_time: f32,
         end_time: f32,
     ) {
-        let particle_speed = 0.3;
+        let particle_speed = DEFAULT_PARTICLE_SPEED;
         // Note: Due to non-square nature of the grid, player velocity may not be parallel to displacement
         let particle_vel = direction(self.player.vel) * particle_speed;
         let particles_per_block = 2.0;
@@ -1875,10 +1886,7 @@ mod tests {
     fn set_up_particle_passing_over_player_on_platform() -> Game {
         let mut game = set_up_player_on_platform();
         let particle_start_pos = game.player.pos + up_f() * 5.0;
-        game.place_particle_with_velocity(
-            particle_start_pos,
-            right_f() * DEFAULT_PARTICLE_STEP_PER_TICK,
-        );
+        game.place_particle_with_velocity(particle_start_pos, right_f() * DEFAULT_PARTICLE_SPEED);
         game
     }
 
@@ -1909,10 +1917,12 @@ mod tests {
         return game;
     }
 
-    fn set_up_player_flying_fast_through_space_in_direction(dir: Point<f32>) -> Game {
+    fn set_up_player_boosting_through_space_in_direction(dir: Point<f32>) -> Game {
         let mut game = set_up_just_player();
         be_in_space(&mut game);
         let vel = direction(dir) * game.player.speed_of_blue * 1.1;
+        game.player.desired_direction = snap_to_grid(dir);
+        game.player_dash();
         game.player.vel = vel;
         game
     }
@@ -3086,6 +3096,7 @@ mod tests {
         assert!(game.get_buffered_glyph(p(1, 1)).character == '\u{2808}');
     }
 
+    #[ignore]
     #[test]
     #[timeout(100)]
     fn test_braille_left_behind_when_go_fast() {
@@ -3203,7 +3214,6 @@ mod tests {
         game.player_jump();
         assert!(game.get_player_color() == PLAYER_COLOR);
         assert!(game.get_player_color() != PLAYER_HIGH_SPEED_COLOR);
-        assert!(!game.player_is_officially_fast());
     }
 
     #[test]
@@ -3212,7 +3222,6 @@ mod tests {
         let mut game = set_up_player_hanging_on_wall_on_left();
         game.player_jump_if_possible();
         assert!(game.get_player_color() != PLAYER_HIGH_SPEED_COLOR);
-        assert!(!game.player_is_officially_fast());
     }
 
     #[test]
@@ -3465,7 +3474,7 @@ mod tests {
         let point = p(5.0, 5.0);
         let mut game = set_up_game();
         let mut particle = Particle::new_at(point);
-        particle.random_walk_speed = DEFAULT_PARTICLE_STEP_PER_TICK;
+        particle.random_walk_speed = DEFAULT_PARTICLE_SPEED;
         game.particles.push(particle);
         let start_pos = game.particles[0].pos;
         game.tick_particles();
@@ -3491,9 +3500,9 @@ mod tests {
         game1.toggle_bullet_time();
         let start_pos = p(5.0, 5.0);
         game1.place_particle(start_pos);
-        game1.particles[0].random_walk_speed = DEFAULT_PARTICLE_STEP_PER_TICK;
+        game1.particles[0].random_walk_speed = DEFAULT_PARTICLE_SPEED;
         game2.place_particle(start_pos);
-        game2.particles[0].random_walk_speed = DEFAULT_PARTICLE_STEP_PER_TICK;
+        game2.particles[0].random_walk_speed = DEFAULT_PARTICLE_SPEED;
 
         game1.tick_particles();
         game2.tick_particles();
@@ -4057,7 +4066,6 @@ mod tests {
         assert!(game2.player.vel.y() <= game1.player.vel.y() * 2.0);
     }
 
-    #[ignore]
     #[test]
     #[timeout(100)]
     fn test_jump_bonus_only_perpendicular_to_collision__floor_collision() {
@@ -4068,6 +4076,7 @@ mod tests {
         assert!(bonus.y() > 0.0);
     }
 
+    #[ignore]
     #[test]
     #[timeout(100)]
     fn test_jump_bonus_NOT_only_perpendicular_to_collision__wall_collision() {
@@ -4088,7 +4097,7 @@ mod tests {
     #[timeout(100)]
     fn test_perpendicular_speed_lines_move_perpendicular() {
         let dir = direction(p(1.25, 3.38)); // arbitrary
-        let mut game = set_up_player_flying_fast_through_space_in_direction(dir);
+        let mut game = set_up_player_boosting_through_space_in_direction(dir);
         game.particle_rotation_speed_towards_player = 0.0;
         game.player.speed_line_behavior = SpeedLineType::PerpendicularLines;
         let v1 = game.player.vel;
@@ -4179,8 +4188,8 @@ mod tests {
     #[timeout(100)]
     fn test_perpendicular_speed_lines_have_the_same_number_of_particles_in_bullet_time() {
         let dir = direction(p(1.234, 6.845)); // arbitrary
-        let mut game1 = set_up_player_flying_fast_through_space_in_direction(dir);
-        let mut game2 = set_up_player_flying_fast_through_space_in_direction(dir);
+        let mut game1 = set_up_player_boosting_through_space_in_direction(dir);
+        let mut game2 = set_up_player_boosting_through_space_in_direction(dir);
         game1.player.speed_line_behavior = SpeedLineType::PerpendicularLines;
         game2.player.speed_line_behavior = SpeedLineType::PerpendicularLines;
 
@@ -4475,5 +4484,35 @@ mod tests {
         let start_y = game.player.pos.y();
         game.tick_physics();
         assert!(game.player.pos.y() == start_y);
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_no_particles_generated_from_only_moving_fast() {
+        let mut game = set_up_player_on_platform();
+        game.player.vel = up_f() * game.player.dash_vel * 10.0;
+        game.tick_physics();
+        assert!(game.particles.is_empty());
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_verify_jump_utility_functions() {
+        let mut game = set_up_player_on_platform();
+        game.player_jump_if_possible();
+
+        let start_pos = game.player.pos;
+
+        let g = game.player.acceleration_from_gravity.abs();
+        let vi = game.player.vel.y();
+        let time_to_peak = time_to_jump_peak(vi, g);
+        let jump_peak = game.player.pos.y() + jump_vel_to_height(vi, g);
+
+        game.apply_physics(time_to_peak);
+        assert!(nearly_equal(game.player.pos.y(), jump_peak));
+        assert!(nearly_equal(game.player.vel.y(), 0.0));
+        game.apply_physics(time_to_peak / 2.0);
+        game.apply_physics(time_to_peak / 2.0);
+        assert!(nearly_equal(game.player.pos.y(), start_pos.y()));
     }
 }
