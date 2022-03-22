@@ -656,6 +656,24 @@ impl Game {
         self.apply_particle_physics(dt_in_ticks);
     }
 
+    fn apply_physics_in_steps(&mut self, time_span_in_ticks: f32, time_step_in_ticks: f32) {
+        // has one smaller step at the end if applicable
+        let num_full_steps = (time_span_in_ticks / time_step_in_ticks).floor() as i32;
+        for _ in 0..num_full_steps {
+            self.apply_physics(time_step_in_ticks);
+        }
+
+        let time_covered_by_full_steps = num_full_steps as f32 * time_step_in_ticks;
+        let partial_step_length = (time_span_in_ticks - time_covered_by_full_steps).max(0.0);
+        if partial_step_length > 0.0 {
+            self.apply_physics(partial_step_length);
+        }
+    }
+
+    fn apply_physics_in_n_steps(&mut self, time_span_in_ticks: f32, n: i32) {
+        self.apply_physics_in_steps(time_span_in_ticks, time_span_in_ticks / (n as f32));
+    }
+
     fn get_time_factor(&self) -> f32 {
         return if self.is_bullet_time {
             self.bullet_time_factor
@@ -4508,11 +4526,12 @@ mod tests {
         let time_to_peak = time_to_jump_peak(vi, g);
         let jump_peak = game.player.pos.y() + jump_vel_to_height(vi, g);
 
-        game.apply_physics(time_to_peak);
+        game.apply_physics_in_n_steps(time_to_peak, 100);
+        dbg!(g, vi, game.player.vel);
         assert!(nearly_equal(game.player.pos.y(), jump_peak));
         assert!(nearly_equal(game.player.vel.y(), 0.0));
-        game.apply_physics(time_to_peak / 2.0);
-        game.apply_physics(time_to_peak / 2.0);
+        game.apply_physics_in_n_steps(time_to_peak / 2.0, 100);
+        game.apply_physics_in_n_steps(time_to_peak / 2.0, 100);
         assert!(nearly_equal(game.player.pos.y(), start_pos.y()));
     }
 }
