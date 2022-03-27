@@ -18,12 +18,14 @@ use enum_as_inner::EnumAsInner;
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::Point;
 use num::traits::FloatConst;
+use ordered_float::OrderedFloat;
 use std::char;
 use std::cmp::{max, min};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
 use std::io::{stdin, stdout, Write};
+use std::ops::Add;
 use std::sync::mpsc::channel;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -143,16 +145,10 @@ impl Block {
     }
 
     fn subject_to_block_gravity(&self) -> bool {
-        match self {
-            Block::Air | Block::Wall | Block::ParticleAmalgam(_) => false,
-            _ => true,
-        }
+        !matches!(self, Block::Air | Block::Wall | Block::ParticleAmalgam(_))
     }
     fn collides_with_player(&self) -> bool {
-        match self {
-            Block::Air => false,
-            _ => true,
-        }
+        !matches!(self, Block::Air)
     }
 }
 
@@ -222,6 +218,7 @@ struct Player {
     max_midair_move_speed: f32,
     speed_of_blue: f32,
     vel: Point<f32>,
+    accel: Point<f32>,
     desired_direction: Point<i32>,
     jump_delta_v: f32,
     acceleration_from_gravity: f32,
@@ -252,6 +249,7 @@ impl Player {
             max_midair_move_speed: DEFAULT_PLAYER_MIDAIR_MAX_MOVE_SPEED,
             speed_of_blue: DEFAULT_PLAYER_DASH_SPEED,
             vel: Point::<f32>::new(0.0, 0.0),
+            accel: Point::<f32>::new(0.0, 0.0),
             desired_direction: p(0, 0),
             jump_delta_v: DEFAULT_PLAYER_JUMP_DELTA_V,
             acceleration_from_gravity: DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
@@ -647,7 +645,7 @@ impl Game {
     fn apply_physics(&mut self, dt_in_ticks: f32) {
         self.apply_gravity_to_blocks();
         if self.player.alive {
-            self.apply_forces_to_player(dt_in_ticks);
+            self.update_player_accelerations();
             self.apply_player_kinematics(dt_in_ticks);
             if self.player_is_in_boost() {
                 self.generate_speed_particles();
@@ -1312,75 +1310,133 @@ impl Game {
     }
 
     fn apply_player_kinematics(&mut self, dt_in_ticks: f32) {
-        let start_point = self.player.pos;
-        let mut planned_displacement: Point<f32> =
-            world_space_to_grid_space(self.player.vel, VERTICAL_STRETCH_FACTOR) * dt_in_ticks;
-        let mut fraction_of_movement_remaining = 1.0;
-        let mut current_start_point = start_point;
-        let mut current_target = start_point + planned_displacement;
+        let start_state = KinematicState {
+            pos: self.player.pos,
+            vel: self.player.vel,
+            accel: self.player.accel,
+        };
+
+        let mut remaining_time = dt_in_ticks;
         let mut collision_occurred = false;
+        let mut timeout_counter = 0;
         loop {
-            if let Some(collision) = self.unit_squarecast(current_start_point, current_target) {
+            timeout_counter += 1;
+            if timeout_counter > 100 {
+                panic!("player kinematics looped too much :(");
+            }
+
+            let mut current_state = KinematicState {
+                pos: self.player.pos,
+                vel: self.player.vel,
+                accel: self.player.accel,
+            };
+
+            let mut target_state_delta = current_state.extrapolated_delta(remaining_time);
+            target_state_delta.pos =
+                world_space_to_grid_space(target_state_delta.pos, VERTICAL_STRETCH_FACTOR);
+            let mut target_state = current_state + target_state_delta;
+
+            let maybe_rel_time_of_first_notable_speed =
+                self.get_time_to_first_notable_speed(self.player.vel, self.player.accel);
+            let maybe_collision = self.unit_squarecast(self.player.pos, target_state.pos);
+            let maybe_rel_collision_time = if let Some(collision) = maybe_collision {
+                let fraction_through_remaining_movement_just_moved =
+                    inverse_lerp_2d(start_state.pos, target_state.pos, collision.collider_pos);
+                Some(remaining_time * fraction_through_remaining_movement_just_moved)
+            } else {
+                None
+            };
+
+            let accel_recalc_first = maybe_rel_time_of_first_notable_speed.is_some()
+                && maybe_rel_collision_time.is_some()
+                && maybe_rel_time_of_first_notable_speed.unwrap()
+                    < maybe_rel_collision_time.unwrap();
+            let only_accel_recalc = maybe_rel_time_of_first_notable_speed.is_some()
+                && maybe_rel_collision_time.is_none();
+            let only_collision = maybe_rel_time_of_first_notable_speed.is_none()
+                && maybe_rel_collision_time.is_some();
+            let no_interest_points = maybe_rel_time_of_first_notable_speed.is_none()
+                && maybe_rel_collision_time.is_none();
+            let collision_first =
+                !accel_recalc_first && !only_accel_recalc && !only_collision && !no_interest_points;
+
+            let do_accel_recalc = accel_recalc_first || only_accel_recalc;
+            let do_collision = collision_first || only_collision;
+
+            if do_collision {
+                let collision = maybe_collision.unwrap();
+
                 collision_occurred = true;
 
-                let step_taken_to_this_collision = collision.collider_pos - current_start_point;
-                let fraction_through_remaining_movement_just_moved =
-                    magnitude(step_taken_to_this_collision) / magnitude(planned_displacement);
-                fraction_of_movement_remaining -=
-                    fraction_of_movement_remaining * fraction_through_remaining_movement_just_moved;
-
                 self.player.last_collision = Some(PlayerBlockCollision {
-                    time_in_ticks: self.time_in_ticks()
-                        - dt_in_ticks * fraction_of_movement_remaining,
+                    time_in_ticks: self.time_in_ticks() - remaining_time
+                        + maybe_rel_collision_time.unwrap(),
                     normal: collision.normal,
                     collider_velocity: self.player.vel,
                     collider_pos: collision.collider_pos,
                     collided_block_square: collision.collided_block_square,
                 });
 
-                let prev_start_point = current_start_point;
-                let prev_planned_displacement = planned_displacement;
-                let prev_vel = self.player.vel;
-                (current_start_point, planned_displacement, self.player.vel) = self
-                    .deflect_off_collision_plane(
-                        collision,
-                        current_start_point,
-                        planned_displacement,
-                        self.player.vel,
-                    );
+                remaining_time = dt_in_ticks - maybe_rel_collision_time.unwrap();
 
-                if current_start_point == prev_start_point
-                    && prev_planned_displacement == planned_displacement
-                {
+                target_state.pos = collision.collider_pos;
+
+                target_state.vel = current_state
+                    .extrapolated(maybe_rel_collision_time.unwrap())
+                    .vel;
+
+                if collision.normal.x() == 0 {
+                    target_state.vel.set_y(0.0);
+                } else if collision.normal.y() == 0 {
+                    target_state.vel.set_x(0.0);
+                } else {
+                    panic!("bad collision normal: {:?}", collision);
+                }
+
+                if current_state == target_state {
                     dbg!(
                         "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
-                        prev_start_point,
-                        current_start_point,
-                        prev_planned_displacement,
-                        planned_displacement,
-                        prev_vel,
-                        self.player.vel
+                        start_state,
+                        current_state,
                     );
                     panic!("start point and planned movement did not change from collision");
                 }
 
-                current_target = current_start_point + planned_displacement;
+                target_state.pos = current_state.pos + target_state_delta.pos;
+            } else if do_accel_recalc {
+                self.update_player_accelerations();
+                let grid_vel = world_space_to_grid_space(self.player.vel, VERTICAL_STRETCH_FACTOR);
+                let grid_accel =
+                    world_space_to_grid_space(self.player.accel, VERTICAL_STRETCH_FACTOR);
+                target_state_delta.pos =
+                    grid_vel * remaining_time + grid_accel * 0.5 * remaining_time * remaining_time;
+                current_state.pos = target_state_delta.pos
+                    * (maybe_rel_time_of_first_notable_speed.unwrap() / dt_in_ticks);
+                target_state_delta.vel = self.player.accel * remaining_time;
+                current_state.vel = target_state_delta.vel
+                    * (maybe_rel_time_of_first_notable_speed.unwrap() / dt_in_ticks);
+
+                remaining_time = dt_in_ticks - maybe_rel_time_of_first_notable_speed.unwrap();
             } else {
-                // should exit loop after this else
-                current_start_point = current_target;
+                // should exit loop
+                current_state.pos = target_state.pos;
+                current_state.vel.add_assign(target_state_delta.vel);
                 break;
+            }
+
+            // set the player to the current target
+            self.player.pos = target_state.pos;
+            self.player.vel = target_state.vel;
+
+            if !self.in_world(snap_to_grid(self.player.pos)) {
+                // Player went out of bounds and died
+                self.kill_player();
+                return;
             }
         }
 
-        if !self.in_world(snap_to_grid(current_start_point)) {
-            // Player went out of bounds and died
-            self.kill_player();
-            return;
-        }
-
-        let step_taken = current_start_point - self.player.pos;
-        self.save_recent_player_pose(self.player.pos);
-        self.player.pos = current_start_point;
+        let step_taken = self.player.pos - start_state.pos;
+        self.save_recent_player_pose(start_state.pos);
 
         if collision_occurred {
             self.player.moved_normal_to_collision_since_collision = false;
@@ -1404,6 +1460,40 @@ impl Game {
             } else {
                 self.player.remaining_coyote_time = 0.0;
             }
+        }
+    }
+
+    fn get_time_to_first_notable_speed(
+        &self,
+        start_vel: FPoint,
+        start_accel: FPoint,
+    ) -> Option<f32> {
+        return None; // asdf
+        let mut notable_speeds = vec![
+            0.0,
+            self.player.max_run_speed,
+            self.player.max_midair_move_speed,
+            self.player.ground_friction_start_speed,
+            self.player.air_friction_start_speed,
+        ];
+        let start_speed = magnitude(start_vel);
+        if notable_speeds.contains(&start_speed) {
+            remove_by_value(&mut notable_speeds, &start_speed);
+        }
+
+        let mut times_to_notable_speeds: Vec<f32> = notable_speeds
+            .iter()
+            .map(|&speed| -> Option<f32> {
+                when_parabolic_motion_reaches_speed(start_vel, start_accel, speed)
+            })
+            .flatten()
+            .collect();
+        times_to_notable_speeds.sort_by_key(|&a| OrderedFloat(a));
+        let r = times_to_notable_speeds.get(0);
+        if r.is_some() {
+            Some(*r.unwrap())
+        } else {
+            None
         }
     }
 
@@ -1438,17 +1528,56 @@ impl Game {
         }
     }
 
-    fn apply_forces_to_player(&mut self, dt_in_ticks: f32) {
+    fn update_player_accelerations(&mut self) {
+        let mut total_acceleration = zero_f();
+        // wall friction
         if self.player_is_grabbing_wall() && self.player.vel.y() <= 0.0 {
-            self.apply_player_wall_friction(dt_in_ticks);
+            total_acceleration.add_assign(down_f() * self.player.acceleration_from_floor_traction);
         } else if !self.player_is_supported() {
-            self.apply_player_air_friction(dt_in_ticks);
-            self.apply_player_air_traction(dt_in_ticks);
-            self.apply_player_acceleration_from_gravity(dt_in_ticks);
+            // air friction
+            if magnitude(self.player.vel) > self.player.air_friction_start_speed {
+                total_acceleration.add_assign(
+                    direction(-self.player.vel) * self.player.deceleration_from_air_friction,
+                );
+            }
+            // air traction
+            if !self.player_is_pressing_against_wall_horizontally()
+                && magnitude(self.player.vel) < self.player.max_midair_move_speed
+            {
+                total_acceleration.add_assign(
+                    floatify(self.player.desired_direction)
+                        * self.player.acceleration_from_air_traction,
+                );
+            }
+            // gravity
+            total_acceleration.add_assign(down_f() * self.player.acceleration_from_gravity);
         } else {
-            self.apply_player_floor_friction(dt_in_ticks);
-            self.apply_player_floor_traction(dt_in_ticks);
+            // floor friction
+            if magnitude(self.player.vel) > self.player.ground_friction_start_speed {
+                //self.apply_player_floor_friction(dt_in_ticks);
+                total_acceleration.add_assign(
+                    direction(-self.player.vel) * self.player.deceleration_from_ground_friction,
+                );
+            }
+            // floor traction
+            if !self.player_is_pressing_against_wall_horizontally()
+                && magnitude(self.player.vel) < self.player.max_run_speed
+            {
+                if self.player.desired_direction.x() == 0 && self.player.vel.x() != 0.0 {
+                    total_acceleration.add_assign(
+                        direction(-self.player.vel) * self.player.acceleration_from_floor_traction,
+                    );
+                }
+                total_acceleration.add_assign(
+                    floatify(self.player.desired_direction)
+                        * self.player.acceleration_from_floor_traction,
+                );
+                //self.apply_player_floor_traction(dt_in_ticks);
+            }
         }
+
+        //dbg!( &total_acceleration, self.player.vel, self.player_is_pressing_against_wall_horizontally(), magnitude(self.player.vel) );
+        self.player.accel = total_acceleration;
     }
 
     fn apply_player_air_friction(&mut self, dt_in_ticks: f32) {
@@ -2372,24 +2501,75 @@ mod tests {
 
     #[test]
     #[timeout(100)]
-    fn test_move_player() {
+    fn test_move_player_right() {
         let mut game = set_up_player_on_platform();
         game.player.max_run_speed = 1.0;
         game.player.acceleration_from_floor_traction = 1.0;
-        game.player.desired_direction.set_x(1);
+        game.player.desired_direction = right_i();
+        let start_pos = game.player.pos;
+        let start_vel = game.player.vel;
 
         game.tick_physics();
 
-        assert!(game.player.pos == p(16.0, 11.0));
+        assert!(game.player.pos == start_pos + right_f() * 0.5);
+        assert!(game.player.vel == start_vel + right_f() * 1.0);
+    }
 
+    #[test]
+    #[timeout(100)]
+    fn test_move_player_left() {
+        let mut game = set_up_player_on_platform();
         game.place_player(15.0, 11.0);
+        game.player.max_run_speed = 1.0;
+        game.player.acceleration_from_floor_traction = 1.0;
+        let start_pos = game.player.pos;
+        let start_vel = game.player.vel;
+
         assert!(game.player.desired_direction.x() == 0);
-        game.player.desired_direction.set_x(-1);
+        game.player.desired_direction = left_i();
 
         game.tick_physics();
+
+        assert!(game.player.pos == start_pos + left_f() * 0.5);
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_move_player_for_multiple_ticks() {
+        let mut game = set_up_player_on_platform();
+        game.place_player(15.0, 11.0);
+        game.player.max_run_speed = 1.0;
+        game.player.ground_friction_start_speed = game.player.max_run_speed;
+        game.player.acceleration_from_floor_traction = 1.0;
+        let start_pos = game.player.pos;
+        let start_vel = game.player.vel;
+
+        assert!(game.player.desired_direction.x() == 0);
+        game.player.desired_direction = left_i();
+
+        let num_ticks = 5;
+
+        for _ in 0..num_ticks {
+            game.tick_physics();
+        }
+
+        assert!(game.player.pos == start_pos + left_f() * (num_ticks as f32 - 0.5));
+        assert!(game.player.vel == start_vel + left_f() * game.player.max_run_speed);
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_player_can_stop() {
+        let mut game = set_up_player_running_full_speed_to_right_on_platform();
+        game.player.desired_direction = down_i();
+        let start_vel = game.player.vel;
         game.tick_physics();
 
-        assert!(game.player.pos == p(13.0, 11.0));
+        assert!(game.player.vel.x() < start_vel.x());
+
+        for _ in 0..25 {
+            game.tick_physics();
+        }
+        assert!(game.player.vel.x() == 0.0);
     }
 
     #[test]
@@ -2444,16 +2624,20 @@ mod tests {
     #[test]
     #[timeout(100)]
     fn test_move_player_quickly() {
-        let mut game = set_up_player_on_platform();
+        let mut game = set_up_player_starting_to_move_right_on_platform();
         game.player.max_run_speed = 2.0;
         game.player.acceleration_from_floor_traction = 1.0;
-        game.player.desired_direction.set_x(1);
+        game.player.ground_friction_start_speed = 5.0;
+        let start_pos = game.player.pos;
+        let start_vel = game.player.vel;
 
         game.tick_physics();
         game.tick_physics();
-        assert!(game.player.pos.x() > 17.0);
+        assert!(game.player.pos.x() == (start_pos + right_f() * 2.0).x());
+        assert!(game.player.vel.x() == (start_vel + right_f() * 2.0).x());
         game.tick_physics();
-        assert!(game.player.pos.x() > 19.0);
+        assert!(game.player.vel.x() == (start_vel + right_f() * 2.0).x());
+        assert!(game.player.pos.x() == (start_pos + right_f() * 4.0).x());
     }
 
     #[test]

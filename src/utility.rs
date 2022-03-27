@@ -1,7 +1,9 @@
+extern crate derive_more;
 extern crate geo;
 extern crate rand;
 
 use crate::{AdjacentOccupancyMask, RADIUS_OF_EXACTLY_TOUCHING_ZONE};
+use derive_more::{Add, Display, Sub};
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Line, Point};
@@ -500,6 +502,9 @@ pub fn floatify(vec: Point<i32>) -> Point<f32> {
 pub fn magnitude(vec: Point<f32>) -> f32 {
     return (vec.x().pow(2.0) + vec.y().pow(2.0)).sqrt();
 }
+pub fn magnitude_squared(vec: Point<f32>) -> f32 {
+    return vec.x().pow(2.0) + vec.y().pow(2.0);
+}
 pub fn direction(vec: Point<f32>) -> Point<f32> {
     return vec / magnitude(vec);
 }
@@ -663,6 +668,9 @@ pub fn lin_space_from_start_2d(start: FPoint, end: FPoint, density: f32) -> Vec<
 pub fn lerp_2d(a: Point<f32>, b: Point<f32>, t: f32) -> Point<f32> {
     p(lerp(a.x(), b.x(), t), lerp(a.y(), b.y(), t))
 }
+pub fn inverse_lerp_2d(a: FPoint, b: FPoint, third_point: FPoint) -> f32 {
+    magnitude(third_point - a) / magnitude(b - a)
+}
 
 pub fn rotated(vect: Point<f32>, radians: f32) -> Point<f32> {
     let (x, y) = vect.x_y();
@@ -798,6 +806,67 @@ pub fn time_to_jump_peak(jump_vel: f32, grav_accel: f32) -> f32 {
 
 pub fn time_to_jump_landing(jump_vel: f32, grav_accel: f32) -> f32 {
     time_to_jump_peak(jump_vel, grav_accel) * 2.0
+}
+
+#[derive(Copy, Clone, PartialEq, Debug, Add, Sub)]
+pub struct KinematicState {
+    pub pos: FPoint,
+    pub vel: FPoint,
+    pub accel: FPoint,
+}
+impl KinematicState {
+    pub fn extrapolated(&self, dt: f32) -> KinematicState {
+        parabolic_extrapolation(*self, dt)
+    }
+    pub fn extrapolated_delta(&self, dt: f32) -> KinematicState {
+        self.extrapolated(dt) - *self
+    }
+}
+
+pub fn parabolic_extrapolation(start_state: KinematicState, dt: f32) -> KinematicState {
+    KinematicState {
+        pos: start_state.pos + start_state.vel * dt + start_state.accel * 0.5 * dt * dt,
+        vel: start_state.vel + start_state.accel * dt,
+        accel: start_state.accel,
+    }
+}
+
+pub fn when_linear_motion_hits_circle(start_pos: FPoint, vel: FPoint, radius: f32) -> Option<f32> {
+    let a = magnitude_squared(vel);
+    let b = 2.0 * start_pos.dot(vel);
+    let c = magnitude_squared(start_pos) - radius.pow(2.0);
+    let determinant = b * b - 4.0 * a * c;
+    // never collide with circle
+    if determinant < 0.0 {
+        return None;
+    }
+    let t1 = (-b + determinant.sqrt()) / (2.0 * a);
+    let t2 = (-b - determinant.sqrt()) / (2.0 * a);
+    //dbg!(start_pos, vel, radius, a, b, c, determinant, t1, t2);
+    // collided with circle in past
+    if t1 < 0.0 && t2 < 0.0 {
+        return None;
+    }
+    // want first of 2 future collisions (includes case of starting on circle)
+    if t1 >= 0.0 && t2 >= 0.0 {
+        Some(t1.min(t2))
+    }
+    // one collision in past, one in future (started inside circle)
+    else {
+        Some(t1.max(t2))
+    }
+}
+
+pub fn when_parabolic_motion_reaches_speed(
+    start_vel: FPoint,
+    acceleration: FPoint,
+    target_speed: f32,
+) -> Option<f32> {
+    when_linear_motion_hits_circle(start_vel, acceleration, target_speed)
+}
+
+pub fn remove_by_value<T: PartialEq>(vec: &mut Vec<T>, val: &T) {
+    vec.retain(|x| *x != *val);
 }
 
 // for tests
@@ -1688,5 +1757,24 @@ mod tests {
     fn test_flip_y() {
         assert!(flip_y(p(5.0, 8.0)) == p(5.0, -8.0));
         assert!(flip_y(p(5.0, -8.0)) == p(5.0, 8.0));
+    }
+
+    #[test]
+    fn test_when_linear_motion_hits_circle__simple_test() {
+        assert!(when_linear_motion_hits_circle(right_f() * 5.0, right_f() * 1.0, 7.0) == Some(2.0));
+        assert!(when_linear_motion_hits_circle(right_f() * 5.0, left_f() * 1.0, 4.0) == Some(1.0));
+        assert!(when_linear_motion_hits_circle(up_f() * 5.0, down_f() * 1.0, 7.0) == Some(12.0));
+        assert!(when_linear_motion_hits_circle(right_f() * 5.0, right_f() * 1.0, 4.0) == None);
+    }
+    #[test]
+    fn test_when_linear_motion_hits_circle__fancy_test() {
+        let x0 = p(5.345, 1.567); // random
+        let v = direction(p(1.398, 8.4837));
+        let t = 4.567;
+        let endpoint = x0 + v * t;
+        let end_radius = magnitude(endpoint);
+
+        let calculated_time = when_linear_motion_hits_circle(x0, v, end_radius).unwrap();
+        assert!(nearly_equal(t, calculated_time));
     }
 }
