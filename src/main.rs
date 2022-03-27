@@ -645,7 +645,6 @@ impl Game {
     fn apply_physics(&mut self, dt_in_ticks: f32) {
         self.apply_gravity_to_blocks();
         if self.player.alive {
-            self.update_player_accelerations();
             self.apply_player_kinematics(dt_in_ticks);
             if self.player_is_in_boost() {
                 self.generate_speed_particles();
@@ -1318,12 +1317,16 @@ impl Game {
 
         let mut remaining_time = dt_in_ticks;
         let mut collision_occurred = false;
+
         let mut timeout_counter = 0;
-        loop {
+        while remaining_time > 0.0 {
             timeout_counter += 1;
             if timeout_counter > 100 {
-                panic!("player kinematics looped too much :(");
+                dbg!(start_state);
+                panic!("player kinematics looped too much :( ");
             }
+
+            self.update_player_accelerations();
 
             let mut current_state = KinematicState {
                 pos: self.player.pos,
@@ -1347,6 +1350,8 @@ impl Game {
                 None
             };
 
+            // need to recalculate acceleration after every collision too
+
             let accel_recalc_first = maybe_rel_time_of_first_notable_speed.is_some()
                 && maybe_rel_collision_time.is_some()
                 && maybe_rel_time_of_first_notable_speed.unwrap()
@@ -1360,30 +1365,30 @@ impl Game {
             let collision_first =
                 !accel_recalc_first && !only_accel_recalc && !only_collision && !no_interest_points;
 
-            let do_accel_recalc = accel_recalc_first || only_accel_recalc;
             let do_collision = collision_first || only_collision;
+            let do_accel_recalc = accel_recalc_first || only_accel_recalc || do_collision;
 
             if do_collision {
                 let collision = maybe_collision.unwrap();
 
                 collision_occurred = true;
 
-                self.player.last_collision = Some(PlayerBlockCollision {
-                    time_in_ticks: self.time_in_ticks() - remaining_time
-                        + maybe_rel_collision_time.unwrap(),
-                    normal: collision.normal,
-                    collider_velocity: self.player.vel,
-                    collider_pos: collision.collider_pos,
-                    collided_block_square: collision.collided_block_square,
-                });
-
-                remaining_time = dt_in_ticks - maybe_rel_collision_time.unwrap();
+                remaining_time -= maybe_rel_collision_time.unwrap();
 
                 target_state.pos = collision.collider_pos;
 
                 target_state.vel = current_state
                     .extrapolated(maybe_rel_collision_time.unwrap())
                     .vel;
+
+                self.player.last_collision = Some(PlayerBlockCollision {
+                    time_in_ticks: self.time_in_ticks() - remaining_time
+                        + maybe_rel_collision_time.unwrap(),
+                    normal: collision.normal,
+                    collider_velocity: target_state.vel,
+                    collider_pos: collision.collider_pos,
+                    collided_block_square: collision.collided_block_square,
+                });
 
                 if collision.normal.x() == 0 {
                     target_state.vel.set_y(0.0);
@@ -1393,35 +1398,20 @@ impl Game {
                     panic!("bad collision normal: {:?}", collision);
                 }
 
+                // collision from acceleration this tick
                 if current_state == target_state {
                     dbg!(
                         "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
                         start_state,
                         current_state,
                     );
-                    panic!("start point and planned movement did not change from collision");
+                    panic!("No kinematic state change from collision");
                 }
-
-                target_state.pos = current_state.pos + target_state_delta.pos;
             } else if do_accel_recalc {
-                self.update_player_accelerations();
-                let grid_vel = world_space_to_grid_space(self.player.vel, VERTICAL_STRETCH_FACTOR);
-                let grid_accel =
-                    world_space_to_grid_space(self.player.accel, VERTICAL_STRETCH_FACTOR);
-                target_state_delta.pos =
-                    grid_vel * remaining_time + grid_accel * 0.5 * remaining_time * remaining_time;
-                current_state.pos = target_state_delta.pos
-                    * (maybe_rel_time_of_first_notable_speed.unwrap() / dt_in_ticks);
-                target_state_delta.vel = self.player.accel * remaining_time;
-                current_state.vel = target_state_delta.vel
-                    * (maybe_rel_time_of_first_notable_speed.unwrap() / dt_in_ticks);
-
-                remaining_time = dt_in_ticks - maybe_rel_time_of_first_notable_speed.unwrap();
+                remaining_time -= maybe_rel_time_of_first_notable_speed.unwrap();
             } else {
                 // should exit loop
-                current_state.pos = target_state.pos;
-                current_state.vel.add_assign(target_state_delta.vel);
-                break;
+                remaining_time = 0.0;
             }
 
             // set the player to the current target
@@ -1468,7 +1458,6 @@ impl Game {
         start_vel: FPoint,
         start_accel: FPoint,
     ) -> Option<f32> {
-        return None; // asdf
         let mut notable_speeds = vec![
             0.0,
             self.player.max_run_speed,
@@ -2336,6 +2325,19 @@ mod tests {
         game.player.remaining_coyote_time = 0.0;
         game.tick_physics();
         assert!(game.player.alive == false);
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_player_falls_in_gravity() {
+        let mut game = set_up_just_player();
+        game.player.acceleration_from_gravity = 1.0;
+        game.player.remaining_coyote_time = 0.0;
+        let start_pos = game.player.pos;
+        let start_vel = game.player.vel;
+        game.tick_physics();
+        assert!(game.player.pos.y() < start_pos.y());
+        assert!(game.player.vel.y() < start_vel.y());
     }
 
     #[test]
