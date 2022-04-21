@@ -1248,7 +1248,6 @@ impl Game {
     }
 
     fn kill_player(&mut self) {
-        self.set_block(snap_to_grid(self.player.pos), Block::Air);
         self.player.alive = false;
     }
 
@@ -1309,7 +1308,7 @@ impl Game {
     }
 
     fn apply_player_kinematics(&mut self, dt_in_ticks: f32) {
-        let start_state = KinematicState {
+        let start_parabola = KinematicState {
             pos: self.player.pos,
             vel: self.player.vel,
             accel: self.player.accel,
@@ -1322,29 +1321,29 @@ impl Game {
         while remaining_time > 0.0 {
             timeout_counter += 1;
             if timeout_counter > 100 {
-                dbg!(start_state);
+                dbg!(start_parabola);
                 panic!("player kinematics looped too much :( ");
             }
 
             self.update_player_accelerations();
 
-            let mut current_state = KinematicState {
+            let mut current_parabola = KinematicState {
                 pos: self.player.pos,
                 vel: self.player.vel,
                 accel: self.player.accel,
             };
 
-            let mut target_state_delta = current_state.extrapolated_delta(remaining_time);
+            let mut target_state_delta = current_parabola.extrapolated_delta(remaining_time);
             target_state_delta.pos =
                 world_space_to_grid_space(target_state_delta.pos, VERTICAL_STRETCH_FACTOR);
-            let mut target_state = current_state + target_state_delta;
+            let mut target_state: KinematicState = current_parabola + target_state_delta;
 
             let maybe_rel_time_of_first_notable_speed =
                 self.get_time_to_first_notable_speed(self.player.vel, self.player.accel);
             let maybe_collision = self.unit_squarecast(self.player.pos, target_state.pos);
             let maybe_rel_collision_time = if let Some(collision) = maybe_collision {
                 let fraction_through_remaining_movement_just_moved =
-                    inverse_lerp_2d(start_state.pos, target_state.pos, collision.collider_pos);
+                    inverse_lerp_2d(start_parabola.pos, target_state.pos, collision.collider_pos);
                 Some(remaining_time * fraction_through_remaining_movement_just_moved)
             } else {
                 None
@@ -1367,6 +1366,12 @@ impl Game {
 
             let do_collision = collision_first || only_collision;
             let do_accel_recalc = accel_recalc_first || only_accel_recalc || do_collision;
+            dbg!(
+                maybe_rel_time_of_first_notable_speed,
+                maybe_rel_collision_time,
+                do_collision,
+                do_accel_recalc
+            );
 
             if do_collision {
                 let collision = maybe_collision.unwrap();
@@ -1377,7 +1382,7 @@ impl Game {
 
                 target_state.pos = collision.collider_pos;
 
-                target_state.vel = current_state
+                target_state.vel = current_parabola
                     .extrapolated(maybe_rel_collision_time.unwrap())
                     .vel;
 
@@ -1399,16 +1404,22 @@ impl Game {
                 }
 
                 // collision from acceleration this tick
-                if current_state == target_state {
+                if current_parabola == target_state {
                     dbg!(
                         "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
-                        start_state,
-                        current_state,
+                        start_parabola,
+                        current_parabola,
                     );
                     panic!("No kinematic state change from collision");
                 }
+                dbg!("after collision", target_state, remaining_time);
             } else if do_accel_recalc {
+                dbg!(remaining_time);
+                let fraction_into_step =
+                    maybe_rel_time_of_first_notable_speed.unwrap() / remaining_time;
+                target_state = lerp(current_parabola, target_state, fraction_into_step);
                 remaining_time -= maybe_rel_time_of_first_notable_speed.unwrap();
+                dbg!(remaining_time);
             } else {
                 // should exit loop
                 remaining_time = 0.0;
@@ -1425,8 +1436,8 @@ impl Game {
             }
         }
 
-        let step_taken = self.player.pos - start_state.pos;
-        self.save_recent_player_pose(start_state.pos);
+        let step_taken = self.player.pos - start_parabola.pos;
+        self.save_recent_player_pose(start_parabola.pos);
 
         if collision_occurred {
             self.player.moved_normal_to_collision_since_collision = false;
@@ -4719,5 +4730,13 @@ mod tests {
         game.apply_physics_in_n_steps(time_to_peak / 2.0, 100);
         game.apply_physics_in_n_steps(time_to_peak / 2.0, 100);
         assert!(nearly_equal(game.player.pos.y(), start_pos.y()));
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_can_kill_player_off_screen() {
+        let mut game = set_up_just_player();
+        game.player.pos = p(game.width() as f32 * 5.0, game.height() as f32 * 5.0);
+        game.kill_player();
     }
 }

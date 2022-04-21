@@ -3,7 +3,7 @@ extern crate geo;
 extern crate rand;
 
 use crate::{AdjacentOccupancyMask, RADIUS_OF_EXACTLY_TOUCHING_ZONE};
-use derive_more::{Add, Display, Sub};
+use derive_more::{Add, Display, Div, Mul, Sub};
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Line, Point};
@@ -622,7 +622,11 @@ pub fn rand_in_range(start: f32, end: f32) -> f32 {
     rng.gen_range(start..end)
 }
 
-pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
+pub fn lerp<T: std::ops::Mul<f32, Output = T> + std::ops::Add<T, Output = T>>(
+    a: T,
+    b: T,
+    t: f32,
+) -> T {
     a * (1.0 - t) + b * t
 }
 pub fn inverse_lerp(a: f32, b: f32, value_between_a_and_b: f32) -> f32 {
@@ -808,7 +812,7 @@ pub fn time_to_jump_landing(jump_vel: f32, grav_accel: f32) -> f32 {
     time_to_jump_peak(jump_vel, grav_accel) * 2.0
 }
 
-#[derive(Copy, Clone, PartialEq, Debug, Add, Sub)]
+#[derive(Copy, Clone, PartialEq, Debug, Add, Sub, Mul, Div)]
 pub struct KinematicState {
     pub pos: FPoint,
     pub vel: FPoint,
