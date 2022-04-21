@@ -645,6 +645,7 @@ impl Game {
     fn apply_physics(&mut self, dt_in_ticks: f32) {
         self.apply_gravity_to_blocks();
         if self.player.alive {
+            self.update_player_accelerations();
             self.apply_player_kinematics(dt_in_ticks);
             if self.player_is_in_boost() {
                 self.generate_speed_particles();
@@ -1308,7 +1309,7 @@ impl Game {
     }
 
     fn apply_player_kinematics(&mut self, dt_in_ticks: f32) {
-        let start_parabola = KinematicState {
+        let start_kinematic_state = KinematicState {
             pos: self.player.pos,
             vel: self.player.vel,
             accel: self.player.accel,
@@ -1316,136 +1317,108 @@ impl Game {
 
         let mut remaining_time = dt_in_ticks;
         let mut collision_occurred = false;
+        let mut collisions = Vec::new();
 
         let mut timeout_counter = 0;
         while remaining_time > 0.0 {
             timeout_counter += 1;
             if timeout_counter > 100 {
-                dbg!(start_parabola);
+                dbg!(start_kinematic_state);
+                dbg!(remaining_time);
+                dbg!(collisions.last());
                 panic!("player kinematics looped too much :( ");
             }
 
-            self.update_player_accelerations();
-
-            let mut current_parabola = KinematicState {
+            let kinematic_state_at_start_of_submove = KinematicState {
                 pos: self.player.pos,
                 vel: self.player.vel,
                 accel: self.player.accel,
             };
 
-            let mut target_state_delta = current_parabola.extrapolated_delta(remaining_time);
+            dbg!(kinematic_state_at_start_of_submove);
+            let mut target_state_delta = kinematic_state_at_start_of_submove
+                .extrapolated_delta_with_speed_cap(remaining_time, self.player.max_run_speed);
             target_state_delta.pos =
                 world_space_to_grid_space(target_state_delta.pos, VERTICAL_STRETCH_FACTOR);
-            let mut target_state: KinematicState = current_parabola + target_state_delta;
+            let target_state: KinematicState =
+                kinematic_state_at_start_of_submove + target_state_delta;
+            dbg!(target_state);
 
-            let maybe_rel_time_of_first_notable_speed =
-                self.get_time_to_first_notable_speed(self.player.vel, self.player.accel);
             let maybe_collision = self.unit_squarecast(self.player.pos, target_state.pos);
-            let maybe_rel_collision_time = if let Some(collision) = maybe_collision {
-                let fraction_through_remaining_movement_just_moved =
-                    inverse_lerp_2d(start_parabola.pos, target_state.pos, collision.collider_pos);
-                Some(remaining_time * fraction_through_remaining_movement_just_moved)
-            } else {
-                None
-            };
 
-            // need to recalculate acceleration after every collision too
+            let mut end_state = target_state;
 
-            let accel_recalc_first = maybe_rel_time_of_first_notable_speed.is_some()
-                && maybe_rel_collision_time.is_some()
-                && maybe_rel_time_of_first_notable_speed.unwrap()
-                    < maybe_rel_collision_time.unwrap();
-            let only_accel_recalc = maybe_rel_time_of_first_notable_speed.is_some()
-                && maybe_rel_collision_time.is_none();
-            let only_collision = maybe_rel_time_of_first_notable_speed.is_none()
-                && maybe_rel_collision_time.is_some();
-            let no_interest_points = maybe_rel_time_of_first_notable_speed.is_none()
-                && maybe_rel_collision_time.is_none();
-            let collision_first =
-                !accel_recalc_first && !only_accel_recalc && !only_collision && !no_interest_points;
-
-            let do_collision = collision_first || only_collision;
-            let do_accel_recalc = accel_recalc_first || only_accel_recalc || do_collision;
-            dbg!(
-                maybe_rel_time_of_first_notable_speed,
-                maybe_rel_collision_time,
-                do_collision,
-                do_accel_recalc
-            );
-
-            if do_collision {
-                let collision = maybe_collision.unwrap();
-
+            if let Some(collision) = maybe_collision {
                 collision_occurred = true;
+                collisions.push(collision.clone());
 
-                remaining_time -= maybe_rel_collision_time.unwrap();
+                let fraction_through_remaining_movement_just_moved = inverse_lerp_2d(
+                    start_kinematic_state.pos,
+                    target_state.pos,
+                    collision.collider_pos,
+                );
+                let rel_collision_time =
+                    remaining_time * fraction_through_remaining_movement_just_moved;
 
-                target_state.pos = collision.collider_pos;
+                remaining_time -= rel_collision_time;
 
-                target_state.vel = current_parabola
-                    .extrapolated(maybe_rel_collision_time.unwrap())
+                end_state.pos = collision.collider_pos;
+
+                end_state.vel = kinematic_state_at_start_of_submove
+                    .extrapolated(rel_collision_time)
                     .vel;
 
                 self.player.last_collision = Some(PlayerBlockCollision {
-                    time_in_ticks: self.time_in_ticks() - remaining_time
-                        + maybe_rel_collision_time.unwrap(),
+                    time_in_ticks: self.time_in_ticks() - remaining_time + rel_collision_time,
                     normal: collision.normal,
-                    collider_velocity: target_state.vel,
+                    collider_velocity: end_state.vel,
                     collider_pos: collision.collider_pos,
                     collided_block_square: collision.collided_block_square,
                 });
 
                 if collision.normal.x() == 0 {
-                    target_state.vel.set_y(0.0);
+                    end_state.vel.set_y(0.0);
                 } else if collision.normal.y() == 0 {
-                    target_state.vel.set_x(0.0);
+                    end_state.vel.set_x(0.0);
                 } else {
                     panic!("bad collision normal: {:?}", collision);
                 }
 
                 // collision from acceleration this tick
-                if current_parabola == target_state {
+                if kinematic_state_at_start_of_submove == target_state {
                     dbg!(
                         "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
-                        start_parabola,
-                        current_parabola,
+                        start_kinematic_state,
+                        kinematic_state_at_start_of_submove,
                     );
                     panic!("No kinematic state change from collision");
                 }
-                dbg!("after collision", target_state, remaining_time);
-            } else if do_accel_recalc {
-                dbg!(remaining_time);
-                let fraction_into_step =
-                    maybe_rel_time_of_first_notable_speed.unwrap() / remaining_time;
-                target_state = lerp(current_parabola, target_state, fraction_into_step);
-                remaining_time -= maybe_rel_time_of_first_notable_speed.unwrap();
-                dbg!(remaining_time);
+                //dbg!("after collision", target_state, remaining_time);
             } else {
                 // should exit loop
                 remaining_time = 0.0;
             }
 
             // set the player to the current target
-            self.player.pos = target_state.pos;
-            self.player.vel = target_state.vel;
+            self.player.pos = end_state.pos;
+            self.player.vel = end_state.vel;
 
             if !self.in_world(snap_to_grid(self.player.pos)) {
                 // Player went out of bounds and died
                 self.kill_player();
                 return;
             }
+            if remaining_time < 0.00001 {
+                remaining_time = 0.0;
+            }
         }
 
-        let step_taken = self.player.pos - start_parabola.pos;
-        self.save_recent_player_pose(start_parabola.pos);
+        let step_taken = self.player.pos - start_kinematic_state.pos;
+        self.save_recent_player_pose(start_kinematic_state.pos);
 
         if collision_occurred {
             self.player.moved_normal_to_collision_since_collision = false;
-        } else if self.player.last_collision.is_some()
-            && step_taken.dot(floatify(
-                self.player.last_collision.as_ref().unwrap().normal,
-            )) != 0.0
-        {
+        } else if self.movement_is_normal_to_last_collision(step_taken) {
             self.player.moved_normal_to_collision_since_collision = true;
         }
 
@@ -1461,39 +1434,6 @@ impl Game {
             } else {
                 self.player.remaining_coyote_time = 0.0;
             }
-        }
-    }
-
-    fn get_time_to_first_notable_speed(
-        &self,
-        start_vel: FPoint,
-        start_accel: FPoint,
-    ) -> Option<f32> {
-        let mut notable_speeds = vec![
-            0.0,
-            self.player.max_run_speed,
-            self.player.max_midair_move_speed,
-            self.player.ground_friction_start_speed,
-            self.player.air_friction_start_speed,
-        ];
-        let start_speed = magnitude(start_vel);
-        if notable_speeds.contains(&start_speed) {
-            remove_by_value(&mut notable_speeds, &start_speed);
-        }
-
-        let mut times_to_notable_speeds: Vec<f32> = notable_speeds
-            .iter()
-            .map(|&speed| -> Option<f32> {
-                when_parabolic_motion_reaches_speed(start_vel, start_accel, speed)
-            })
-            .flatten()
-            .collect();
-        times_to_notable_speeds.sort_by_key(|&a| OrderedFloat(a));
-        let r = times_to_notable_speeds.get(0);
-        if r.is_some() {
-            Some(*r.unwrap())
-        } else {
-            None
         }
     }
 
@@ -1521,6 +1461,13 @@ impl Game {
         (new_move_start, new_relative_target, new_vel)
     }
 
+    fn movement_is_normal_to_last_collision(&mut self, step_taken: FPoint) -> bool {
+        self.player.last_collision.is_some()
+            && step_taken.dot(floatify(
+                self.player.last_collision.as_ref().unwrap().normal,
+            )) != 0.0
+    }
+
     fn save_recent_player_pose(&mut self, pos: Point<f32>) {
         self.player.recent_poses.push_front(pos);
         while self.player.recent_poses.len() > NUM_SAVED_PLAYER_POSES as usize {
@@ -1528,14 +1475,21 @@ impl Game {
         }
     }
 
+    fn player_is_sliding_down_wall(&self) -> bool {
+        self.player_is_grabbing_wall() && self.player.vel.y() <= 0.0
+    }
+
     fn update_player_accelerations(&mut self) {
         let mut total_acceleration = zero_f();
         // wall friction
-        if self.player_is_grabbing_wall() && self.player.vel.y() <= 0.0 {
+        if self.player_is_sliding_down_wall() {
+            dbg!("asdfasdf");
             total_acceleration.add_assign(down_f() * self.player.acceleration_from_floor_traction);
         } else if !self.player_is_supported() {
+            dbg!("asdfasdf");
             // air friction
-            if magnitude(self.player.vel) > self.player.air_friction_start_speed {
+            // DISABLED
+            if false && magnitude(self.player.vel) > self.player.air_friction_start_speed {
                 total_acceleration.add_assign(
                     direction(-self.player.vel) * self.player.deceleration_from_air_friction,
                 );
@@ -1544,6 +1498,7 @@ impl Game {
             if !self.player_is_pressing_against_wall_horizontally()
                 && magnitude(self.player.vel) < self.player.max_midair_move_speed
             {
+                dbg!("asdfasdf");
                 total_acceleration.add_assign(
                     floatify(self.player.desired_direction)
                         * self.player.acceleration_from_air_traction,
@@ -1552,17 +1507,22 @@ impl Game {
             // gravity
             total_acceleration.add_assign(down_f() * self.player.acceleration_from_gravity);
         } else {
+            dbg!("asdfasdf");
             // floor friction
-            if magnitude(self.player.vel) > self.player.ground_friction_start_speed {
+            let going_faster_than_max =
+                magnitude(self.player.vel) > self.player.ground_friction_start_speed;
+            let want_to_go_in_current_direction =
+                self.player.vel.dot(floatify(self.player.desired_direction)) > 0.0;
+            if going_faster_than_max || !want_to_go_in_current_direction {
+                dbg!("asdfasdf");
                 //self.apply_player_floor_friction(dt_in_ticks);
                 total_acceleration.add_assign(
                     direction(-self.player.vel) * self.player.deceleration_from_ground_friction,
                 );
             }
             // floor traction
-            if !self.player_is_pressing_against_wall_horizontally()
-                && magnitude(self.player.vel) < self.player.max_run_speed
-            {
+            if magnitude(self.player.vel) < self.player.max_run_speed {
+                dbg!("asdfasdf");
                 if self.player.desired_direction.x() == 0 && self.player.vel.x() != 0.0 {
                     total_acceleration.add_assign(
                         direction(-self.player.vel) * self.player.acceleration_from_floor_traction,
@@ -1576,7 +1536,12 @@ impl Game {
             }
         }
 
-        //dbg!( &total_acceleration, self.player.vel, self.player_is_pressing_against_wall_horizontally(), magnitude(self.player.vel) );
+        dbg!(
+            &total_acceleration,
+            self.player.vel,
+            self.player_is_pressing_against_wall_horizontally(),
+            magnitude(self.player.vel)
+        );
         self.player.accel = total_acceleration;
     }
 
@@ -2617,7 +2582,7 @@ mod tests {
 
     #[test]
     #[timeout(100)]
-    fn test_move_player_slowly() {
+    fn test_player_does_not_accelerate_past_run_speed_cap() {
         let mut game = set_up_player_on_platform();
         game.player.max_run_speed = 0.49;
         game.player.acceleration_from_floor_traction = 999.9; // rilly fast

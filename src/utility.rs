@@ -820,22 +820,55 @@ pub struct KinematicState {
 }
 impl KinematicState {
     pub fn extrapolated(&self, dt: f32) -> KinematicState {
-        parabolic_extrapolation(*self, dt)
+        KinematicState {
+            pos: self.pos + self.vel * dt + self.accel * 0.5 * dt * dt,
+            vel: self.vel + self.accel * dt,
+            accel: self.accel,
+        }
     }
     pub fn extrapolated_delta(&self, dt: f32) -> KinematicState {
         self.extrapolated(dt) - *self
     }
-}
+    pub fn extrapolated_delta_with_speed_cap(&self, dt: f32, speed_cap: f32) -> KinematicState {
+        self.extrapolated_with_speed_cap(dt, speed_cap) - *self
+    }
+    pub fn extrapolated_with_speed_cap(&self, dt: f32, speed_cap: f32) -> KinematicState {
+        if magnitude(self.vel) <= speed_cap {
+            if let Some(sooner_dt) =
+                when_parabolic_motion_reaches_speed(self.vel, self.accel, speed_cap)
+            {
+                let mid_state = KinematicState {
+                    pos: self.pos + self.vel * sooner_dt + self.accel * 0.5 * sooner_dt * sooner_dt,
+                    vel: self.vel + self.accel * sooner_dt,
+                    accel: self.accel,
+                };
+                let remaining_dt = dt - sooner_dt;
+                return KinematicState {
+                    pos: mid_state.pos + mid_state.vel * remaining_dt,
+                    vel: mid_state.vel,
+                    accel: mid_state.accel,
+                };
+            }
+        }
 
-pub fn parabolic_extrapolation(start_state: KinematicState, dt: f32) -> KinematicState {
-    KinematicState {
-        pos: start_state.pos + start_state.vel * dt + start_state.accel * 0.5 * dt * dt,
-        vel: start_state.vel + start_state.accel * dt,
-        accel: start_state.accel,
+        KinematicState {
+            pos: self.pos + self.vel * dt + self.accel * 0.5 * dt * dt,
+            vel: self.vel + self.accel * dt,
+            accel: self.accel,
+        }
     }
 }
 
 pub fn when_linear_motion_hits_circle(start_pos: FPoint, vel: FPoint, radius: f32) -> Option<f32> {
+    let starts_on_circle = magnitude(start_pos) == radius;
+    if starts_on_circle {
+        return Some(0.0);
+    }
+    let not_moving = vel == zero_f();
+    if not_moving {
+        return None;
+    }
+
     let a = magnitude_squared(vel);
     let b = 2.0 * start_pos.dot(vel);
     let c = magnitude_squared(start_pos) - radius.pow(2.0);
@@ -1771,6 +1804,13 @@ mod tests {
         assert!(when_linear_motion_hits_circle(right_f() * 5.0, right_f() * 1.0, 4.0) == None);
     }
     #[test]
+    fn test_when_linear_motion_hits_circle__zeros_test() {
+        assert!(when_linear_motion_hits_circle(zero_f(), zero_f(), 4.0) == None);
+        assert!(when_linear_motion_hits_circle(right_f() * 25.0, zero_f(), 4.0) == None);
+        assert!(when_linear_motion_hits_circle(zero_f(), right_f(), 0.0) == Some(0.0));
+        assert!(when_linear_motion_hits_circle(zero_f(), zero_f(), 0.0) == Some(0.0));
+    }
+    #[test]
     fn test_when_linear_motion_hits_circle__fancy_test() {
         let x0 = p(5.345, 1.567); // random
         let v = direction(p(1.398, 8.4837));
@@ -1780,5 +1820,48 @@ mod tests {
 
         let calculated_time = when_linear_motion_hits_circle(x0, v, end_radius).unwrap();
         assert!(nearly_equal(t, calculated_time));
+    }
+
+    #[test]
+    fn test_extrapolate_kinematics__accelerate_right() {
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: right_f() * 1.0,
+            accel: right_f() * 1.0,
+        };
+        let end_state = start_state.extrapolated(1.0);
+        assert!(end_state.vel == start_state.vel + right_f() * 1.0);
+    }
+    #[test]
+    fn test_extrapolate_kinematics_with_speed_cap__do_not_exceed_cap() {
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: right_f() * 1.0,
+            accel: right_f() * 1.0,
+        };
+        let end_state = start_state.extrapolated_with_speed_cap(1.0, 1.0);
+        assert!(end_state.vel == start_state.vel);
+    }
+    #[test]
+    fn test_extrapolate_kinematics_with_speed_cap__can_drop_below_cap_from_above_cap() {
+        let speed_cap = 1.0;
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: right_f() * 1.1,
+            accel: left_f() * 1.0,
+        };
+        let end_state = start_state.extrapolated_with_speed_cap(1.0, speed_cap);
+        assert!(magnitude(end_state.vel) < speed_cap);
+    }
+    #[test]
+    fn test_extrapolate_kinematics_with_speed_cap__can_drop_below_cap_from_at_cap() {
+        let speed_cap = 1.0;
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: right_f() * 1.0,
+            accel: left_f() * 0.05,
+        };
+        let end_state = start_state.extrapolated_with_speed_cap(1.0, speed_cap);
+        assert!(magnitude(end_state.vel) < speed_cap);
     }
 }
