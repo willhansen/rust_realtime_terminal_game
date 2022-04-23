@@ -2,7 +2,7 @@ extern crate derive_more;
 extern crate geo;
 extern crate rand;
 
-use crate::{AdjacentOccupancyMask, RADIUS_OF_EXACTLY_TOUCHING_ZONE};
+use crate::RADIUS_OF_EXACTLY_TOUCHING_ZONE;
 use derive_more::{Add, Display, Div, Mul, Sub};
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
@@ -12,6 +12,7 @@ use num::traits::Pow;
 use ordered_float::OrderedFloat;
 use rand::Rng;
 use std::f32::consts::TAU;
+use std::ops::Index;
 
 pub type FPoint = Point<f32>;
 pub type IPoint = Point<i32>;
@@ -73,6 +74,17 @@ pub struct SquarecastCollision {
     pub normal: Point<i32>,
     pub collided_block_square: Point<i32>,
 }
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum ShapeEdgeExtension {
+    Extended,
+    Neutral,
+    Retracted,
+}
+
+pub type AdjacentOccupancyMask = [[bool; 3]; 3];
+pub type SquareEdgeExtensions = [[ShapeEdgeExtension; 3]; 3];
+
 #[allow(dead_code)]
 pub fn single_block_squarecast(
     start_point: Point<f32>,
@@ -80,7 +92,7 @@ pub fn single_block_squarecast(
     grid_square_center: Point<i32>,
     moving_square_side_length: f32,
 ) -> Option<SquarecastCollision> {
-    single_block_squarecast_with_filled_cracks(
+    single_block_squarecast_with_edge_extensions(
         start_point,
         end_point,
         grid_square_center,
@@ -89,7 +101,7 @@ pub fn single_block_squarecast(
     )
 }
 
-pub fn visible_xy_to_actual_xy(a: AdjacentOccupancyMask) -> AdjacentOccupancyMask {
+pub fn visible_xy_to_actual_xy<T: Copy>(a: [[T; 3]; 3]) -> [[T; 3]; 3] {
     // visible
     // [ [ 7, 8, 9 ],
     //   [ 4, 5, 6 ],
@@ -113,7 +125,7 @@ pub fn single_block_linecast_with_filled_cracks(
     grid_square_center: Point<i32>,
     adjacent_squares_occupied: AdjacentOccupancyMask,
 ) -> Option<SquarecastCollision> {
-    single_block_squarecast_with_filled_cracks(
+    single_block_squarecast_with_edge_extensions(
         start_point,
         end_point,
         grid_square_center,
@@ -122,7 +134,7 @@ pub fn single_block_linecast_with_filled_cracks(
     )
 }
 
-pub fn single_block_squarecast_with_filled_cracks(
+pub fn single_block_squarecast_with_edge_extensions(
     start_point: Point<f32>,
     end_point: Point<f32>,
     grid_square_center: Point<i32>,
@@ -506,6 +518,9 @@ pub fn magnitude_squared(vec: Point<f32>) -> f32 {
     return vec.x().pow(2.0) + vec.y().pow(2.0);
 }
 pub fn direction(vec: Point<f32>) -> Point<f32> {
+    if vec == zero_f() {
+        return zero_f();
+    }
     return vec / magnitude(vec);
 }
 
@@ -837,31 +852,29 @@ impl KinematicState {
             if let Some(sooner_dt) =
                 when_parabolic_motion_reaches_speed(self.vel, self.accel, speed_cap)
             {
-                let mid_state = KinematicState {
-                    pos: self.pos + self.vel * sooner_dt + self.accel * 0.5 * sooner_dt * sooner_dt,
-                    vel: self.vel + self.accel * sooner_dt,
-                    accel: self.accel,
-                };
-                let remaining_dt = dt - sooner_dt;
-                return KinematicState {
-                    pos: mid_state.pos + mid_state.vel * remaining_dt,
-                    vel: mid_state.vel,
-                    accel: mid_state.accel,
-                };
+                if sooner_dt < dt {
+                    let mid_state = self.extrapolated(sooner_dt);
+                    let remaining_dt = dt - sooner_dt;
+                    return KinematicState {
+                        pos: mid_state.pos + mid_state.vel * remaining_dt,
+                        vel: mid_state.vel,
+                        accel: mid_state.accel,
+                    };
+                }
             }
         }
-
-        KinematicState {
-            pos: self.pos + self.vel * dt + self.accel * 0.5 * dt * dt,
-            vel: self.vel + self.accel * dt,
-            accel: self.accel,
-        }
+        self.extrapolated(dt)
     }
 }
 
-pub fn when_linear_motion_hits_circle(start_pos: FPoint, vel: FPoint, radius: f32) -> Option<f32> {
+pub fn when_linear_motion_hits_circle_from_inside(
+    start_pos: FPoint,
+    vel: FPoint,
+    radius: f32,
+) -> Option<f32> {
     let starts_on_circle = magnitude(start_pos) == radius;
-    if starts_on_circle {
+    let moving_away_from_center_at_start = start_pos.dot(vel) > 0.0;
+    if starts_on_circle && moving_away_from_center_at_start {
         return Some(0.0);
     }
     let not_moving = vel == zero_f();
@@ -884,9 +897,13 @@ pub fn when_linear_motion_hits_circle(start_pos: FPoint, vel: FPoint, radius: f3
     if t1 < 0.0 && t2 < 0.0 {
         return None;
     }
-    // want first of 2 future collisions (includes case of starting on circle)
+    // two collisions in the future (now included)
     if t1 >= 0.0 && t2 >= 0.0 {
-        Some(t1.min(t2))
+        if starts_on_circle {
+            Some(t1.max(t2))
+        } else {
+            Some(t1.min(t2))
+        }
     }
     // one collision in past, one in future (started inside circle)
     else {
@@ -899,7 +916,7 @@ pub fn when_parabolic_motion_reaches_speed(
     acceleration: FPoint,
     target_speed: f32,
 ) -> Option<f32> {
-    when_linear_motion_hits_circle(start_vel, acceleration, target_speed)
+    when_linear_motion_hits_circle_from_inside(start_vel, acceleration, target_speed)
 }
 
 pub fn remove_by_value<T: PartialEq>(vec: &mut Vec<T>, val: &T) {
@@ -1798,17 +1815,31 @@ mod tests {
 
     #[test]
     fn test_when_linear_motion_hits_circle__simple_test() {
-        assert!(when_linear_motion_hits_circle(right_f() * 5.0, right_f() * 1.0, 7.0) == Some(2.0));
-        assert!(when_linear_motion_hits_circle(right_f() * 5.0, left_f() * 1.0, 4.0) == Some(1.0));
-        assert!(when_linear_motion_hits_circle(up_f() * 5.0, down_f() * 1.0, 7.0) == Some(12.0));
-        assert!(when_linear_motion_hits_circle(right_f() * 5.0, right_f() * 1.0, 4.0) == None);
+        assert!(
+            when_linear_motion_hits_circle_from_inside(right_f() * 5.0, right_f() * 1.0, 7.0)
+                == Some(2.0)
+        );
+        assert!(
+            when_linear_motion_hits_circle_from_inside(right_f() * 5.0, left_f() * 1.0, 4.0)
+                == Some(1.0)
+        );
+        assert!(
+            when_linear_motion_hits_circle_from_inside(up_f() * 5.0, down_f() * 1.0, 7.0)
+                == Some(12.0)
+        );
+        assert!(
+            when_linear_motion_hits_circle_from_inside(right_f() * 5.0, right_f() * 1.0, 4.0)
+                == None
+        );
     }
     #[test]
     fn test_when_linear_motion_hits_circle__zeros_test() {
-        assert!(when_linear_motion_hits_circle(zero_f(), zero_f(), 4.0) == None);
-        assert!(when_linear_motion_hits_circle(right_f() * 25.0, zero_f(), 4.0) == None);
-        assert!(when_linear_motion_hits_circle(zero_f(), right_f(), 0.0) == Some(0.0));
-        assert!(when_linear_motion_hits_circle(zero_f(), zero_f(), 0.0) == Some(0.0));
+        assert!(when_linear_motion_hits_circle_from_inside(zero_f(), zero_f(), 4.0) == None);
+        assert!(
+            when_linear_motion_hits_circle_from_inside(right_f() * 25.0, zero_f(), 4.0) == None
+        );
+        assert!(when_linear_motion_hits_circle_from_inside(zero_f(), right_f(), 0.0) == Some(0.0));
+        assert!(when_linear_motion_hits_circle_from_inside(zero_f(), zero_f(), 0.0) == None);
     }
     #[test]
     fn test_when_linear_motion_hits_circle__fancy_test() {
@@ -1818,8 +1849,31 @@ mod tests {
         let endpoint = x0 + v * t;
         let end_radius = magnitude(endpoint);
 
-        let calculated_time = when_linear_motion_hits_circle(x0, v, end_radius).unwrap();
+        let calculated_time =
+            when_linear_motion_hits_circle_from_inside(x0, v, end_radius).unwrap();
         assert!(nearly_equal(t, calculated_time));
+    }
+    #[test]
+    fn test_when_linear_motion_hits_circle__start_on_circle_moving_out() {
+        let r = 5.0;
+        assert!(
+            when_linear_motion_hits_circle_from_inside(
+                right_f() * r,
+                right_f() * 1.0 + up_f() * 0.5,
+                r
+            ) == Some(0.0)
+        );
+    }
+    #[test]
+    fn test_when_linear_motion_hits_circle__start_on_circle_moving_in() {
+        let r = 5.0;
+        let t = when_linear_motion_hits_circle_from_inside(
+            right_f() * r,
+            left_f() * 1.0 + up_f() * 0.5,
+            r,
+        );
+        assert!(t.is_some());
+        assert!(t.unwrap() > 0.0);
     }
 
     #[test]
@@ -1863,5 +1917,21 @@ mod tests {
         };
         let end_state = start_state.extrapolated_with_speed_cap(1.0, speed_cap);
         assert!(magnitude(end_state.vel) < speed_cap);
+    }
+    #[test]
+    fn test_direction_of_zero_is_zero() {
+        assert!(direction(zero_f()) == zero_f());
+    }
+    #[test]
+    fn test_extrapolated_delta_kinematics_with_speed_cap__reasonable_dv() {
+        let dt = 0.997;
+        let start_state = KinematicState {
+            pos: p(15.0, 10.0),
+            vel: zero_f(),
+            accel: down_f() * 0.1,
+        };
+        let speed_cap = 0.7;
+        let diff = start_state.extrapolated_delta_with_speed_cap(dt, speed_cap);
+        assert!(magnitude(diff.vel) < magnitude(start_state.accel) * 1.5);
     }
 }

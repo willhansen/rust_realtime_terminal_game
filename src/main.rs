@@ -87,8 +87,6 @@ const DEFAULT_MINIMUM_PARTICLE_GENERATION_TIME_AFTER_DASH_IN_SECONDS: f32 = 0.5;
 const DEFAULT_MINIMUM_PARTICLE_GENERATION_TIME_AFTER_DASH: f32 =
     DEFAULT_MINIMUM_PARTICLE_GENERATION_TIME_AFTER_DASH_IN_SECONDS * MAX_FPS;
 
-pub type AdjacentOccupancyMask = [[bool; 3]; 3];
-
 // These have no positional information
 #[derive(Copy, Clone, PartialEq, Eq, Debug, EnumAsInner)]
 enum Block {
@@ -760,7 +758,7 @@ impl Game {
                 let pos = p(x as i32, y as i32);
                 if let Some(Block::ParticleAmalgam(num_particles)) = self.try_get_block(pos) {
                     if num_particles >= DEFAULT_PARTICLES_IN_AMALGAMATION_FOR_EXPLOSION {
-                        self.place_particle_burst(
+                        self.place_grid_space_particle_burst(
                             floatify(pos),
                             num_particles,
                             DEFAULT_PARTICLE_SPEED,
@@ -1071,6 +1069,18 @@ impl Game {
         }
     }
 
+    fn place_grid_space_particle_burst(&mut self, pos: Point<f32>, num_particles: i32, speed: f32) {
+        for i in 0..num_particles {
+            let dir = radial(1.0, (i as f32 / num_particles as f32) * f32::TAU());
+            let dir_in_grid_space = grid_space_to_world_space(dir, VERTICAL_STRETCH_FACTOR);
+            self.place_particle_with_velocity_and_lifetime(
+                pos,
+                dir_in_grid_space * speed,
+                self.player.speed_line_lifetime_in_ticks,
+            );
+        }
+    }
+
     fn place_particle_burst_speed_line(
         &mut self,
         start_pos: Point<f32>,
@@ -1320,6 +1330,7 @@ impl Game {
         let mut collisions = Vec::new();
 
         let mut timeout_counter = 0;
+        let mut state_at_start_of_last_submove = start_kinematic_state.clone();
         while remaining_time > 0.0 {
             timeout_counter += 1;
             if timeout_counter > 100 {
@@ -1334,15 +1345,14 @@ impl Game {
                 vel: self.player.vel,
                 accel: self.player.accel,
             };
+            state_at_start_of_last_submove = kinematic_state_at_start_of_submove.clone();
 
-            dbg!(kinematic_state_at_start_of_submove);
             let mut target_state_delta = kinematic_state_at_start_of_submove
                 .extrapolated_delta_with_speed_cap(remaining_time, self.player.max_run_speed);
             target_state_delta.pos =
                 world_space_to_grid_space(target_state_delta.pos, VERTICAL_STRETCH_FACTOR);
             let target_state: KinematicState =
                 kinematic_state_at_start_of_submove + target_state_delta;
-            dbg!(target_state);
 
             let maybe_collision = self.unit_squarecast(self.player.pos, target_state.pos);
 
@@ -1365,7 +1375,7 @@ impl Game {
                 end_state.pos = collision.collider_pos;
 
                 end_state.vel = kinematic_state_at_start_of_submove
-                    .extrapolated(rel_collision_time)
+                    .extrapolated_with_speed_cap(rel_collision_time, self.player.max_run_speed)
                     .vel;
 
                 self.player.last_collision = Some(PlayerBlockCollision {
@@ -1378,8 +1388,10 @@ impl Game {
 
                 if collision.normal.x() == 0 {
                     end_state.vel.set_y(0.0);
+                    end_state.accel.set_y(0.0);
                 } else if collision.normal.y() == 0 {
                     end_state.vel.set_x(0.0);
+                    end_state.accel.set_x(0.0);
                 } else {
                     panic!("bad collision normal: {:?}", collision);
                 }
@@ -1402,6 +1414,7 @@ impl Game {
             // set the player to the current target
             self.player.pos = end_state.pos;
             self.player.vel = end_state.vel;
+            self.player.accel = end_state.accel;
 
             if !self.in_world(snap_to_grid(self.player.pos)) {
                 // Player went out of bounds and died
@@ -1483,10 +1496,8 @@ impl Game {
         let mut total_acceleration = zero_f();
         // wall friction
         if self.player_is_sliding_down_wall() {
-            dbg!("asdfasdf");
             total_acceleration.add_assign(down_f() * self.player.acceleration_from_floor_traction);
         } else if !self.player_is_supported() {
-            dbg!("asdfasdf");
             // air friction
             // DISABLED
             if false && magnitude(self.player.vel) > self.player.air_friction_start_speed {
@@ -1498,7 +1509,6 @@ impl Game {
             if !self.player_is_pressing_against_wall_horizontally()
                 && magnitude(self.player.vel) < self.player.max_midair_move_speed
             {
-                dbg!("asdfasdf");
                 total_acceleration.add_assign(
                     floatify(self.player.desired_direction)
                         * self.player.acceleration_from_air_traction,
@@ -1507,22 +1517,18 @@ impl Game {
             // gravity
             total_acceleration.add_assign(down_f() * self.player.acceleration_from_gravity);
         } else {
-            dbg!("asdfasdf");
             // floor friction
             let going_faster_than_max =
                 magnitude(self.player.vel) > self.player.ground_friction_start_speed;
             let want_to_go_in_current_direction =
                 self.player.vel.dot(floatify(self.player.desired_direction)) > 0.0;
             if going_faster_than_max || !want_to_go_in_current_direction {
-                dbg!("asdfasdf");
-                //self.apply_player_floor_friction(dt_in_ticks);
                 total_acceleration.add_assign(
                     direction(-self.player.vel) * self.player.deceleration_from_ground_friction,
                 );
             }
             // floor traction
             if magnitude(self.player.vel) < self.player.max_run_speed {
-                dbg!("asdfasdf");
                 if self.player.desired_direction.x() == 0 && self.player.vel.x() != 0.0 {
                     total_acceleration.add_assign(
                         direction(-self.player.vel) * self.player.acceleration_from_floor_traction,
@@ -1532,16 +1538,9 @@ impl Game {
                     floatify(self.player.desired_direction)
                         * self.player.acceleration_from_floor_traction,
                 );
-                //self.apply_player_floor_traction(dt_in_ticks);
             }
         }
 
-        dbg!(
-            &total_acceleration,
-            self.player.vel,
-            self.player_is_pressing_against_wall_horizontally(),
-            magnitude(self.player.vel)
-        );
         self.player.accel = total_acceleration;
     }
 
@@ -1640,7 +1639,7 @@ impl Game {
                     if block.collides_with_player() && filter(block) {
                         let adjacent_occupancy =
                             self.get_occupancy_of_nearby_walls(*overlapping_square);
-                        if let Some(collision) = single_block_squarecast_with_filled_cracks(
+                        if let Some(collision) = single_block_squarecast_with_edge_extensions(
                             start_pos,
                             end_pos,
                             *overlapping_square,
@@ -1671,7 +1670,7 @@ impl Game {
                     && filter(self.get_block(normal_square))
                 {
                     let adjacent_occupancy = self.get_occupancy_of_nearby_walls(normal_square);
-                    if let Some(collision) = single_block_squarecast_with_filled_cracks(
+                    if let Some(collision) = single_block_squarecast_with_edge_extensions(
                         start_pos,
                         end_pos,
                         normal_square,
@@ -2009,8 +2008,29 @@ mod tests {
         game
     }
 
+    fn set_up_player_moving_full_speed_to_right_in_space() -> Game {
+        let mut game = set_up_just_player();
+        be_in_space(&mut game);
+        game.player.vel = right_f() * game.player.max_run_speed;
+        game.player.desired_direction = p(1, 0);
+        game
+    }
+
     fn set_up_player_about_to_run_into_block_on_platform() -> Game {
         let mut game = set_up_player_running_full_speed_to_right_on_platform();
+        game.place_block(round(game.player.pos) + p(2, 0), Block::Wall);
+        game.player.pos.add_assign(p(0.999, 0.0));
+        game
+    }
+    fn set_up_player_about_to_land_straight_down() -> Game {
+        let mut game = set_up_just_player();
+        game.player.vel = down_f() * game.player.max_run_speed; // somewhat arbitrary
+        game.place_block(round(game.player.pos) + down_i() * 2, Block::Wall);
+        game.player.pos.add_assign(down_f() * 0.999);
+        game
+    }
+    fn set_up_player_about_to_hit_block_in_space() -> Game {
+        let mut game = set_up_player_moving_full_speed_to_right_in_space();
         game.place_block(round(game.player.pos) + p(2, 0), Block::Wall);
         game.player.pos.add_assign(p(0.999, 0.0));
         game
@@ -2113,6 +2133,11 @@ mod tests {
         game.place_line_of_blocks((wall_x, 0), (wall_x, 20), Block::Wall);
         game.player.desired_direction.set_x(-1);
         return game;
+    }
+    fn set_up_player_about_to_reach_peak_of_jump() -> Game {
+        let mut game = set_up_just_player();
+        game.player.vel = up_f() * 0.0001;
+        game
     }
 
     fn set_up_particle_moving_in_direction_about_to_hit_block_at_square(
@@ -2553,15 +2578,28 @@ mod tests {
     #[test]
     #[timeout(100)]
     fn test_stop_on_collision() {
+        let mut game = set_up_player_about_to_run_into_block_on_platform();
         let mut game = set_up_player_on_platform();
-        game.place_block(round(game.player.pos) + p(1, 0), Block::Wall);
-        game.player.max_run_speed = 1.0;
-        game.player.desired_direction.set_x(1);
+        let start_pos = game.player.pos;
+        let good_end_pos = floatify(snap_to_grid(start_pos));
 
         game.tick_physics();
 
-        assert!(game.player.pos == p(15.0, 11.0));
-        assert!(game.player.vel.x() == 0.0);
+        assert!(game.player.pos == good_end_pos);
+        assert!(game.player.vel == zero_f());
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_stop_on_collision_in_space() {
+        let mut game = set_up_player_about_to_hit_block_in_space();
+        let start_pos = game.player.pos;
+        let good_end_pos = floatify(snap_to_grid(start_pos));
+
+        game.tick_physics();
+
+        assert!(game.player.pos == good_end_pos);
+        assert!(game.player.vel == zero_f());
     }
 
     #[test]
@@ -2667,6 +2705,19 @@ mod tests {
             game.tick_physics();
         }
         assert!(nearly_equal(game.player.pos.y(), start_pos.y()));
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_land_on_ground() {
+        let mut game = set_up_player_about_to_land_straight_down();
+        let start_pos = game.player.pos;
+        let good_end_pos = floatify(snap_to_grid(start_pos));
+
+        game.tick_physics();
+        dbg!(game.player.pos, game.player.vel);
+        assert!(game.player.pos == good_end_pos);
+        assert!(game.player.vel == zero_f());
     }
 
     #[test]
@@ -4703,5 +4754,16 @@ mod tests {
         let mut game = set_up_just_player();
         game.player.pos = p(game.width() as f32 * 5.0, game.height() as f32 * 5.0);
         game.kill_player();
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_dont_warp_at_peak_of_jump() {
+        let mut game = set_up_player_about_to_reach_peak_of_jump();
+        game.player.acceleration_from_gravity = 0.1;
+        let start_pos = game.player.pos;
+        game.tick_physics();
+        let distance_from_start = magnitude(game.player.pos - start_pos);
+        assert!(distance_from_start < 0.5);
     }
 }
