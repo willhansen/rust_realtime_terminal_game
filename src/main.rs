@@ -77,7 +77,7 @@ const DEFAULT_TICKS_FROM_MAX_TO_END_COMPRESSION: f32 =
     DEFAULT_TICKS_TO_END_COMPRESSION - DEFAULT_TICKS_TO_MAX_COMPRESSION;
 
 const DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION: i32 = 10;
-const DEFAULT_PARTICLES_TO_AMALGAMATION_CHANGE: i32 = 10;
+const DEFAULT_PARTICLES_TO_AMALGAMATION_CHANGE: i32 = 2;
 const DEFAULT_PARTICLES_IN_AMALGAMATION_FOR_EXPLOSION: i32 =
     DEFAULT_PARTICLES_TO_AMALGAMATION_CHANGE * 5;
 
@@ -1347,8 +1347,13 @@ impl Game {
             };
             state_at_start_of_last_submove = kinematic_state_at_start_of_submove.clone();
 
-            let mut target_state_delta = kinematic_state_at_start_of_submove
-                .extrapolated_delta_with_speed_cap(remaining_time, self.player.max_run_speed);
+            let mut target_state_delta = if self.player_wants_to_come_to_a_full_stop() {
+                kinematic_state_at_start_of_submove
+                    .extrapolated_delta_with_full_stop_at_slowest(remaining_time)
+            } else {
+                kinematic_state_at_start_of_submove
+                    .extrapolated_delta_with_speed_cap(remaining_time, self.player.max_run_speed)
+            };
             target_state_delta.pos =
                 world_space_to_grid_space(target_state_delta.pos, VERTICAL_STRETCH_FACTOR);
             let target_state: KinematicState =
@@ -1695,7 +1700,7 @@ impl Game {
     }
 
     fn player_is_standing_on_block(&self) -> bool {
-        self.player_exactly_touching_wall_in_direction(p(0, -1))
+        self.player_exactly_touching_wall_in_direction(down_i())
     }
 
     fn get_block_relative_to_player(&self, rel_pos: Point<i32>) -> Option<Block> {
@@ -1721,6 +1726,11 @@ impl Game {
             && pos.x() < self.terminal_size.0 as i32
             && pos.y() >= 0
             && pos.y() < self.terminal_size.1 as i32
+    }
+
+    fn player_wants_to_come_to_a_full_stop(&self) -> bool {
+        self.player_is_grabbing_wall()
+            || (self.player_is_supported() && self.player.desired_direction.x() == 0)
     }
 }
 fn init_world(width: u16, height: u16) -> Game {
@@ -2004,7 +2014,14 @@ mod tests {
     fn set_up_player_running_full_speed_to_right_on_platform() -> Game {
         let mut game = set_up_player_on_platform();
         game.player.vel = right_f() * game.player.max_run_speed;
-        game.player.desired_direction = p(1, 0);
+        game.player.desired_direction = right_i();
+        game
+    }
+
+    fn set_up_player_about_to_stop_moving_right_on_platform() -> Game {
+        let mut game = set_up_player_on_platform();
+        game.player.vel = right_f() * 0.001;
+        game.player.desired_direction = down_i();
         game
     }
 
@@ -2561,7 +2578,7 @@ mod tests {
 
     #[test]
     #[timeout(100)]
-    fn test_player_can_stop() {
+    fn test_player_can_stop_from_sprint() {
         let mut game = set_up_player_running_full_speed_to_right_on_platform();
         game.player.desired_direction = down_i();
         let start_vel = game.player.vel;
@@ -2573,6 +2590,32 @@ mod tests {
             game.tick_physics();
         }
         assert!(game.player.vel.x() == 0.0);
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_player_can_come_to_full_stop() {
+        let mut game = set_up_player_about_to_stop_moving_right_on_platform();
+
+        game.tick_physics();
+
+        assert!(game.player.vel == zero_f());
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_player_only_comes_to_full_stop_if_desired() {
+        let mut game1 = set_up_player_about_to_stop_moving_right_on_platform();
+        let mut game2 = set_up_player_about_to_stop_moving_right_on_platform();
+
+        game1.player.desired_direction = down_i();
+        game2.player.desired_direction = left_i();
+
+        game1.tick_physics();
+        game2.tick_physics();
+
+        assert!(game1.player.vel.x() == 0.0);
+        assert!(game1.player.vel.x() < 0.0);
     }
 
     #[test]
@@ -4758,12 +4801,45 @@ mod tests {
 
     #[test]
     #[timeout(100)]
-    fn test_dont_warp_at_peak_of_jump() {
+    fn test_do_not_warp_at_peak_of_jump() {
         let mut game = set_up_player_about_to_reach_peak_of_jump();
         game.player.acceleration_from_gravity = 0.1;
         let start_pos = game.player.pos;
         game.tick_physics();
         let distance_from_start = magnitude(game.player.pos - start_pos);
         assert!(distance_from_start < 0.5);
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_player_wants_to_stop_by_aiming_at_floor() {
+        let mut game = set_up_player_on_platform();
+        game.player.desired_direction = down_i();
+        assert!(game.player_wants_to_come_to_a_full_stop());
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_player_wants_to_not_stop_by_aiming_forwards() {
+        let mut game = set_up_player_running_full_speed_to_right_on_platform();
+        game.player.desired_direction = right_i();
+        assert!(!game.player_wants_to_come_to_a_full_stop());
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_player_wants_to_not_stop_by_aiming_backwards() {
+        let mut game = set_up_player_running_full_speed_to_right_on_platform();
+        game.player.desired_direction = left_i();
+        assert!(!game.player_wants_to_come_to_a_full_stop());
+        #[test]
+        #[timeout(100)]
+        fn test_player_wants_to_stop_when_grabbing_wall() {
+            let game = set_up_player_hanging_on_wall_on_left();
+            assert!(game.player_wants_to_come_to_a_full_stop());
+        }
+        #[test]
+        #[timeout(100)]
+        fn test_player_does_not_want_to_stop_when_midair() {
+            let game = set_up_just_player();
+            assert!(!game.player_wants_to_come_to_a_full_stop());
+        }
     }
 }

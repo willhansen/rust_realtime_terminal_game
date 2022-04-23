@@ -7,8 +7,8 @@ use derive_more::{Add, Display, Div, Mul, Sub};
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Line, Point};
-use num::clamp;
 use num::traits::Pow;
+use num::{clamp, zero};
 use ordered_float::OrderedFloat;
 use rand::Rng;
 use std::f32::consts::TAU;
@@ -75,15 +75,17 @@ pub struct SquarecastCollision {
     pub collided_block_square: Point<i32>,
 }
 
+// TODO: use
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-enum ShapeEdgeExtension {
+enum EdgeExtension {
     Extended,
     Neutral,
     Retracted,
 }
 
 pub type AdjacentOccupancyMask = [[bool; 3]; 3];
-pub type SquareEdgeExtensions = [[ShapeEdgeExtension; 3]; 3];
+// TODO: use
+pub type SquareEdgeExtensions = [[EdgeExtension; 3]; 3];
 
 #[allow(dead_code)]
 pub fn single_block_squarecast(
@@ -523,6 +525,10 @@ pub fn direction(vec: Point<f32>) -> Point<f32> {
     }
     return vec / magnitude(vec);
 }
+// because convenient
+pub fn normalized(vec: Point<f32>) -> Point<f32> {
+    direction(vec)
+}
 
 #[allow(dead_code)]
 pub fn fract(vec: Point<f32>) -> Point<f32> {
@@ -841,11 +847,28 @@ impl KinematicState {
             accel: self.accel,
         }
     }
+    pub fn dt_to_slowest_point(&self) -> f32 {
+        time_of_line_closest_approach_to_origin(self.accel, self.vel)
+    }
+    pub fn extrapolated_with_full_stop_at_slowest(&self, dt: f32) -> KinematicState {
+        let dt_to_slow = self.dt_to_slowest_point();
+        if dt_to_slow < 0.0 || dt < dt_to_slow {
+            return self.extrapolated(dt);
+        }
+        KinematicState {
+            pos: self.extrapolated(dt_to_slow).pos,
+            vel: zero_f(),
+            accel: zero_f(),
+        }
+    }
     pub fn extrapolated_delta(&self, dt: f32) -> KinematicState {
         self.extrapolated(dt) - *self
     }
     pub fn extrapolated_delta_with_speed_cap(&self, dt: f32, speed_cap: f32) -> KinematicState {
         self.extrapolated_with_speed_cap(dt, speed_cap) - *self
+    }
+    pub fn extrapolated_delta_with_full_stop_at_slowest(&self, dt: f32) -> KinematicState {
+        self.extrapolated_with_full_stop_at_slowest(dt) - *self
     }
     pub fn extrapolated_with_speed_cap(&self, dt: f32, speed_cap: f32) -> KinematicState {
         if magnitude(self.vel) <= speed_cap {
@@ -865,6 +888,13 @@ impl KinematicState {
         }
         self.extrapolated(dt)
     }
+}
+
+pub fn time_of_line_closest_approach_to_origin(v: FPoint, x0: FPoint) -> f32 {
+    if v == zero_f() {
+        return 0.0;
+    }
+    -v.dot(x0) / (v.dot(v))
 }
 
 pub fn when_linear_motion_hits_circle_from_inside(
@@ -1933,5 +1963,85 @@ mod tests {
         let speed_cap = 0.7;
         let diff = start_state.extrapolated_delta_with_speed_cap(dt, speed_cap);
         assert!(magnitude(diff.vel) < magnitude(start_state.accel) * 1.5);
+    }
+    #[test]
+    fn test_extrapolate_kinematics_with_full_stop_at_slowest__upwards_arc() {
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: right_f() * 3.0 + up_f() * 1.0,
+            accel: down_f() * 1.0,
+        };
+        assert!(start_state.extrapolated_with_full_stop_at_slowest(2.0).vel == zero_f());
+    }
+    #[test]
+    fn test_extrapolate_kinematics_with_full_stop_at_slowest__past_slowest() {
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: right_f(),
+            accel: right_f(),
+        };
+        assert!(start_state.extrapolated_with_full_stop_at_slowest(2.0).vel != zero_f());
+    }
+    #[test]
+    fn test_extrapolate_kinematics_with_full_stop_at_slowest__no_stop_at_start() {
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: zero_f(),
+            accel: right_f(),
+        };
+        assert!(start_state.extrapolated_with_full_stop_at_slowest(2.0).vel != zero_f());
+    }
+    #[test]
+    fn test_extrapolate_kinematics_with_full_stop_at_slowest__before_slowest() {
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: left_f() * 100.0,
+            accel: right_f(),
+        };
+        let dt = 2.0;
+        assert!(
+            start_state.extrapolated_with_full_stop_at_slowest(dt) == start_state.extrapolated(dt)
+        );
+    }
+    #[test]
+    fn test_extrapolate_kinematics_with_full_stop_at_slowest__zero_to_zero() {
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: zero_f(),
+            accel: zero_f(),
+        };
+        assert!(
+            start_state
+                .extrapolated_with_full_stop_at_slowest(500.0)
+                .vel
+                == zero_f()
+        );
+    }
+
+    #[test]
+    fn test_extrapolate_kinematics_with_full_stop_at_slowest__straight_turnaround() {
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: up_f() * 1.5,
+            accel: down_f() * 1.0,
+        };
+        assert!(start_state.extrapolated_with_full_stop_at_slowest(2.0).vel == zero_f());
+    }
+
+    #[test]
+    fn test_extrapolate_kinematics_with_full_stop_at_slowest__straight_turnaround_with_strange_direction(
+    ) {
+        let dir = normalized(p(-1.3, 0.03645));
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: dir * 5.393,
+            accel: -dir * 2.1,
+        };
+        assert!(
+            start_state
+                .extrapolated_with_full_stop_at_slowest(100.0)
+                .vel
+                == zero_f()
+        );
     }
 }
