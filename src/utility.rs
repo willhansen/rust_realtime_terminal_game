@@ -851,12 +851,22 @@ impl KinematicState {
         time_of_line_closest_approach_to_origin(self.accel, self.vel)
     }
     pub fn extrapolated_with_full_stop_at_slowest(&self, dt: f32) -> KinematicState {
-        let dt_to_slow = self.dt_to_slowest_point();
-        if dt_to_slow < 0.0 || dt < dt_to_slow {
+        let dt_to_slowest = self.dt_to_slowest_point();
+        let slowest_point_is_in_past = dt_to_slowest < 0.0;
+        let slowest_point_is_beyond_time_horizon = dt < dt_to_slowest;
+        let is_constant_speed = self.accel == zero_f();
+        let slowest_point_is_singular = !is_constant_speed;
+        let slowest_point_is_now = dt_to_slowest == 0.0;
+
+        if slowest_point_is_in_past
+            || slowest_point_is_beyond_time_horizon
+            || is_constant_speed
+            || (slowest_point_is_singular && slowest_point_is_now)
+        {
             return self.extrapolated(dt);
         }
         KinematicState {
-            pos: self.extrapolated(dt_to_slow).pos,
+            pos: self.extrapolated(dt_to_slowest).pos,
             vel: zero_f(),
             accel: zero_f(),
         }
@@ -1997,6 +2007,19 @@ mod tests {
             pos: zero_f(),
             vel: left_f() * 100.0,
             accel: right_f(),
+        };
+        let dt = 2.0;
+        assert!(
+            start_state.extrapolated_with_full_stop_at_slowest(dt) == start_state.extrapolated(dt)
+        );
+    }
+    #[test]
+    fn test_extrapolate_kinematics_with_full_stop_at_slowest__constant_non_zero_speed_means_no_stop(
+    ) {
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: left_f() * 100.0,
+            accel: zero_f(),
         };
         let dt = 2.0;
         assert!(

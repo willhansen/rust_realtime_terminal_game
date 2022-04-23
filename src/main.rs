@@ -1330,7 +1330,6 @@ impl Game {
         let mut collisions = Vec::new();
 
         let mut timeout_counter = 0;
-        let mut state_at_start_of_last_submove = start_kinematic_state.clone();
         while remaining_time > 0.0 {
             timeout_counter += 1;
             if timeout_counter > 100 {
@@ -1345,7 +1344,6 @@ impl Game {
                 vel: self.player.vel,
                 accel: self.player.accel,
             };
-            state_at_start_of_last_submove = kinematic_state_at_start_of_submove.clone();
 
             let mut target_state_delta = if self.player_wants_to_come_to_a_full_stop() {
                 kinematic_state_at_start_of_submove
@@ -2046,10 +2044,21 @@ mod tests {
         game.player.pos.add_assign(down_f() * 0.999);
         game
     }
+
     fn set_up_player_about_to_hit_block_in_space() -> Game {
         let mut game = set_up_player_moving_full_speed_to_right_in_space();
         game.place_block(round(game.player.pos) + p(2, 0), Block::Wall);
         game.player.pos.add_assign(p(0.999, 0.0));
+        game
+    }
+
+    fn set_up_player_t_ticks_from_hitting_a_block_in_space(t: f32) -> Game {
+        let mut game = set_up_just_player();
+        be_in_space(&mut game);
+
+        game.place_block(round(game.player.pos) + right_i() * 2, Block::Wall);
+
+        game.player.vel = right_f() / t;
         game
     }
 
@@ -2611,11 +2620,14 @@ mod tests {
         game1.player.desired_direction = down_i();
         game2.player.desired_direction = left_i();
 
+        assert!(game1.player_wants_to_come_to_a_full_stop());
+        assert!(!game2.player_wants_to_come_to_a_full_stop());
+
         game1.tick_physics();
         game2.tick_physics();
 
         assert!(game1.player.vel.x() == 0.0);
-        assert!(game1.player.vel.x() < 0.0);
+        assert!(game2.player.vel.x() < 0.0);
     }
 
     #[test]
@@ -2651,9 +2663,6 @@ mod tests {
         let mut game = set_up_player_about_to_run_into_block_on_platform();
         let starting_square = snap_to_grid(game.player.pos);
         let block_square = starting_square + p(1, 0);
-
-        game.update_output_buffer();
-        game.print_output_buffer();
 
         game.tick_physics();
 
@@ -3807,8 +3816,9 @@ mod tests {
         let mut game = set_up_player_in_corner_of_big_L();
         be_in_frictionless_space(&mut game);
         assert!(&game.player.last_collision.is_none());
-        let collision_velocity = p(0.0, -5.0);
+        let collision_velocity = down_f() * 5.0;
         game.player.vel = collision_velocity;
+
         game.tick_physics();
         assert!(nearly_equal(
             game.ticks_since_last_player_collision().unwrap(),
@@ -3823,6 +3833,7 @@ mod tests {
                 .collider_velocity
                 == collision_velocity
         );
+
         game.tick_physics();
         assert!(nearly_equal(
             game.ticks_since_last_player_collision().unwrap(),
@@ -3837,6 +3848,7 @@ mod tests {
                 .collider_velocity
                 == collision_velocity
         );
+
         let collision_velocity = p(-10.0, 0.0);
         game.player.vel = collision_velocity;
         game.tick_physics();
@@ -4108,6 +4120,7 @@ mod tests {
         assert!(game.get_player_compression_fraction() < 1.0);
     }
 
+    #[ignore] // Because it is a collision
     #[test]
     #[timeout(100)]
     fn test_pushing_into_a_wall_is_not_a_collision() {
@@ -4182,16 +4195,14 @@ mod tests {
     #[test]
     #[timeout(100)]
     fn test_moment_of_collision_has_subtick_precision() {
-        let mut game = set_up_player_on_platform();
-        be_in_frictionless_space(&mut game);
-        game.player.pos.add_assign(p(0.0, 1.0));
-        game.player.vel = p(0.0, -4.0);
+        let dt = 0.5;
+        let mut game = set_up_player_t_ticks_from_hitting_a_block_in_space(dt);
 
         game.tick_physics();
 
         assert!(nearly_equal(
             game.ticks_since_last_player_collision().unwrap(),
-            0.5
+            dt
         ));
     }
 
