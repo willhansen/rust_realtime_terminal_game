@@ -76,10 +76,13 @@ const DEFAULT_TICKS_TO_END_COMPRESSION: f32 = 10.0;
 const DEFAULT_TICKS_FROM_MAX_TO_END_COMPRESSION: f32 =
     DEFAULT_TICKS_TO_END_COMPRESSION - DEFAULT_TICKS_TO_MAX_COMPRESSION;
 
-const DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION: i32 = 10;
-const DEFAULT_PARTICLES_TO_AMALGAMATION_CHANGE: i32 = 2;
+const DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION: i32 = 6; // just more than a diagonal line
+                                                          //const DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION: i32 = 20;
 const DEFAULT_PARTICLES_IN_AMALGAMATION_FOR_EXPLOSION: i32 =
-    DEFAULT_PARTICLES_TO_AMALGAMATION_CHANGE * 5;
+    (DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION - 1) * 4; // just small enough so the exploded particles don't recombine in adjacent blocks
+const DEFAULT_PARTICLES_TO_AMALGAMATION_CHANGE: i32 =
+    (DEFAULT_PARTICLES_IN_AMALGAMATION_FOR_EXPLOSION - DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION)
+        / 4; // 5 sprites over the block's range of particles contained
 
 const RADIUS_OF_EXACTLY_TOUCHING_ZONE: f32 = 0.000001;
 
@@ -1377,9 +1380,16 @@ impl Game {
 
                 end_state.pos = collision.collider_pos;
 
-                end_state.vel = kinematic_state_at_start_of_submove
-                    .extrapolated_with_speed_cap(rel_collision_time, self.player.max_run_speed)
-                    .vel;
+                let extrapolated_to_collision_time = if self.player_wants_to_come_to_a_full_stop() {
+                    kinematic_state_at_start_of_submove
+                        .extrapolated_with_full_stop_at_slowest(rel_collision_time)
+                } else {
+                    kinematic_state_at_start_of_submove
+                        .extrapolated_with_speed_cap(rel_collision_time, self.player.max_run_speed)
+                };
+                // Not pos, because we trust the collision check point more than the extrapolation point for exactness
+                end_state.vel = extrapolated_to_collision_time.vel;
+                end_state.accel = extrapolated_to_collision_time.accel;
 
                 self.player.last_collision = Some(PlayerBlockCollision {
                     time_in_ticks: self.time_in_ticks() - remaining_time + rel_collision_time,
@@ -1500,7 +1510,33 @@ impl Game {
         // wall friction
         if self.player_is_sliding_down_wall() {
             total_acceleration.add_assign(down_f() * self.player.acceleration_from_floor_traction);
-        } else if !self.player_is_supported() {
+        } else if self.player_is_supported() {
+            // floor friction
+            let going_faster_than_max =
+                magnitude(self.player.vel) > self.player.ground_friction_start_speed;
+            let want_to_go_in_current_direction =
+                self.player.vel.dot(floatify(self.player.desired_direction)) > 0.0;
+            if going_faster_than_max || !want_to_go_in_current_direction {
+                total_acceleration.add_assign(
+                    direction(-self.player.vel) * self.player.deceleration_from_ground_friction,
+                );
+            }
+            // floor traction
+            let player_below_max_speed = magnitude(self.player.vel) < self.player.max_run_speed;
+            let player_want_faster =
+                floatify(self.player.desired_direction).dot(self.player.vel) > 0.0;
+            if player_below_max_speed || !player_want_faster {
+                if self.player.desired_direction.x() == 0 && self.player.vel.x() != 0.0 {
+                    total_acceleration.add_assign(
+                        direction(-self.player.vel) * self.player.acceleration_from_floor_traction,
+                    );
+                }
+                total_acceleration.add_assign(
+                    floatify(self.player.desired_direction)
+                        * self.player.acceleration_from_floor_traction,
+                );
+            }
+        } else {
             // air friction
             // DISABLED
             if false && magnitude(self.player.vel) > self.player.air_friction_start_speed {
@@ -1519,29 +1555,6 @@ impl Game {
             }
             // gravity
             total_acceleration.add_assign(down_f() * self.player.acceleration_from_gravity);
-        } else {
-            // floor friction
-            let going_faster_than_max =
-                magnitude(self.player.vel) > self.player.ground_friction_start_speed;
-            let want_to_go_in_current_direction =
-                self.player.vel.dot(floatify(self.player.desired_direction)) > 0.0;
-            if going_faster_than_max || !want_to_go_in_current_direction {
-                total_acceleration.add_assign(
-                    direction(-self.player.vel) * self.player.deceleration_from_ground_friction,
-                );
-            }
-            // floor traction
-            if magnitude(self.player.vel) < self.player.max_run_speed {
-                if self.player.desired_direction.x() == 0 && self.player.vel.x() != 0.0 {
-                    total_acceleration.add_assign(
-                        direction(-self.player.vel) * self.player.acceleration_from_floor_traction,
-                    );
-                }
-                total_acceleration.add_assign(
-                    floatify(self.player.desired_direction)
-                        * self.player.acceleration_from_floor_traction,
-                );
-            }
         }
 
         self.player.accel = total_acceleration;
@@ -1767,6 +1780,10 @@ fn init_world(width: u16, height: u16) -> Game {
     );
     game.player.vel.set_x(0.1);
     game
+}
+
+fn seconds_to_ticks(s: f32) -> f32 {
+    s * MAX_FPS
 }
 
 fn main() {
@@ -2591,13 +2608,24 @@ mod tests {
         let mut game = set_up_player_running_full_speed_to_right_on_platform();
         game.player.desired_direction = down_i();
         let start_vel = game.player.vel;
-        game.tick_physics();
 
-        assert!(game.player.vel.x() < start_vel.x());
+        let ticks_to_stop = ticks_to_stop_from_speed(
+            start_vel.x().abs(),
+            game.player.acceleration_from_floor_traction,
+        )
+        .unwrap()
+        .ceil() as i32;
 
-        for _ in 0..25 {
+        assert!(ticks_to_stop < 500);
+
+        let mut prev_x_vel = game.player.vel.x();
+        for _ in 0..ticks_to_stop - 1 {
             game.tick_physics();
+            assert!(game.player.vel.x() < prev_x_vel);
+            prev_x_vel = game.player.vel.x();
         }
+        // one last tick just in case
+        game.tick_physics();
         assert!(game.player.vel.x() == 0.0);
     }
 

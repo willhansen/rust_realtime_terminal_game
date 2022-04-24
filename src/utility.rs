@@ -833,6 +833,14 @@ pub fn time_to_jump_landing(jump_vel: f32, grav_accel: f32) -> f32 {
     time_to_jump_peak(jump_vel, grav_accel) * 2.0
 }
 
+pub fn ticks_to_stop_from_speed(v0: f32, a: f32) -> Option<f32> {
+    if a == 0.0 {
+        None
+    } else {
+        Some(v0 / a)
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Debug, Add, Sub, Mul, Div)]
 pub struct KinematicState {
     pub pos: FPoint,
@@ -840,7 +848,7 @@ pub struct KinematicState {
     pub accel: FPoint,
 }
 impl KinematicState {
-    pub fn extrapolated(&self, dt: f32) -> KinematicState {
+    pub fn simple_extrapolation(&self, dt: f32) -> KinematicState {
         KinematicState {
             pos: self.pos + self.vel * dt + self.accel * 0.5 * dt * dt,
             vel: self.vel + self.accel * dt,
@@ -853,32 +861,21 @@ impl KinematicState {
     pub fn extrapolated_with_full_stop_at_slowest(&self, dt: f32) -> KinematicState {
         let dt_to_slowest = self.dt_to_slowest_point();
         let slowest_point_is_in_past = dt_to_slowest < 0.0;
-        let slowest_point_is_beyond_time_horizon = dt < dt_to_slowest;
+        let slowest_point_is_beyond_dt = dt < dt_to_slowest;
         let is_constant_speed = self.accel == zero_f();
         let slowest_point_is_singular = !is_constant_speed;
         let slowest_point_is_now = dt_to_slowest == 0.0;
 
-        if slowest_point_is_in_past
-            || slowest_point_is_beyond_time_horizon
-            || is_constant_speed
-            || (slowest_point_is_singular && slowest_point_is_now)
+        if slowest_point_is_in_past || slowest_point_is_beyond_dt || is_constant_speed
+        //|| (slowest_point_is_singular && slowest_point_is_now)
         {
-            return self.extrapolated(dt);
+            return self.simple_extrapolation(dt);
         }
         KinematicState {
-            pos: self.extrapolated(dt_to_slowest).pos,
+            pos: self.simple_extrapolation(dt_to_slowest).pos,
             vel: zero_f(),
             accel: zero_f(),
         }
-    }
-    pub fn extrapolated_delta(&self, dt: f32) -> KinematicState {
-        self.extrapolated(dt) - *self
-    }
-    pub fn extrapolated_delta_with_speed_cap(&self, dt: f32, speed_cap: f32) -> KinematicState {
-        self.extrapolated_with_speed_cap(dt, speed_cap) - *self
-    }
-    pub fn extrapolated_delta_with_full_stop_at_slowest(&self, dt: f32) -> KinematicState {
-        self.extrapolated_with_full_stop_at_slowest(dt) - *self
     }
     pub fn extrapolated_with_speed_cap(&self, dt: f32, speed_cap: f32) -> KinematicState {
         if magnitude(self.vel) <= speed_cap {
@@ -886,7 +883,7 @@ impl KinematicState {
                 when_parabolic_motion_reaches_speed(self.vel, self.accel, speed_cap)
             {
                 if sooner_dt < dt {
-                    let mid_state = self.extrapolated(sooner_dt);
+                    let mid_state = self.simple_extrapolation(sooner_dt);
                     let remaining_dt = dt - sooner_dt;
                     return KinematicState {
                         pos: mid_state.pos + mid_state.vel * remaining_dt,
@@ -896,7 +893,16 @@ impl KinematicState {
                 }
             }
         }
-        self.extrapolated(dt)
+        self.simple_extrapolation(dt)
+    }
+    pub fn extrapolated_delta(&self, dt: f32) -> KinematicState {
+        self.simple_extrapolation(dt) - *self
+    }
+    pub fn extrapolated_delta_with_speed_cap(&self, dt: f32, speed_cap: f32) -> KinematicState {
+        self.extrapolated_with_speed_cap(dt, speed_cap) - *self
+    }
+    pub fn extrapolated_delta_with_full_stop_at_slowest(&self, dt: f32) -> KinematicState {
+        self.extrapolated_with_full_stop_at_slowest(dt) - *self
     }
 }
 
@@ -1923,7 +1929,7 @@ mod tests {
             vel: right_f() * 1.0,
             accel: right_f() * 1.0,
         };
-        let end_state = start_state.extrapolated(1.0);
+        let end_state = start_state.simple_extrapolation(1.0);
         assert!(end_state.vel == start_state.vel + right_f() * 1.0);
     }
     #[test]
@@ -2010,7 +2016,8 @@ mod tests {
         };
         let dt = 2.0;
         assert!(
-            start_state.extrapolated_with_full_stop_at_slowest(dt) == start_state.extrapolated(dt)
+            start_state.extrapolated_with_full_stop_at_slowest(dt)
+                == start_state.simple_extrapolation(dt)
         );
     }
     #[test]
@@ -2023,7 +2030,8 @@ mod tests {
         };
         let dt = 2.0;
         assert!(
-            start_state.extrapolated_with_full_stop_at_slowest(dt) == start_state.extrapolated(dt)
+            start_state.extrapolated_with_full_stop_at_slowest(dt)
+                == start_state.simple_extrapolation(dt)
         );
     }
     #[test]
