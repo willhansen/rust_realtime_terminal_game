@@ -59,7 +59,7 @@ const DEFAULT_PLAYER_ACCELERATION_FROM_AIR_TRACTION: f32 =
     DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION;
 const DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION: f32 =
     DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION / 5.0;
-const DEFAULT_PLAYER_MAX_RUN_SPEED: f32 = 0.7;
+const DEFAULT_PLAYER_MAX_RUN_SPEED: f32 = 0.4;
 const DEFAULT_PLAYER_GROUND_FRICTION_START_SPEED: f32 = 0.7;
 const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED * 3.0;
 const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
@@ -78,7 +78,8 @@ const DEFAULT_TICKS_FROM_MAX_TO_END_COMPRESSION: f32 =
 const ENABLE_JUMP_COMPRESSION_BONUS: bool = false;
 
 const DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION: i32 = 6; // just more than a diagonal line
-                                                          //const DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION: i32 = 20;
+
+//const DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION: i32 = 20;
 const DEFAULT_PARTICLES_IN_AMALGAMATION_FOR_EXPLOSION: i32 =
     (DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION - 1) * 4; // just small enough so the exploded particles don't recombine in adjacent blocks
 const DEFAULT_PARTICLES_TO_AMALGAMATION_CHANGE: i32 =
@@ -660,7 +661,6 @@ impl Game {
             if self.player_is_in_boost() {
                 self.generate_speed_particles();
             }
-            dbg!(self.player.kinematic_state()); //asdfasdf
         }
         self.apply_particle_physics(dt_in_ticks);
     }
@@ -743,7 +743,7 @@ impl Game {
                     .collect();
             let block = self.get_block(square);
             if indexes_of_particles_that_did_not_start_here.len()
-                > self.particle_amalgamation_density as usize
+                >= self.particle_amalgamation_density as usize
                 || (!indexes_of_particles_that_did_not_start_here.is_empty()
                     && matches!(block, Block::ParticleAmalgam(_)))
             {
@@ -1362,7 +1362,6 @@ impl Game {
                 accel: self.player.accel,
             };
 
-            dbg!(self.player_wants_to_come_to_a_full_stop()); //asdfasdf
             let mut target_state_delta = if self.player_wants_to_come_to_a_full_stop() {
                 kinematic_state_at_start_of_submove
                     .extrapolated_delta_with_full_stop_at_slowest(remaining_time)
@@ -1376,7 +1375,6 @@ impl Game {
                 world_space_to_grid_space(target_state_delta.pos, VERTICAL_STRETCH_FACTOR);
             let target_state: KinematicState =
                 kinematic_state_at_start_of_submove + target_state_delta;
-            dbg!(target_state_delta); //asdfasdf
 
             let maybe_collision = self.unit_squarecast(self.player.pos, target_state.pos);
 
@@ -1560,7 +1558,7 @@ impl Game {
             if self.player_is_supported() && !moving_up {
                 // floor friction
                 let fast_enough_for_friction_x =
-                    self.player.vel.x() > self.player.ground_friction_start_speed;
+                    self.player.vel.x().abs() > self.player.ground_friction_start_speed;
                 if fast_enough_for_friction_x || !player_want_faster_x {
                     total_acceleration.add_assign(
                         direction(-self.player.vel) * self.player.deceleration_from_ground_friction,
@@ -1968,7 +1966,7 @@ mod tests {
     fn set_up_player_on_platform() -> Game {
         let mut game = set_up_just_player();
         let platform_y = game.player.pos.y() as i32 - 1;
-        game.place_line_of_blocks((10, platform_y), (20, platform_y), Block::Wall);
+        game.place_line_of_blocks((0, platform_y), (29, platform_y), Block::Wall);
         return game;
     }
     fn set_up_player_on_amalgam_platform() -> Game {
@@ -2065,6 +2063,18 @@ mod tests {
         let mut game = set_up_player_on_platform();
         game.player.vel = left_f() * game.player.max_run_speed;
         game.player.desired_direction = left_i();
+        game
+    }
+    fn set_up_player_running_double_max_speed_left() -> Game {
+        let mut game = set_up_player_on_platform();
+        game.player.vel = left_f() * game.player.max_run_speed * 2.0;
+        game.player.desired_direction = left_i();
+        game
+    }
+    fn set_up_player_running_double_max_speed_right() -> Game {
+        let mut game = set_up_player_on_platform();
+        game.player.vel = right_f() * game.player.max_run_speed * 2.0;
+        game.player.desired_direction = right_i();
         game
     }
 
@@ -2258,10 +2268,14 @@ mod tests {
     }
 
     fn set_up_30_particles_about_to_move_one_square_right() -> Game {
+        set_up_n_particles_about_to_move_one_square_right(30)
+    }
+
+    fn set_up_n_particles_about_to_move_one_square_right(n: i32) -> Game {
         let mut game = set_up_game();
         let start_pos = p(0.49, 0.0);
         let start_vel = p(0.1, 0.0);
-        for _ in 0..30 {
+        for _ in 0..n {
             game.place_particle_with_velocity(start_pos, start_vel);
         }
         game
@@ -2845,12 +2859,16 @@ mod tests {
         let start_pos = game.player.pos;
 
         game.player_jump();
+        let initial_vy = game.player.vel.y();
         let mut prev_vel_y = game.player.vel.y();
-        for _ in 0..50 {
+        let mut initial_y = game.player.pos.y();
+        for i in 0..50 {
             game.tick_physics();
             assert!(game.player.vel.x().abs() == game.player.max_run_speed);
             assert!(game.player.accel.x() == 0.0);
             assert!(game.player.vel.y() < prev_vel_y || game.player.vel.y() == 0.0);
+            assert!(game.player.vel.y().abs() <= initial_vy.abs());
+            assert!(game.player.pos.y() >= initial_y);
             prev_vel_y = game.player.vel.y();
         }
         assert!(nearly_equal(game.player.pos.y(), start_pos.y()));
@@ -4532,10 +4550,13 @@ mod tests {
     #[test]
     #[timeout(100)]
     fn test_particles_combine_into_blocks() {
-        let mut game = set_up_30_particles_about_to_move_one_square_right();
+        let mut game = set_up_n_particles_about_to_move_one_square_right(
+            DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION,
+        );
         let start_square = p(0, 0);
         let particle_square = p(1, 0);
         game.tick_physics();
+        dbg!(game.particles.len());
         assert!(game.particles.is_empty());
         assert!(matches!(
             game.get_block(particle_square),
@@ -4957,5 +4978,16 @@ mod tests {
         game.player.desired_direction = up_i();
         game.tick_physics();
         assert!(game.player.vel.y() < 0.0);
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_ground_friction_is_left_right_symmetric() {
+        let mut game1 = set_up_player_running_double_max_speed_left();
+        let mut game2 = set_up_player_running_double_max_speed_right();
+
+        assert!(game1.player.vel.x().abs() == game2.player.vel.x().abs());
+        game1.tick_physics();
+        game2.tick_physics();
+        assert!(game1.player.vel.x().abs() == game2.player.vel.x().abs());
     }
 }
