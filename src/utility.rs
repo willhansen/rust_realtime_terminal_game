@@ -821,8 +821,16 @@ pub fn flip_y(v: FPoint) -> FPoint {
     p(v.x(), -v.y())
 }
 
-pub fn jump_vel_to_height(jump_vel: f32, grav_accel: f32) -> f32 {
+pub fn calc_jump_height_in_world_coordinates(jump_vel: f32, grav_accel: f32) -> f32 {
     0.5 * jump_vel * jump_vel / grav_accel.abs()
+}
+
+pub fn calc_jump_height_in_grid_coordinates(
+    jump_vel: f32,
+    grav_accel: f32,
+    vertical_stretch_factor: f32,
+) -> f32 {
+    calc_jump_height_in_world_coordinates(jump_vel, grav_accel) / vertical_stretch_factor
 }
 
 pub fn time_to_jump_peak(jump_vel: f32, grav_accel: f32) -> f32 {

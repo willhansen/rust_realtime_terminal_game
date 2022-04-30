@@ -238,6 +238,7 @@ struct Player {
     moved_normal_to_collision_since_collision: bool,
     speed_line_lifetime_in_ticks: f32,
     speed_line_behavior: SpeedLineType,
+    enable_jump_compression_bonus: bool,
 }
 
 impl Player {
@@ -263,12 +264,13 @@ impl Player {
             remaining_coyote_time: DEFAULT_PLAYER_MAX_COYOTE_TIME,
             max_coyote_time: DEFAULT_PLAYER_MAX_COYOTE_TIME,
             dash_vel: DEFAULT_PLAYER_DASH_SPEED,
-            dash_adds_to_vel: false,
+            dash_adds_to_vel: true,
             time_of_last_boost: None,
             last_collision: None,
             moved_normal_to_collision_since_collision: false,
             speed_line_lifetime_in_ticks: DEFAULT_PARTICLE_LIFETIME_IN_TICKS,
             speed_line_behavior: SpeedLineType::PerpendicularLines,
+            enable_jump_compression_bonus: ENABLE_JUMP_COMPRESSION_BONUS,
         }
     }
 
@@ -904,7 +906,7 @@ impl Game {
     }
 
     fn jump_bonus_vel_from_compression(&self) -> FPoint {
-        if !ENABLE_JUMP_COMPRESSION_BONUS {
+        if !self.player.enable_jump_compression_bonus {
             return zero_f();
         }
         if let Some(collision) = &self.player.last_collision {
@@ -1410,7 +1412,7 @@ impl Game {
                 end_state.accel = extrapolated_to_collision_time.accel;
 
                 self.player.last_collision = Some(PlayerBlockCollision {
-                    time_in_ticks: self.time_in_ticks() - remaining_time + rel_collision_time,
+                    time_in_ticks: self.time_in_ticks() - remaining_time,
                     normal: collision.normal,
                     collider_velocity: end_state.vel,
                     collider_pos: collision.collider_pos,
@@ -2202,6 +2204,13 @@ mod tests {
         );
         return game;
     }
+    fn set_up_player_about_to_run_into_corner_of_backward_L() -> Game {
+        let mut game = set_up_player_in_corner_of_backward_L();
+        game.player.pos.add_assign(left_f() * 0.1);
+        game.player.desired_direction = right_i();
+        game.player.vel = right_f() * 5.0;
+        return game;
+    }
 
     fn set_up_player_starting_to_move_right_on_platform() -> Game {
         let mut game = set_up_player_on_platform();
@@ -2416,6 +2425,7 @@ mod tests {
         game.place_player(15.0, 0.0);
         game.player.acceleration_from_gravity = 1.0;
         game.player.remaining_coyote_time = 0.0;
+        game.tick_physics();
         game.tick_physics();
         assert!(game.player.alive == false);
     }
@@ -3638,6 +3648,7 @@ mod tests {
     fn test_bullet_time_slows_down_motion() {
         let mut game = set_up_player_in_zero_g();
         game.player.acceleration_from_floor_traction = 0.0;
+        game.player.acceleration_from_air_traction = 0.0;
         game.player.vel = p(1.0, 0.0);
         let start_x = game.player.pos.x();
         game.bullet_time_factor = 0.5;
@@ -4175,16 +4186,13 @@ mod tests {
     #[test]
     #[timeout(100)]
     fn test_player_remembers_movement_normal_to_last_collision__horizontal_collision() {
-        let mut game = set_up_player_touching_wall_on_right();
-        game.player.vel = p(1.0, 0.0);
-        game.player.desired_direction = p(1, 0);
+        let mut game = set_up_player_about_to_run_into_corner_of_backward_L();
         game.tick_physics();
-        assert!(nearly_equal(
-            game.ticks_since_last_player_collision().unwrap(),
-            1.0
-        ));
+        assert!(game.player.last_collision.is_some());
+        assert!(game.ticks_since_last_player_collision().unwrap() < 1.0);
+        assert!(game.ticks_since_last_player_collision().unwrap() > 0.9);
         assert!(game.player.moved_normal_to_collision_since_collision == false);
-        game.player.vel = p(-1.0, 0.0);
+        game.player.vel = up_f() + left_f();
         game.tick_physics();
         assert!(game.player.moved_normal_to_collision_since_collision == true);
     }
@@ -4447,6 +4455,8 @@ mod tests {
         let mut game1 = set_up_player_on_platform();
         let mut game2 =
             set_up_player_halfway_through_decompressing_from_vertical_jump_on_platform();
+        game1.player.enable_jump_compression_bonus = true;
+        game2.player.enable_jump_compression_bonus = true;
 
         game1.player_jump_if_possible();
         game2.player_jump_if_possible();
@@ -4459,6 +4469,8 @@ mod tests {
     fn test_full_jump_bonus_from_normal_jump_not_larger_than_normal_jump() {
         let mut game1 = set_up_player_on_platform();
         let mut game2 = set_up_player_fully_compressed_from_vertical_jump_on_platform();
+        game1.player.enable_jump_compression_bonus = true;
+        game2.player.enable_jump_compression_bonus = true;
 
         game1.player_jump_if_possible();
         game2.player_jump_if_possible();
@@ -4471,6 +4483,7 @@ mod tests {
     fn test_jump_bonus_only_perpendicular_to_collision__floor_collision() {
         let mut game =
             set_up_player_fully_compressed_from_vertical_jump_while_running_right_on_platform();
+        game.player.enable_jump_compression_bonus = true;
         let bonus = game.jump_bonus_vel_from_compression();
         assert!(bonus.x() == 0.0);
         assert!(bonus.y() > 0.0);
@@ -4481,6 +4494,7 @@ mod tests {
     #[timeout(100)]
     fn test_jump_bonus_NOT_only_perpendicular_to_collision__wall_collision() {
         let mut game = set_up_player_fully_compressed_from_down_leftwards_impact_on_wall();
+        game.player.enable_jump_compression_bonus = true;
 
         let bonus = game.jump_bonus_vel_from_compression();
         assert!(bonus.x() > 0.0);
@@ -4897,10 +4911,9 @@ mod tests {
         game.tick_physics();
         assert!(game.particles.is_empty());
     }
-
     #[test]
     #[timeout(100)]
-    fn test_verify_jump_utility_functions() {
+    fn test_verify_time_to_jump_peak_function() {
         let mut game = set_up_player_on_platform();
         game.player_jump_if_possible();
 
@@ -4909,15 +4922,65 @@ mod tests {
         let g = game.player.acceleration_from_gravity.abs();
         let vi = game.player.vel.y();
         let time_to_peak = time_to_jump_peak(vi, g);
-        let jump_peak = game.player.pos.y() + jump_vel_to_height(vi, g);
 
+        assert!(vi > 0.0);
+        assert!(g > 0.0);
         game.apply_physics_in_n_steps(time_to_peak, 100);
-        dbg!(g, vi, game.player.vel);
-        assert!(nearly_equal(game.player.pos.y(), jump_peak));
+        assert!(game.player.pos.y() > start_pos.y());
         assert!(nearly_equal(game.player.vel.y(), 0.0));
         game.apply_physics_in_n_steps(time_to_peak / 2.0, 100);
         game.apply_physics_in_n_steps(time_to_peak / 2.0, 100);
         assert!(nearly_equal(game.player.pos.y(), start_pos.y()));
+        assert!(nearly_equal(game.player.vel.y(), -vi));
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_verify_calc_jump_height() {
+        let mut game = set_up_player_on_platform();
+        game.player_jump_if_possible();
+
+        let y0 = game.player.pos.y();
+
+        let g = game.player.acceleration_from_gravity.abs();
+        let vi = game.player.vel.y();
+        let time_to_peak = time_to_jump_peak(vi, g);
+        let jump_peak_y = y0 + calc_jump_height_in_grid_coordinates(vi, g, VERTICAL_STRETCH_FACTOR);
+
+        assert!(vi > 0.0);
+        assert!(g > 0.0);
+        game.apply_physics_in_n_steps(time_to_peak, 100);
+        assert!(nearly_equal(game.player.vel.y(), 0.0));
+        assert!(nearly_equal(game.player.pos.y(), jump_peak_y));
+        game.apply_physics_in_n_steps(time_to_peak / 2.0, 100);
+        game.apply_physics_in_n_steps(time_to_peak / 2.0, 100);
+        assert!(nearly_equal(game.player.pos.y(), y0));
+    }
+
+    #[test]
+    fn test_validate_jump_utility_functions_against_kinematic_state_extrapolation() {
+        let yi = 5.0;
+        let vi = 1.0;
+        let g = 0.1;
+        let state = KinematicState {
+            pos: up_f() * yi,
+            vel: up_f() * vi,
+            accel: down_f() * g,
+        };
+
+        let expected_time_to_peak = time_to_jump_peak(vi, g);
+        assert!(nearly_equal(
+            expected_time_to_peak,
+            state.dt_to_slowest_point()
+        ));
+        let expected_height = calc_jump_height_in_world_coordinates(vi, g);
+        assert!(nearly_equal(
+            expected_height,
+            state
+                .extrapolated_delta(state.dt_to_slowest_point())
+                .pos
+                .y()
+        ));
     }
 
     #[test]
