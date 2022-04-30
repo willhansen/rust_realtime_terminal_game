@@ -1,20 +1,23 @@
+extern crate derive_more;
 extern crate geo;
 extern crate rand;
 
-use crate::{AdjacentOccupancyMask, RADIUS_OF_EXACTLY_TOUCHING_ZONE};
+use crate::RADIUS_OF_EXACTLY_TOUCHING_ZONE;
+use derive_more::{Add, Display, Div, Mul, Sub};
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Line, Point};
-use num::clamp;
 use num::traits::Pow;
+use num::{clamp, zero};
 use ordered_float::OrderedFloat;
 use rand::Rng;
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::TAU;
+use std::ops::Index;
 
-pub type fPoint = Point<f32>;
-pub type iPoint = Point<i32>;
-pub type iLine = Line<i32>;
-pub type fLine = Line<f32>;
+pub type FPoint = Point<f32>;
+pub type IPoint = Point<i32>;
+pub type ILine = Line<i32>;
+pub type FLine = Line<f32>;
 
 pub fn p<T: 'static>(x: T, y: T) -> Point<T>
 where
@@ -46,6 +49,24 @@ pub fn zero_f() -> Point<f32> {
     p(0.0, 0.0)
 }
 
+pub fn right_i() -> IPoint {
+    p(1, 0)
+}
+pub fn left_i() -> IPoint {
+    p(-1, 0)
+}
+pub fn up_i() -> IPoint {
+    p(0, 1)
+}
+#[allow(dead_code)]
+pub fn down_i() -> IPoint {
+    p(0, -1)
+}
+#[allow(dead_code)]
+pub fn zero_i() -> IPoint {
+    p(0, 0)
+}
+
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub struct SquarecastCollision {
     pub unrounded_collider_pos: Point<f32>,
@@ -53,6 +74,19 @@ pub struct SquarecastCollision {
     pub normal: Point<i32>,
     pub collided_block_square: Point<i32>,
 }
+
+// TODO: use
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum EdgeExtension {
+    Extended,
+    Neutral,
+    Retracted,
+}
+
+pub type AdjacentOccupancyMask = [[bool; 3]; 3];
+// TODO: use
+pub type SquareEdgeExtensions = [[EdgeExtension; 3]; 3];
+
 #[allow(dead_code)]
 pub fn single_block_squarecast(
     start_point: Point<f32>,
@@ -60,7 +94,7 @@ pub fn single_block_squarecast(
     grid_square_center: Point<i32>,
     moving_square_side_length: f32,
 ) -> Option<SquarecastCollision> {
-    single_block_squarecast_with_filled_cracks(
+    single_block_squarecast_with_edge_extensions(
         start_point,
         end_point,
         grid_square_center,
@@ -69,7 +103,7 @@ pub fn single_block_squarecast(
     )
 }
 
-pub fn visible_xy_to_actual_xy(a: AdjacentOccupancyMask) -> AdjacentOccupancyMask {
+pub fn visible_xy_to_actual_xy<T: Copy>(a: [[T; 3]; 3]) -> [[T; 3]; 3] {
     // visible
     // [ [ 7, 8, 9 ],
     //   [ 4, 5, 6 ],
@@ -93,7 +127,7 @@ pub fn single_block_linecast_with_filled_cracks(
     grid_square_center: Point<i32>,
     adjacent_squares_occupied: AdjacentOccupancyMask,
 ) -> Option<SquarecastCollision> {
-    single_block_squarecast_with_filled_cracks(
+    single_block_squarecast_with_edge_extensions(
         start_point,
         end_point,
         grid_square_center,
@@ -102,7 +136,7 @@ pub fn single_block_linecast_with_filled_cracks(
     )
 }
 
-pub fn single_block_squarecast_with_filled_cracks(
+pub fn single_block_squarecast_with_edge_extensions(
     start_point: Point<f32>,
     end_point: Point<f32>,
     grid_square_center: Point<i32>,
@@ -125,8 +159,8 @@ pub fn single_block_squarecast_with_filled_cracks(
     #[derive(Copy, Clone, PartialEq, Debug)]
     struct EdgeCollision {
         edge: geo::Line<f32>,
-        point_of_impact: fPoint,
-        normal: iPoint,
+        point_of_impact: FPoint,
+        normal: IPoint,
     }
 
     //println!("expanded_edges: {:?}", expanded_square_edges);
@@ -137,7 +171,7 @@ pub fn single_block_squarecast_with_filled_cracks(
             is_proper: _,
         }) = line_intersection(movement_line, edge)
         {
-            let edge_as_vect: fPoint = (edge.end - edge.start).into();
+            let edge_as_vect: FPoint = (edge.end - edge.start).into();
             let normal = snap_to_grid(direction(quarter_turns_counter_clockwise(edge_as_vect, 3)));
             candidate_edge_collisions.push(EdgeCollision {
                 edge,
@@ -176,7 +210,7 @@ pub fn single_block_squarecast_with_filled_cracks(
 }
 
 pub fn get_counter_clockwise_collision_edges_with_known_adjacency(
-    center: fPoint,
+    center: FPoint,
     nominal_side_length: f32,
     adjacency_map: AdjacentOccupancyMask,
 ) -> Vec<geo::Line<f32>> {
@@ -196,7 +230,7 @@ pub fn get_counter_clockwise_collision_edges_with_known_adjacency(
     let inner_halflength = nominal_side_length / 2.0 - RADIUS_OF_EXACTLY_TOUCHING_ZONE;
     let outer_halflength = nominal_side_length / 2.0 + RADIUS_OF_EXACTLY_TOUCHING_ZONE;
 
-    let mut output_lines = Vec::<fLine>::new();
+    let mut output_lines = Vec::<FLine>::new();
     // for every orthogonal direction
     for i in 0..4 {
         let this_edge_dir = orthogonal_direction(i);
@@ -206,7 +240,7 @@ pub fn get_counter_clockwise_collision_edges_with_known_adjacency(
         let right_edge_dir = quarter_turns_counter_clockwise(this_edge_dir, 3);
 
         let dir_to_expansion_val =
-            |v: iPoint| -> bool { adjacency_map[(v.x() + 1) as usize][(v.y() + 1) as usize] };
+            |v: IPoint| -> bool { adjacency_map[(v.x() + 1) as usize][(v.y() + 1) as usize] };
 
         let block_at_this_edge = dir_to_expansion_val(this_edge_dir);
         let block_at_left_edge = dir_to_expansion_val(left_edge_dir);
@@ -482,8 +516,18 @@ pub fn floatify(vec: Point<i32>) -> Point<f32> {
 pub fn magnitude(vec: Point<f32>) -> f32 {
     return (vec.x().pow(2.0) + vec.y().pow(2.0)).sqrt();
 }
+pub fn magnitude_squared(vec: Point<f32>) -> f32 {
+    return vec.x().pow(2.0) + vec.y().pow(2.0);
+}
 pub fn direction(vec: Point<f32>) -> Point<f32> {
+    if vec == zero_f() {
+        return zero_f();
+    }
     return vec / magnitude(vec);
+}
+// because convenient
+pub fn normalized(vec: Point<f32>) -> Point<f32> {
+    direction(vec)
 }
 
 #[allow(dead_code)]
@@ -515,7 +559,7 @@ impl<T: num::Signed> SignedExt for T {
     }
 }
 
-pub fn project(v1: Point<f32>, v2: Point<f32>) -> Point<f32> {
+pub fn project_a_onto_b(v1: Point<f32>, v2: Point<f32>) -> Point<f32> {
     return direction(v2) * v1.dot(v2) / magnitude(v2);
 }
 
@@ -599,7 +643,11 @@ pub fn rand_in_range(start: f32, end: f32) -> f32 {
     rng.gen_range(start..end)
 }
 
-pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
+pub fn lerp<T: std::ops::Mul<f32, Output = T> + std::ops::Add<T, Output = T>>(
+    a: T,
+    b: T,
+    t: f32,
+) -> T {
     a * (1.0 - t) + b * t
 }
 pub fn inverse_lerp(a: f32, b: f32, value_between_a_and_b: f32) -> f32 {
@@ -630,7 +678,7 @@ pub fn points_in_line_with_max_gap(
     return output;
 }
 
-pub fn lin_space_from_start_2d(start: fPoint, end: fPoint, density: f32) -> Vec<fPoint> {
+pub fn lin_space_from_start_2d(start: FPoint, end: FPoint, density: f32) -> Vec<FPoint> {
     // end point is not included.  Start point is included
 
     let num_points_to_check = (magnitude(end - start) * density).floor() as i32;
@@ -644,6 +692,9 @@ pub fn lin_space_from_start_2d(start: fPoint, end: fPoint, density: f32) -> Vec<
 
 pub fn lerp_2d(a: Point<f32>, b: Point<f32>, t: f32) -> Point<f32> {
     p(lerp(a.x(), b.x(), t), lerp(a.y(), b.y(), t))
+}
+pub fn inverse_lerp_2d(a: FPoint, b: FPoint, third_point: FPoint) -> f32 {
+    magnitude(third_point - a) / magnitude(b - a)
 }
 
 pub fn rotated(vect: Point<f32>, radians: f32) -> Point<f32> {
@@ -714,7 +765,7 @@ pub fn time_synchronized_points_on_line(
 }
 
 // In radians
-pub fn angle_between(v1: fPoint, v2: fPoint) -> f32 {
+pub fn angle_between(v1: FPoint, v2: FPoint) -> f32 {
     (v1.dot(v2) / (magnitude(v1) * magnitude(v2))).acos()
 }
 pub fn modulo(a: f32, b: f32) -> f32 {
@@ -726,11 +777,11 @@ pub fn to_standard_angle(a: f32) -> f32 {
     modulo(a, TAU)
 }
 
-pub fn angle_of_vector(v: fPoint) -> f32 {
+pub fn angle_of_vector(v: FPoint) -> f32 {
     v.y().atan2(v.x())
 }
 
-pub fn vector_from_radial(angle: f32, length: f32) -> fPoint {
+pub fn vector_from_radial(angle: f32, length: f32) -> FPoint {
     p(angle.cos(), angle.sin()) * length
 }
 
@@ -755,12 +806,175 @@ pub fn rotate_angle_towards(start_angle: f32, target_angle: f32, max_step: f32) 
     }
 }
 
-pub fn rotate_vector_towards(start: fPoint, target: fPoint, max_angle_step: f32) -> fPoint {
+pub fn rotate_vector_towards(start: FPoint, target: FPoint, max_angle_step: f32) -> FPoint {
     let start_angle = angle_of_vector(start);
     let start_length = magnitude(start);
     let target_angle = angle_of_vector(target);
     let end_angle = rotate_angle_towards(start_angle, target_angle, max_angle_step);
     vector_from_radial(end_angle, start_length)
+}
+
+pub fn flip_x(v: FPoint) -> FPoint {
+    p(-v.x(), v.y())
+}
+pub fn flip_y(v: FPoint) -> FPoint {
+    p(v.x(), -v.y())
+}
+
+pub fn calc_jump_height_in_world_coordinates(jump_vel: f32, grav_accel: f32) -> f32 {
+    0.5 * jump_vel * jump_vel / grav_accel.abs()
+}
+
+pub fn calc_jump_height_in_grid_coordinates(
+    jump_vel: f32,
+    grav_accel: f32,
+    vertical_stretch_factor: f32,
+) -> f32 {
+    calc_jump_height_in_world_coordinates(jump_vel, grav_accel) / vertical_stretch_factor
+}
+
+pub fn time_to_jump_peak(jump_vel: f32, grav_accel: f32) -> f32 {
+    jump_vel.abs() / grav_accel.abs()
+}
+
+pub fn time_to_jump_landing(jump_vel: f32, grav_accel: f32) -> f32 {
+    time_to_jump_peak(jump_vel, grav_accel) * 2.0
+}
+
+pub fn ticks_to_stop_from_speed(v0: f32, a: f32) -> Option<f32> {
+    if a == 0.0 {
+        None
+    } else {
+        Some(v0 / a)
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Debug, Add, Sub, Mul, Div)]
+pub struct KinematicState {
+    pub pos: FPoint,
+    pub vel: FPoint,
+    pub accel: FPoint,
+}
+impl KinematicState {
+    pub fn extrapolated(&self, dt: f32) -> KinematicState {
+        KinematicState {
+            pos: self.pos + self.vel * dt + self.accel * 0.5 * dt * dt,
+            vel: self.vel + self.accel * dt,
+            accel: self.accel,
+        }
+    }
+    pub fn dt_to_slowest_point(&self) -> f32 {
+        time_of_line_closest_approach_to_origin(self.accel, self.vel)
+    }
+    pub fn extrapolated_with_full_stop_at_slowest(&self, dt: f32) -> KinematicState {
+        let dt_to_slowest = self.dt_to_slowest_point();
+        let slowest_point_is_in_past = dt_to_slowest < 0.0;
+        let slowest_point_is_beyond_dt = dt < dt_to_slowest;
+        let is_constant_speed = self.accel == zero_f();
+        let slowest_point_is_singular = !is_constant_speed;
+        let slowest_point_is_now = dt_to_slowest == 0.0;
+
+        if slowest_point_is_in_past || slowest_point_is_beyond_dt || is_constant_speed
+        //|| (slowest_point_is_singular && slowest_point_is_now)
+        {
+            return self.extrapolated(dt);
+        }
+        KinematicState {
+            pos: self.extrapolated(dt_to_slowest).pos,
+            vel: zero_f(),
+            accel: zero_f(),
+        }
+    }
+    pub fn extrapolated_with_speed_cap(&self, dt: f32, speed_cap: f32) -> KinematicState {
+        if magnitude(self.vel) <= speed_cap {
+            if let Some(sooner_dt) =
+                when_parabolic_motion_reaches_speed(self.vel, self.accel, speed_cap)
+            {
+                if sooner_dt < dt {
+                    let mid_state = self.extrapolated(sooner_dt);
+                    let remaining_dt = dt - sooner_dt;
+                    return KinematicState {
+                        pos: mid_state.pos + mid_state.vel * remaining_dt,
+                        vel: mid_state.vel,
+                        accel: mid_state.accel,
+                    };
+                }
+            }
+        }
+        self.extrapolated(dt)
+    }
+    pub fn extrapolated_delta(&self, dt: f32) -> KinematicState {
+        self.extrapolated(dt) - *self
+    }
+    pub fn extrapolated_delta_with_speed_cap(&self, dt: f32, speed_cap: f32) -> KinematicState {
+        self.extrapolated_with_speed_cap(dt, speed_cap) - *self
+    }
+    pub fn extrapolated_delta_with_full_stop_at_slowest(&self, dt: f32) -> KinematicState {
+        self.extrapolated_with_full_stop_at_slowest(dt) - *self
+    }
+}
+
+pub fn time_of_line_closest_approach_to_origin(v: FPoint, x0: FPoint) -> f32 {
+    if v == zero_f() {
+        return 0.0;
+    }
+    -v.dot(x0) / (v.dot(v))
+}
+
+pub fn when_linear_motion_hits_circle_from_inside(
+    start_pos: FPoint,
+    vel: FPoint,
+    radius: f32,
+) -> Option<f32> {
+    let starts_on_circle = magnitude(start_pos) == radius;
+    let moving_away_from_center_at_start = start_pos.dot(vel) > 0.0;
+    if starts_on_circle && moving_away_from_center_at_start {
+        return Some(0.0);
+    }
+    let not_moving = vel == zero_f();
+    if not_moving {
+        return None;
+    }
+
+    let a = magnitude_squared(vel);
+    let b = 2.0 * start_pos.dot(vel);
+    let c = magnitude_squared(start_pos) - radius.pow(2.0);
+    let determinant = b * b - 4.0 * a * c;
+    // never collide with circle
+    if determinant < 0.0 {
+        return None;
+    }
+    let t1 = (-b + determinant.sqrt()) / (2.0 * a);
+    let t2 = (-b - determinant.sqrt()) / (2.0 * a);
+    //dbg!(start_pos, vel, radius, a, b, c, determinant, t1, t2);
+    // collided with circle in past
+    if t1 < 0.0 && t2 < 0.0 {
+        return None;
+    }
+    // two collisions in the future (now included)
+    if t1 >= 0.0 && t2 >= 0.0 {
+        if starts_on_circle {
+            Some(t1.max(t2))
+        } else {
+            Some(t1.min(t2))
+        }
+    }
+    // one collision in past, one in future (started inside circle)
+    else {
+        Some(t1.max(t2))
+    }
+}
+
+pub fn when_parabolic_motion_reaches_speed(
+    start_vel: FPoint,
+    acceleration: FPoint,
+    target_speed: f32,
+) -> Option<f32> {
+    when_linear_motion_hits_circle_from_inside(start_vel, acceleration, target_speed)
+}
+
+pub fn remove_by_value<T: PartialEq>(vec: &mut Vec<T>, val: &T) {
+    vec.retain(|x| *x != *val);
 }
 
 // for tests
@@ -1065,12 +1279,12 @@ mod tests {
 
     #[test]
     fn test_projection() {
-        assert!(project(p(1.0, 0.0), p(5.0, 0.0)) == p(1.0, 0.0));
-        assert!(project(p(1.0, 0.0), p(0.0, 5.0)) == p(0.0, 0.0));
-        assert!(project(p(1.0, 1.0), p(1.0, 0.0)) == p(1.0, 0.0));
-        assert!(project(p(6.0, 6.0), p(0.0, 1.0)) == p(0.0, 6.0));
-        assert!(project(p(2.0, 6.0), p(0.0, 1.0)) == p(0.0, 6.0));
-        assert!(project(p(-6.0, 6.0), p(0.0, 1.0)) == p(0.0, 6.0));
+        assert!(project_a_onto_b(p(1.0, 0.0), p(5.0, 0.0)) == p(1.0, 0.0));
+        assert!(project_a_onto_b(p(1.0, 0.0), p(0.0, 5.0)) == p(0.0, 0.0));
+        assert!(project_a_onto_b(p(1.0, 1.0), p(1.0, 0.0)) == p(1.0, 0.0));
+        assert!(project_a_onto_b(p(6.0, 6.0), p(0.0, 1.0)) == p(0.0, 6.0));
+        assert!(project_a_onto_b(p(2.0, 6.0), p(0.0, 1.0)) == p(0.0, 6.0));
+        assert!(project_a_onto_b(p(-6.0, 6.0), p(0.0, 1.0)) == p(0.0, 6.0));
     }
     #[test]
     fn test_round_with_tie_break_to_inf() {
@@ -1639,5 +1853,235 @@ mod tests {
             rotate_angle_towards(TAU - 0.1, 0.1, 0.01),
             TAU - 0.09
         ));
+    }
+
+    #[test]
+    fn test_flip_x() {
+        assert!(flip_x(p(5.0, 8.0)) == p(-5.0, 8.0));
+        assert!(flip_x(p(-5.0, 8.0)) == p(5.0, 8.0));
+    }
+
+    #[test]
+    fn test_flip_y() {
+        assert!(flip_y(p(5.0, 8.0)) == p(5.0, -8.0));
+        assert!(flip_y(p(5.0, -8.0)) == p(5.0, 8.0));
+    }
+
+    #[test]
+    fn test_when_linear_motion_hits_circle__simple_test() {
+        assert!(
+            when_linear_motion_hits_circle_from_inside(right_f() * 5.0, right_f() * 1.0, 7.0)
+                == Some(2.0)
+        );
+        assert!(
+            when_linear_motion_hits_circle_from_inside(right_f() * 5.0, left_f() * 1.0, 4.0)
+                == Some(1.0)
+        );
+        assert!(
+            when_linear_motion_hits_circle_from_inside(up_f() * 5.0, down_f() * 1.0, 7.0)
+                == Some(12.0)
+        );
+        assert!(
+            when_linear_motion_hits_circle_from_inside(right_f() * 5.0, right_f() * 1.0, 4.0)
+                == None
+        );
+    }
+    #[test]
+    fn test_when_linear_motion_hits_circle__zeros_test() {
+        assert!(when_linear_motion_hits_circle_from_inside(zero_f(), zero_f(), 4.0) == None);
+        assert!(
+            when_linear_motion_hits_circle_from_inside(right_f() * 25.0, zero_f(), 4.0) == None
+        );
+        assert!(when_linear_motion_hits_circle_from_inside(zero_f(), right_f(), 0.0) == Some(0.0));
+        assert!(when_linear_motion_hits_circle_from_inside(zero_f(), zero_f(), 0.0) == None);
+    }
+    #[test]
+    fn test_when_linear_motion_hits_circle__fancy_test() {
+        let x0 = p(5.345, 1.567); // random
+        let v = direction(p(1.398, 8.4837));
+        let t = 4.567;
+        let endpoint = x0 + v * t;
+        let end_radius = magnitude(endpoint);
+
+        let calculated_time =
+            when_linear_motion_hits_circle_from_inside(x0, v, end_radius).unwrap();
+        assert!(nearly_equal(t, calculated_time));
+    }
+    #[test]
+    fn test_when_linear_motion_hits_circle__start_on_circle_moving_out() {
+        let r = 5.0;
+        assert!(
+            when_linear_motion_hits_circle_from_inside(
+                right_f() * r,
+                right_f() * 1.0 + up_f() * 0.5,
+                r
+            ) == Some(0.0)
+        );
+    }
+    #[test]
+    fn test_when_linear_motion_hits_circle__start_on_circle_moving_in() {
+        let r = 5.0;
+        let t = when_linear_motion_hits_circle_from_inside(
+            right_f() * r,
+            left_f() * 1.0 + up_f() * 0.5,
+            r,
+        );
+        assert!(t.is_some());
+        assert!(t.unwrap() > 0.0);
+    }
+
+    #[test]
+    fn test_extrapolate_kinematics__accelerate_right() {
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: right_f() * 1.0,
+            accel: right_f() * 1.0,
+        };
+        let end_state = start_state.extrapolated(1.0);
+        assert!(end_state.vel == start_state.vel + right_f() * 1.0);
+    }
+    #[test]
+    fn test_extrapolate_kinematics_with_speed_cap__do_not_exceed_cap() {
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: right_f() * 1.0,
+            accel: right_f() * 1.0,
+        };
+        let end_state = start_state.extrapolated_with_speed_cap(1.0, 1.0);
+        assert!(end_state.vel == start_state.vel);
+    }
+    #[test]
+    fn test_extrapolate_kinematics_with_speed_cap__can_drop_below_cap_from_above_cap() {
+        let speed_cap = 1.0;
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: right_f() * 1.1,
+            accel: left_f() * 1.0,
+        };
+        let end_state = start_state.extrapolated_with_speed_cap(1.0, speed_cap);
+        assert!(magnitude(end_state.vel) < speed_cap);
+    }
+    #[test]
+    fn test_extrapolate_kinematics_with_speed_cap__can_drop_below_cap_from_at_cap() {
+        let speed_cap = 1.0;
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: right_f() * 1.0,
+            accel: left_f() * 0.05,
+        };
+        let end_state = start_state.extrapolated_with_speed_cap(1.0, speed_cap);
+        assert!(magnitude(end_state.vel) < speed_cap);
+    }
+    #[test]
+    fn test_direction_of_zero_is_zero() {
+        assert!(direction(zero_f()) == zero_f());
+    }
+    #[test]
+    fn test_extrapolated_delta_kinematics_with_speed_cap__reasonable_dv() {
+        let dt = 0.997;
+        let start_state = KinematicState {
+            pos: p(15.0, 10.0),
+            vel: zero_f(),
+            accel: down_f() * 0.1,
+        };
+        let speed_cap = 0.7;
+        let diff = start_state.extrapolated_delta_with_speed_cap(dt, speed_cap);
+        assert!(magnitude(diff.vel) < magnitude(start_state.accel) * 1.5);
+    }
+    #[test]
+    fn test_extrapolate_kinematics_with_full_stop_at_slowest__upwards_arc() {
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: right_f() * 3.0 + up_f() * 1.0,
+            accel: down_f() * 1.0,
+        };
+        assert!(start_state.extrapolated_with_full_stop_at_slowest(2.0).vel == zero_f());
+    }
+    #[test]
+    fn test_extrapolate_kinematics_with_full_stop_at_slowest__past_slowest() {
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: right_f(),
+            accel: right_f(),
+        };
+        assert!(start_state.extrapolated_with_full_stop_at_slowest(2.0).vel != zero_f());
+    }
+
+    #[ignore] // Not sure about this one
+    #[test]
+    fn test_extrapolate_kinematics_with_full_stop_at_slowest__no_stop_at_start() {
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: zero_f(),
+            accel: right_f(),
+        };
+        assert!(start_state.extrapolated_with_full_stop_at_slowest(2.0).vel != zero_f());
+    }
+
+    #[test]
+    fn test_extrapolate_kinematics_with_full_stop_at_slowest__before_slowest() {
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: left_f() * 100.0,
+            accel: right_f(),
+        };
+        let dt = 2.0;
+        assert!(
+            start_state.extrapolated_with_full_stop_at_slowest(dt) == start_state.extrapolated(dt)
+        );
+    }
+    #[test]
+    fn test_extrapolate_kinematics_with_full_stop_at_slowest__constant_non_zero_speed_means_no_stop(
+    ) {
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: left_f() * 100.0,
+            accel: zero_f(),
+        };
+        let dt = 2.0;
+        assert!(
+            start_state.extrapolated_with_full_stop_at_slowest(dt) == start_state.extrapolated(dt)
+        );
+    }
+    #[test]
+    fn test_extrapolate_kinematics_with_full_stop_at_slowest__zero_to_zero() {
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: zero_f(),
+            accel: zero_f(),
+        };
+        assert!(
+            start_state
+                .extrapolated_with_full_stop_at_slowest(500.0)
+                .vel
+                == zero_f()
+        );
+    }
+
+    #[test]
+    fn test_extrapolate_kinematics_with_full_stop_at_slowest__straight_turnaround() {
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: up_f() * 1.5,
+            accel: down_f() * 1.0,
+        };
+        assert!(start_state.extrapolated_with_full_stop_at_slowest(2.0).vel == zero_f());
+    }
+
+    #[test]
+    fn test_extrapolate_kinematics_with_full_stop_at_slowest__straight_turnaround_with_strange_direction(
+    ) {
+        let dir = normalized(p(-1.3, 0.03645));
+        let start_state = KinematicState {
+            pos: zero_f(),
+            vel: dir * 5.393,
+            accel: -dir * 2.1,
+        };
+        assert!(
+            start_state
+                .extrapolated_with_full_stop_at_slowest(100.0)
+                .vel
+                == zero_f()
+        );
     }
 }
