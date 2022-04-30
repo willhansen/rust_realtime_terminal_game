@@ -61,7 +61,7 @@ const DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION: f32 =
     DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION / 5.0;
 const DEFAULT_PLAYER_MAX_RUN_SPEED: f32 = 0.4;
 const DEFAULT_PLAYER_GROUND_FRICTION_START_SPEED: f32 = 0.7;
-const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED * 3.0;
+const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED * 5.0;
 const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
 const DEFAULT_PLAYER_MIDAIR_MAX_MOVE_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED;
 const DEFAULT_PLAYER_AIR_FRICTION_START_SPEED: f32 = DEFAULT_PLAYER_DASH_SPEED;
@@ -69,19 +69,20 @@ const DEFAULT_PLAYER_AIR_FRICTION_START_SPEED: f32 = DEFAULT_PLAYER_DASH_SPEED;
 const DEFAULT_PARTICLE_LIFETIME_IN_SECONDS: f32 = f32::INFINITY;
 const DEFAULT_PARTICLE_LIFETIME_IN_TICKS: f32 = DEFAULT_PARTICLE_LIFETIME_IN_SECONDS * MAX_FPS;
 const DEFAULT_PARTICLE_SPEED: f32 = 0.1;
-const DEFAULT_PARTICLE_TURN_RADIANS_PER_TICK: f32 = 0.0001;
+const DEFAULT_PARTICLE_TURN_RADIANS_PER_TICK: f32 = -0.001;
 const DEFAULT_MAX_COMPRESSION: f32 = 0.2;
 const DEFAULT_TICKS_TO_MAX_COMPRESSION: f32 = 5.0;
 const DEFAULT_TICKS_TO_END_COMPRESSION: f32 = 10.0;
 const DEFAULT_TICKS_FROM_MAX_TO_END_COMPRESSION: f32 =
     DEFAULT_TICKS_TO_END_COMPRESSION - DEFAULT_TICKS_TO_MAX_COMPRESSION;
-const ENABLE_JUMP_COMPRESSION_BONUS: bool = false;
+const ENABLE_JUMP_COMPRESSION_BONUS: bool = true;
 
-const DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION: i32 = 6; // just more than a diagonal line
+//const DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION: i32 = 6; // just more than a diagonal line
 
-//const DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION: i32 = 20;
+const DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION: i32 = 20;
+//const DEFAULT_PARTICLES_IN_AMALGAMATION_FOR_EXPLOSION: i32 = DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION * 4; // just small enough so the exploded particles don't recombine in adjacent blocks
 const DEFAULT_PARTICLES_IN_AMALGAMATION_FOR_EXPLOSION: i32 =
-    (DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION - 1) * 4; // just small enough so the exploded particles don't recombine in adjacent blocks
+    (DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION + 1) * 4; // just large enough so the exploded particles do recombine in adjacent blocks immediately
 const DEFAULT_PARTICLES_TO_AMALGAMATION_CHANGE: i32 =
     (DEFAULT_PARTICLES_IN_AMALGAMATION_FOR_EXPLOSION - DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION)
         / 4; // 5 sprites over the block's range of particles contained
@@ -264,7 +265,7 @@ impl Player {
             remaining_coyote_time: DEFAULT_PLAYER_MAX_COYOTE_TIME,
             max_coyote_time: DEFAULT_PLAYER_MAX_COYOTE_TIME,
             dash_vel: DEFAULT_PLAYER_DASH_SPEED,
-            dash_adds_to_vel: true,
+            dash_adds_to_vel: false,
             time_of_last_boost: None,
             last_collision: None,
             moved_normal_to_collision_since_collision: false,
@@ -2106,6 +2107,17 @@ mod tests {
         game.player.vel = down_f() * game.player.max_run_speed; // somewhat arbitrary
         game.place_block(round(game.player.pos) + down_i() * 2, Block::Wall);
         game.player.pos.add_assign(down_f() * 0.999);
+        game
+    }
+
+    fn set_up_player_about_to_hit_wall_on_right_midair() -> Game {
+        let mut game = set_up_just_player();
+        let start_square: IPoint = round(game.player.pos);
+        let wall_x = start_square.x() + 1;
+        game.place_line_of_blocks((wall_x, 0), (wall_x, game.height() as i32 - 1), Block::Wall);
+        game.player.pos.add_assign(left_f() * 0.01);
+        game.player.vel = right_f() * game.player.max_run_speed;
+        game.player.desired_direction = right_i();
         game
     }
 
@@ -5052,5 +5064,14 @@ mod tests {
         game1.tick_physics();
         game2.tick_physics();
         assert!(game1.player.vel.x().abs() == game2.player.vel.x().abs());
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_grab_wall_after_impact_with_wall() {
+        let mut game = set_up_player_about_to_hit_wall_on_right_midair();
+        game.tick_physics();
+        game.tick_physics();
+        assert!(game.player.vel.y() == 0.0);
+        assert!(game.player_is_grabbing_wall());
     }
 }
