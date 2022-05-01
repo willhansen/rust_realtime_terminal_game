@@ -42,7 +42,7 @@ const MAX_FPS: f32 = 60.0; // frames per second
 const IDEAL_FRAME_DURATION_MS: u128 = (1000.0 / MAX_FPS) as u128;
 const PLAYER_COLOR: ColorName = ColorName::Red;
 const PLAYER_HIGH_SPEED_COLOR: ColorName = ColorName::Blue;
-const NUM_SAVED_PLAYER_POSES: i32 = 10;
+const NUM_SAVED_PLAYER_KINEMATIC_STATES: i32 = 10;
 const NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS: f32 = 8.0;
 
 // a block every two ticks
@@ -215,7 +215,7 @@ enum SpeedLineType {
 struct Player {
     alive: bool,
     pos: Point<f32>,
-    recent_poses: VecDeque<Point<f32>>,
+    recent_kinematic_states: VecDeque<KinematicState>,
     max_run_speed: f32,
     ground_friction_start_speed: f32,
     air_friction_start_speed: f32,
@@ -252,7 +252,7 @@ impl Player {
         Player {
             alive: false,
             pos: p(0.0, 0.0),
-            recent_poses: VecDeque::<Point<f32>>::new(),
+            recent_kinematic_states: VecDeque::<KinematicState>::new(),
             max_run_speed: DEFAULT_PLAYER_MAX_RUN_SPEED,
             ground_friction_start_speed: DEFAULT_PLAYER_GROUND_FRICTION_START_SPEED,
             air_friction_start_speed: DEFAULT_PLAYER_AIR_FRICTION_START_SPEED,
@@ -981,8 +981,9 @@ impl Game {
 
     fn player_is_officially_fast(&self) -> bool {
         let mut inferred_speed = 0.0;
-        if let Some(last_pos) = self.player.recent_poses.get(0) {
-            inferred_speed = magnitude(self.player.pos - *last_pos);
+        if let Some(last_state) = self.player.recent_kinematic_states.get(0) {
+            let last_pos = last_state.pos;
+            inferred_speed = magnitude(self.player.pos - last_pos);
         }
         let actual_speed = magnitude(self.player.vel);
         actual_speed >= self.player.speed_of_blue || inferred_speed >= self.player.speed_of_blue
@@ -1065,14 +1066,15 @@ impl Game {
     fn generate_speed_particles(&mut self) {
         let now = self.time_in_ticks();
         let then = now - self.get_time_factor();
-        if let Some(&last_pos) = self.player.recent_poses.get(0) {
+        if let Some(&last_state) = self.player.recent_kinematic_states.get(0) {
+            let last_pos = last_state.pos;
             match &self.player.speed_line_behavior {
                 SpeedLineType::StillLine => {
                     self.place_static_speed_lines(last_pos, self.player.pos)
                 }
                 SpeedLineType::PerpendicularLines => self.place_perpendicular_moving_speed_lines(
-                    last_pos,
-                    self.player.pos,
+                    last_state,
+                    self.player.kinematic_state(),
                     then,
                     now,
                 ),
@@ -1122,23 +1124,26 @@ impl Game {
 
     fn place_perpendicular_moving_speed_lines(
         &mut self,
-        start_pos: Point<f32>,
-        end_pos: Point<f32>,
+        start_state: KinematicState,
+        end_state: KinematicState,
         start_time: f32,
         end_time: f32,
     ) {
         let particle_speed = DEFAULT_PARTICLE_SPEED;
         // Note: Due to non-square nature of the grid, player velocity may not be parallel to displacement
-        let particle_vel = direction(self.player.vel) * particle_speed;
         let particles_per_block = 2.0;
         let time_frequency_of_speed_particles = particles_per_block * magnitude(self.player.vel);
-        for pos in time_synchronized_points_on_line(
-            start_pos,
-            end_pos,
+        let time_period_of_speed_particles = 1.0 / time_frequency_of_speed_particles;
+        for t in time_synchronized_interpolation_fractions(
             start_time,
             end_time,
-            1.0 / time_frequency_of_speed_particles,
+            time_period_of_speed_particles,
         ) {
+            // todo, better than lerp.  parabolic arcs for balistic trajectories
+            let interpolated_kinematic_state = lerp(start_state, end_state, t);
+
+            let pos = interpolated_kinematic_state.pos;
+            let particle_vel = direction(interpolated_kinematic_state.vel) * particle_speed;
             self.place_particle_with_velocity_and_lifetime(
                 pos,
                 rotated_degrees(particle_vel, -90.0),
@@ -1467,7 +1472,7 @@ impl Game {
         }
 
         let step_taken = self.player.pos - start_kinematic_state.pos;
-        self.save_recent_player_pose(start_kinematic_state.pos);
+        self.save_recent_player_kinematic_state(start_kinematic_state);
 
         if collision_occurred {
             self.player.moved_normal_to_collision_since_collision = false;
@@ -1521,10 +1526,11 @@ impl Game {
             )) != 0.0
     }
 
-    fn save_recent_player_pose(&mut self, pos: Point<f32>) {
-        self.player.recent_poses.push_front(pos);
-        while self.player.recent_poses.len() > NUM_SAVED_PLAYER_POSES as usize {
-            self.player.recent_poses.pop_back();
+    fn save_recent_player_kinematic_state(&mut self, state: KinematicState) {
+        self.player.recent_kinematic_states.push_front(state);
+        while self.player.recent_kinematic_states.len() > NUM_SAVED_PLAYER_KINEMATIC_STATES as usize
+        {
+            self.player.recent_kinematic_states.pop_back();
         }
     }
 
@@ -3561,14 +3567,14 @@ mod tests {
     #[timeout(100)]
     fn test_player_recent_poses_starts_empty() {
         let game = set_up_player_on_platform();
-        assert!(game.player.recent_poses.is_empty());
+        assert!(game.player.recent_kinematic_states.is_empty());
     }
 
     #[test]
     #[timeout(100)]
-    fn test_player_recent_poses_are_saved() {
+    fn test_player_recent_kinematic_states_are_saved() {
         let mut game = set_up_player_on_platform();
-        let p0 = game.player.pos;
+        let k0 = game.player.kinematic_state();
         let p1 = p(5.0, 2.0);
         let p2 = p(6.7, 3.4);
         game.tick_physics();
@@ -3577,10 +3583,10 @@ mod tests {
         game.player.pos = p2;
         game.tick_physics();
 
-        assert!(game.player.recent_poses.len() == 3);
-        assert!(game.player.recent_poses.get(0).unwrap() == &p2);
-        assert!(game.player.recent_poses.get(1).unwrap() == &p1);
-        assert!(game.player.recent_poses.get(2).unwrap() == &p0);
+        assert!(game.player.recent_kinematic_states.len() == 3);
+        assert!(game.player.recent_kinematic_states.get(0).unwrap().pos == p2);
+        assert!(game.player.recent_kinematic_states.get(1).unwrap().pos == p1);
+        assert!(game.player.recent_kinematic_states.get(2).unwrap() == &k0);
     }
 
     #[test]
@@ -5098,5 +5104,19 @@ mod tests {
         assert!(game.player_is_grabbing_wall());
         assert!(game.player.vel.y() == 0.0);
         assert!(game.player.accel == zero_f());
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_boost_particles_interpolate_starting_velocities() {
+        let mut game = set_up_just_player();
+        game.player.desired_direction = right_i();
+        game.player_dash();
+        game.tick_physics();
+        assert!(game.particles.len() > 5); // approx enough particles for test to be meaningful
+        for i in 2..game.particles.len() {
+            dbg!(game.particles[i].vel);
+            assert!(game.particles[i].vel != game.particles[i - 1].vel);
+            assert!(game.particles[i].vel != game.particles[i - 2].vel);
+        }
     }
 }

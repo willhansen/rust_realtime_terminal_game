@@ -751,18 +751,31 @@ pub fn time_synchronized_points_on_line(
     end_time: f32,
     time_period: f32,
 ) -> Vec<Point<f32>> {
+    let mut output_points = vec![];
+    for time_as_fraction in
+        time_synchronized_interpolation_fractions(start_time, end_time, time_period)
+    {
+        output_points.push(lerp_2d(start_point, end_point, time_as_fraction));
+    }
+    output_points
+}
+
+pub fn time_synchronized_interpolation_fractions(
+    start_time: f32,
+    end_time: f32,
+    time_period: f32,
+) -> Vec<f32> {
     let start_time_in_periods = start_time / time_period;
     let end_time_in_periods = end_time / time_period;
     let first_period_in_range = start_time_in_periods.ceil() as i32;
     // intentionally leave off last period if exactly at end time
     let one_past_last_period_in_range = end_time_in_periods.ceil() as i32;
-    let mut output_points = vec![];
+    let mut output_fractions = vec![];
     for i in first_period_in_range..one_past_last_period_in_range {
         let time = i as f32 * time_period;
-        let time_as_fraction = inverse_lerp(start_time, end_time, time);
-        output_points.push(lerp_2d(start_point, end_point, time_as_fraction));
+        output_fractions.push(inverse_lerp(start_time, end_time, time));
     }
-    output_points
+    output_fractions
 }
 
 // In radians
