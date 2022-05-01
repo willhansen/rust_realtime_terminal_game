@@ -2,11 +2,12 @@ extern crate derive_more;
 extern crate geo;
 extern crate rand;
 
-use crate::RADIUS_OF_EXACTLY_TOUCHING_ZONE;
+use crate::{RADIUS_OF_EXACTLY_TOUCHING_ZONE, VERTICAL_STRETCH_FACTOR};
 use derive_more::{Add, Display, Div, Mul, Sub};
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Line, Point};
+use num::integer::sqrt;
 use num::traits::Pow;
 use num::{clamp, zero};
 use ordered_float::OrderedFloat;
@@ -831,6 +832,19 @@ pub fn calc_jump_height_in_grid_coordinates(
     vertical_stretch_factor: f32,
 ) -> f32 {
     calc_jump_height_in_world_coordinates(jump_vel, grav_accel) / vertical_stretch_factor
+}
+
+pub fn calc_jump_vel_from_height_in_world_coordinates(jump_height: f32, grav_accel: f32) -> f32 {
+    (2.0 * grav_accel.abs() * jump_height).sqrt()
+}
+
+pub fn calc_jump_vel_from_height_in_grid_coordinates(
+    jump_height: f32,
+    grav_accel: f32,
+    stretch_factor: f32,
+) -> f32 {
+    let world_jump_height = jump_height * stretch_factor;
+    calc_jump_vel_from_height_in_world_coordinates(world_jump_height, grav_accel)
 }
 
 pub fn time_to_jump_peak(jump_vel: f32, grav_accel: f32) -> f32 {

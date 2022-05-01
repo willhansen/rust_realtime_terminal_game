@@ -49,7 +49,7 @@ const NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS: f32 = 8.0;
 const DEFAULT_PLAYER_COYOTE_TIME_DURATION_S: f32 = 0.1;
 const DEFAULT_PLAYER_MAX_COYOTE_TIME: f32 = (DEFAULT_PLAYER_COYOTE_TIME_DURATION_S * MAX_FPS) + 1.0;
 
-const DEFAULT_PLAYER_JUMP_DELTA_V: f32 = 1.0;
+const DEFAULT_PLAYER_JUMP_HEIGHT_IN_GRID_COORDINATES: f32 = 3.0;
 
 const VERTICAL_STRETCH_FACTOR: f32 = 2.0; // because the grid is not really square
 
@@ -66,7 +66,7 @@ const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
 const DEFAULT_PLAYER_MIDAIR_MAX_MOVE_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED;
 const DEFAULT_PLAYER_AIR_FRICTION_START_SPEED: f32 = DEFAULT_PLAYER_DASH_SPEED;
 
-const DEFAULT_PARTICLE_LIFETIME_IN_SECONDS: f32 = f32::INFINITY;
+const DEFAULT_PARTICLE_LIFETIME_IN_SECONDS: f32 = 5.0;
 const DEFAULT_PARTICLE_LIFETIME_IN_TICKS: f32 = DEFAULT_PARTICLE_LIFETIME_IN_SECONDS * MAX_FPS;
 const DEFAULT_PARTICLE_SPEED: f32 = 0.1;
 const DEFAULT_PARTICLE_TURN_RADIANS_PER_TICK: f32 = -0.001;
@@ -244,6 +244,11 @@ struct Player {
 
 impl Player {
     fn new() -> Player {
+        let jump_delta_v = calc_jump_vel_from_height_in_grid_coordinates(
+            DEFAULT_PLAYER_JUMP_HEIGHT_IN_GRID_COORDINATES,
+            DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
+            VERTICAL_STRETCH_FACTOR,
+        );
         Player {
             alive: false,
             pos: p(0.0, 0.0),
@@ -256,7 +261,7 @@ impl Player {
             vel: Point::<f32>::new(0.0, 0.0),
             accel: Point::<f32>::new(0.0, 0.0),
             desired_direction: p(0, 0),
-            jump_delta_v: DEFAULT_PLAYER_JUMP_DELTA_V,
+            jump_delta_v: jump_delta_v,
             acceleration_from_gravity: DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
             acceleration_from_floor_traction: DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION,
             acceleration_from_air_traction: DEFAULT_PLAYER_ACCELERATION_FROM_AIR_TRACTION,
@@ -281,6 +286,10 @@ impl Player {
             vel: self.vel,
             accel: self.accel,
         }
+    }
+
+    fn jump_height_in_world_coordinates(&self) -> f32 {
+        calc_jump_height_in_world_coordinates(self.jump_delta_v, self.acceleration_from_gravity)
     }
 }
 
@@ -580,7 +589,8 @@ impl Game {
             self.player
                 .vel
                 .add_assign(floatify(-wall_direction) * self.player.max_run_speed);
-            self.player.desired_direction = -wall_direction;
+            //self.player.desired_direction = -wall_direction;
+            self.player.desired_direction = zero_i();
         }
         self.player.vel.add_assign(p(0.0, self.player.jump_delta_v));
 
@@ -907,29 +917,25 @@ impl Game {
     }
 
     fn jump_bonus_vel_from_compression(&self) -> FPoint {
-        if !self.player.enable_jump_compression_bonus {
+        if !self.player.enable_jump_compression_bonus || !self.player_is_in_compression() {
             return zero_f();
         }
-        if let Some(collision) = &self.player.last_collision {
-            let max_bonus =
-                project_a_onto_b(-collision.collider_velocity, floatify(collision.normal));
-            //-collision.collider_velocity;
-            if self.player_is_in_compression() {
-                return max_bonus;
-            } else {
-                return zero_f();
-            }
-            // should have most jump bonus at full compression, with linear(?) fall-off as compression ends
-            let linear_closeness_to_max_compression = 1.0
-                - inverse_lerp(
-                    DEFAULT_MAX_COMPRESSION,
-                    1.0,
-                    self.get_player_compression_fraction(),
-                );
-            max_bonus * linear_closeness_to_max_compression
-        } else {
-            zero_f()
+        if self.player.last_collision.is_none() {
+            panic!("Player in compression, but has no last collision");
         }
+        let collision = &self.player.last_collision.as_ref().unwrap();
+        let g = self.player.acceleration_from_gravity;
+        let normal_impact_vel =
+            project_a_onto_b(-collision.collider_velocity, floatify(collision.normal));
+        let stored_jump_height_in_world_coordinates =
+            calc_jump_height_in_world_coordinates(magnitude(normal_impact_vel), g);
+        let speed_for_adding_stored_height = calc_jump_vel_from_height_in_world_coordinates(
+            stored_jump_height_in_world_coordinates
+                + self.player.jump_height_in_world_coordinates(),
+            g,
+        );
+        let speed_to_add = speed_for_adding_stored_height - self.player.jump_delta_v;
+        return direction(normal_impact_vel) * speed_to_add;
     }
 
     fn get_player_is_coming_out_of_compression(&self) -> bool {
@@ -1533,9 +1539,12 @@ impl Game {
         } else {
             self.player.acceleration_from_air_traction
         };
-        // wall friction
-        if self.player_is_sliding_down_wall() {
-            total_acceleration.add_assign(down_f() * self.player.acceleration_from_floor_traction);
+        if self.player_is_grabbing_wall() {
+            // wall friction
+            if self.player_is_sliding_down_wall() {
+                total_acceleration
+                    .add_assign(up_f() * self.player.acceleration_from_floor_traction);
+            }
         } else {
             // floor/air traction.  Active horizontal motion
             let player_can_faster_x = self.player.vel.x().abs() < self.player.max_run_speed;
@@ -1558,7 +1567,8 @@ impl Game {
                 );
             }
             let moving_up = self.player.vel.y() > 0.0;
-            if self.player_is_supported() && !moving_up {
+            let on_ground = self.player_is_supported() && !moving_up;
+            if on_ground {
                 // floor friction
                 let fast_enough_for_friction_x =
                     self.player.vel.x().abs() > self.player.ground_friction_start_speed;
@@ -1987,7 +1997,12 @@ mod tests {
         PlayerBlockCollision {
             time_in_ticks: 0.0,
             normal: p(0, 1),
-            collider_velocity: down_f() * DEFAULT_PLAYER_JUMP_DELTA_V,
+            collider_velocity: down_f()
+                * calc_jump_vel_from_height_in_grid_coordinates(
+                    DEFAULT_PLAYER_JUMP_HEIGHT_IN_GRID_COORDINATES,
+                    DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
+                    VERTICAL_STRETCH_FACTOR,
+                ),
             collider_pos: p(5.0, 6.0),
             collided_block_square: p(5, 5),
         }
@@ -2040,12 +2055,10 @@ mod tests {
     fn set_up_player_fully_compressed_from_down_leftwards_impact_on_wall() -> Game {
         let mut game = set_up_player_hanging_on_wall_on_left();
         let mut collision = get_player_block_collision_from_running_into_wall_on_left();
-        collision
-            .collider_velocity
-            .set_y(-DEFAULT_PLAYER_JUMP_DELTA_V);
+        collision.collider_velocity.set_y(-game.player.jump_delta_v);
         collision.time_in_ticks = game.time_in_ticks() - DEFAULT_TICKS_TO_MAX_COMPRESSION;
         game.player.last_collision = Some(collision);
-        game.player.vel = down_f() * DEFAULT_PLAYER_JUMP_DELTA_V;
+        game.player.vel = down_f() * game.player.jump_delta_v;
         game
     }
 
@@ -3069,6 +3082,16 @@ mod tests {
         game.player.vel.set_y(1.0);
         game.player_jump_if_possible();
         assert!(game.player.vel.x() > 0.0);
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_desired_direction_should_be_neutral_after_wall_jump() {
+        let mut game = set_up_player_hanging_on_wall_on_left();
+        assert!(game.player.vel == zero_f());
+        game.player_jump_if_possible();
+        assert!(game.player.vel != zero_f());
+        assert!(game.player.desired_direction == zero_i());
     }
 
     #[test]
@@ -5070,8 +5093,10 @@ mod tests {
     fn test_grab_wall_after_impact_with_wall() {
         let mut game = set_up_player_about_to_hit_wall_on_right_midair();
         game.tick_physics();
-        game.tick_physics();
-        assert!(game.player.vel.y() == 0.0);
         assert!(game.player_is_grabbing_wall());
+        game.tick_physics();
+        assert!(game.player_is_grabbing_wall());
+        assert!(game.player.vel.y() == 0.0);
+        assert!(game.player.accel == zero_f());
     }
 }
