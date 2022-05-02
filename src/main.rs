@@ -18,17 +18,17 @@ use enum_as_inner::EnumAsInner;
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::Point;
 use num::traits::FloatConst;
-use ordered_float::OrderedFloat;
 use std::char;
 use std::cmp::{max, min};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
 use std::io::{stdin, stdout, Write};
-use std::ops::Add;
 use std::sync::mpsc::channel;
 use std::thread;
 use std::time::{Duration, Instant};
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 use termion::event::{Event, Key, MouseButton, MouseEvent};
 use termion::input::{MouseTerminal, TermRead};
 use termion::raw::IntoRawMode;
@@ -100,6 +100,7 @@ enum Block {
     Wall,
     Brick,
     ParticleAmalgam(i32),
+    Turret,
 }
 
 impl Block {
@@ -115,6 +116,7 @@ impl Block {
             Block::Air => Glyph::from_char(' '),
             Block::Brick => Glyph::from_char('▪'),
             Block::Wall => Glyph::from_char('█'),
+            Block::Turret => Glyph::from_char('⧊'), //◘▮⏧⌖
             Block::ParticleAmalgam(num_particles) => {
                 let amalgam_stage = num_particles / DEFAULT_PARTICLES_TO_AMALGAMATION_CHANGE;
                 match amalgam_stage {
@@ -134,13 +136,13 @@ impl Block {
                         bg_color: ColorName::Black,
                     },
                     4 => Glyph {
-                        character: '╳',
-                        fg_color: ColorName::Red,
+                        character: 'x',
+                        fg_color: ColorName::Cyan,
                         bg_color: ColorName::Blue,
                     },
                     _ => Glyph {
-                        character: 'x',
-                        fg_color: ColorName::Red,
+                        character: 'X',
+                        fg_color: ColorName::LightBlue,
                         bg_color: ColorName::Blue,
                     },
                 }
@@ -161,6 +163,12 @@ enum ParticleWallCollisionBehavior {
     PassThrough,
     Vanish,
     Bounce,
+}
+#[derive(EnumIter, PartialEq, Debug, Clone, Copy)]
+enum WallJumpBehavior {
+    SwitchDirection,
+    Stop,
+    KeepDirection,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -212,6 +220,19 @@ enum SpeedLineType {
     PerpendicularLines,
 }
 
+struct Turret {
+    square: IPoint,
+    laser_direction: FPoint,
+}
+impl Turret {
+    fn new() -> Turret {
+        Turret {
+            square: zero_i(),
+            laser_direction: up_f(),
+        }
+    }
+}
+
 struct Player {
     alive: bool,
     pos: Point<f32>,
@@ -240,6 +261,7 @@ struct Player {
     speed_line_lifetime_in_ticks: f32,
     speed_line_behavior: SpeedLineType,
     enable_jump_compression_bonus: bool,
+    wall_jump_behavior: WallJumpBehavior,
 }
 
 impl Player {
@@ -277,6 +299,7 @@ impl Player {
             speed_line_lifetime_in_ticks: DEFAULT_PARTICLE_LIFETIME_IN_TICKS,
             speed_line_behavior: SpeedLineType::PerpendicularLines,
             enable_jump_compression_bonus: ENABLE_JUMP_COMPRESSION_BONUS,
+            wall_jump_behavior: WallJumpBehavior::SwitchDirection,
         }
     }
 
@@ -299,6 +322,7 @@ struct Game {
     output_buffer: Vec<Vec<Glyph>>,    // (x,y), left to right, top to bottom
     output_on_screen: Vec<Vec<Glyph>>, // (x,y), left to right, top to bottom
     particles: Vec<Particle>,
+    turrets: Vec<Turret>,
     terminal_size: (u16, u16),  // (width, height)
     prev_mouse_pos: (i32, i32), // where mouse was last frame (if pressed)
     running: bool,              // set false to quit
@@ -319,6 +343,7 @@ impl Game {
             output_buffer: vec![vec![Glyph::from_char(' '); height as usize]; width as usize],
             output_on_screen: vec![vec![Glyph::from_char('x'); height as usize]; width as usize],
             particles: Vec::<Particle>::new(),
+            turrets: Vec::<Turret>::new(),
             terminal_size: (width, height),
             prev_mouse_pos: (1, 1),
             running: true,
@@ -377,7 +402,7 @@ impl Game {
         return self.grid[square.x() as usize][square.y() as usize];
     }
     fn try_get_block(&self, square: Point<i32>) -> Option<Block> {
-        return if self.in_world(square) {
+        return if self.square_is_in_world(square) {
             Some(self.grid[square.x() as usize][square.y() as usize])
         } else {
             None
@@ -416,7 +441,7 @@ impl Game {
     }
 
     fn place_block(&mut self, pos: Point<i32>, block: Block) {
-        if !self.in_world(pos) {
+        if !self.square_is_in_world(pos) {
             println!("tried placing block out of world: {:?}", pos);
             return;
         }
@@ -519,7 +544,7 @@ impl Game {
     }
 
     fn count_braille_dots_in_square(&self, square: Point<i32>) -> i32 {
-        return if self.in_world(square) {
+        return if self.square_is_in_world(square) {
             Glyph::count_braille_dots(self.get_buffered_glyph(square).character)
         } else {
             0
@@ -548,7 +573,7 @@ impl Game {
             for j in 0..squares_to_place[0].len() {
                 if let Some(new_glyph) = squares_to_place[i][j] {
                     let grid_square = p(left_square_x + i as i32, bottom_square_y + j as i32);
-                    if !self.in_world(grid_square) {
+                    if !self.square_is_in_world(grid_square) {
                         continue;
                     }
                     let grid_glyph =
@@ -581,6 +606,16 @@ impl Game {
         self.player.alive = true;
         self.player.remaining_coyote_time = 0.0;
     }
+
+    fn place_turret(&mut self, square: IPoint) {
+        if !self.square_is_empty(square) {
+            panic!("Tried to place turret in occupied square: {:?}", square);
+        }
+        let mut turret = Turret::new();
+        turret.square = square;
+        self.turrets.push(turret);
+        self.set_block(square, Block::Turret);
+    }
     fn player_jump(&mut self) {
         let compression_bonus = self.jump_bonus_vel_from_compression();
 
@@ -589,8 +624,11 @@ impl Game {
             self.player
                 .vel
                 .add_assign(floatify(-wall_direction) * self.player.max_run_speed);
-            //self.player.desired_direction = -wall_direction;
-            self.player.desired_direction = zero_i();
+            self.player.desired_direction = match self.player.wall_jump_behavior {
+                WallJumpBehavior::SwitchDirection => -wall_direction,
+                WallJumpBehavior::Stop => zero_i(),
+                WallJumpBehavior::KeepDirection => wall_direction,
+            };
         }
         self.player.vel.add_assign(p(0.0, self.player.jump_delta_v));
 
@@ -894,7 +932,7 @@ impl Game {
         let particles_are_in_world: Vec<bool> = self
             .particles
             .iter()
-            .map(|particle| self.in_world(snap_to_grid(particle.pos)))
+            .map(|particle| self.square_is_in_world(snap_to_grid(particle.pos)))
             .collect();
 
         particles_are_in_world
@@ -1009,7 +1047,7 @@ impl Game {
                     let x = grid_pos.x() - 1 + i as i32;
                     let y = grid_pos.y() - 1 + j as i32;
 
-                    if self.in_world(p(x, y)) {
+                    if self.square_is_in_world(p(x, y)) {
                         self.output_buffer[x as usize][y as usize] = glyph;
                     }
                 }
@@ -1461,7 +1499,7 @@ impl Game {
             self.player.vel = end_state.vel;
             self.player.accel = end_state.accel;
 
-            if !self.in_world(snap_to_grid(self.player.pos)) {
+            if !self.square_is_in_world(snap_to_grid(self.player.pos)) {
                 // Player went out of bounds and died
                 self.kill_player();
                 return;
@@ -1721,7 +1759,7 @@ impl Game {
                     + closest_collision_to_start.normal;
                 // TODO: have this account for block expansion from other adjacent blocks?
                 if !point_inside_square(start_pos, normal_square)
-                    && self.in_world(normal_square)
+                    && self.square_is_in_world(normal_square)
                     && self.get_block(normal_square).collides_with_player()
                     && filter(self.get_block(normal_square))
                 {
@@ -1756,7 +1794,7 @@ impl Game {
 
     fn get_block_relative_to_player(&self, rel_pos: Point<i32>) -> Option<Block> {
         let target_pos = snap_to_grid(self.player.pos) + rel_pos;
-        if self.player.alive && self.in_world(target_pos) {
+        if self.player.alive && self.square_is_in_world(target_pos) {
             return Some(self.get_block(target_pos));
         }
         return None;
@@ -1773,11 +1811,14 @@ impl Game {
         }
     }
 
-    fn in_world(&self, pos: Point<i32>) -> bool {
+    fn square_is_in_world(&self, pos: Point<i32>) -> bool {
         pos.x() >= 0
             && pos.x() < self.terminal_size.0 as i32
             && pos.y() >= 0
             && pos.y() < self.terminal_size.1 as i32
+    }
+    fn square_is_empty(&mut self, square: IPoint) -> bool {
+        self.square_is_in_world(square) && matches!(self.get_block(square), Block::Air)
     }
 
     fn player_wants_to_come_to_a_full_stop(&self) -> bool {
@@ -1875,6 +1916,7 @@ fn main() {
 mod tests {
     use super::*;
     use assert2::assert;
+    use std::iter::Map;
 
     fn set_up_game() -> Game {
         Game::new(30, 30)
@@ -2394,6 +2436,12 @@ mod tests {
         return game;
     }
 
+    fn set_up_just_turret_facing_up() -> Game {
+        let mut game = set_up_game();
+        game.place_turret(p(game.width() as i32 / 2, game.height() as i32 / 2));
+        game
+    }
+
     fn be_frictionless(game: &mut Game) {
         game.player.acceleration_from_floor_traction = 0.0;
         game.player.deceleration_from_ground_friction = 0.0;
@@ -2628,11 +2676,11 @@ mod tests {
     #[timeout(100)]
     fn test_in_world_check() {
         let game = Game::new(30, 30);
-        assert!(game.in_world(p(0, 0)));
-        assert!(game.in_world(p(29, 29)));
-        assert!(!game.in_world(p(30, 30)));
-        assert!(!game.in_world(p(10, -1)));
-        assert!(!game.in_world(p(-1, 10)));
+        assert!(game.square_is_in_world(p(0, 0)));
+        assert!(game.square_is_in_world(p(29, 29)));
+        assert!(!game.square_is_in_world(p(30, 30)));
+        assert!(!game.square_is_in_world(p(10, -1)));
+        assert!(!game.square_is_in_world(p(-1, 10)));
     }
 
     #[test]
@@ -3092,12 +3140,21 @@ mod tests {
 
     #[test]
     #[timeout(100)]
-    fn test_desired_direction_should_be_neutral_after_wall_jump() {
-        let mut game = set_up_player_hanging_on_wall_on_left();
-        assert!(game.player.vel == zero_f());
-        game.player_jump_if_possible();
-        assert!(game.player.vel != zero_f());
-        assert!(game.player.desired_direction == zero_i());
+    fn test_wall_jump_behavior_for_desired_direction() {
+        for wall_jump_behavior in WallJumpBehavior::iter() {
+            let mut game = set_up_player_hanging_on_wall_on_left();
+            let initial_wall_direction = left_i();
+            game.player.wall_jump_behavior = wall_jump_behavior;
+            assert!(game.player.vel == zero_f());
+            game.player_jump_if_possible();
+            assert!(game.player.vel != zero_f());
+            let correct_final_desired_direction = match wall_jump_behavior {
+                WallJumpBehavior::SwitchDirection => -initial_wall_direction,
+                WallJumpBehavior::Stop => zero_i(),
+                WallJumpBehavior::KeepDirection => initial_wall_direction,
+            };
+            assert!(game.player.desired_direction == correct_final_desired_direction);
+        }
     }
 
     #[test]
@@ -5118,5 +5175,40 @@ mod tests {
             assert!(game.particles[i].vel != game.particles[i - 1].vel);
             assert!(game.particles[i].vel != game.particles[i - 2].vel);
         }
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_turret_laser_direction_starts_non_zero() {
+        let turret = Turret::new();
+        assert!(turret.laser_direction != zero_f());
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_place_turret() {
+        let mut game = set_up_game();
+        let turret_square = p(5, 5);
+        game.place_turret(turret_square);
+        assert!(game.turrets.len() == 1);
+        assert!(game.turrets[0].square == turret_square);
+        assert!(game.turrets[0].laser_direction == up_f());
+        assert!(game.get_block(turret_square) == Block::Turret);
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_turret_is_drawn() {
+        let mut game = set_up_just_turret_facing_up();
+        game.update_output_buffer();
+        assert!(game.get_buffered_glyph(game.turrets[0].square) == &Block::Turret.glyph());
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_turret_laser_is_visible_red_braille() {
+        let mut game = set_up_just_turret_facing_up();
+        game.update_output_buffer();
+        let square_that_should_be_braille = game.turrets[0].square + up_i();
+        let glyph = game.get_buffered_glyph(square_that_should_be_braille);
+        assert!(Glyph::is_braille(glyph.character));
+        assert!(glyph.fg_color == ColorName::Red);
     }
 }

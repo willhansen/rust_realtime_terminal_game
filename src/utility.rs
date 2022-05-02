@@ -2,18 +2,16 @@ extern crate derive_more;
 extern crate geo;
 extern crate rand;
 
-use crate::{RADIUS_OF_EXACTLY_TOUCHING_ZONE, VERTICAL_STRETCH_FACTOR};
-use derive_more::{Add, Display, Div, Mul, Sub};
+use crate::RADIUS_OF_EXACTLY_TOUCHING_ZONE;
+use derive_more::{Add, Div, Mul, Sub};
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Line, Point};
-use num::integer::sqrt;
+use num::clamp;
 use num::traits::Pow;
-use num::{clamp, zero};
 use ordered_float::OrderedFloat;
 use rand::Rng;
 use std::f32::consts::TAU;
-use std::ops::Index;
 
 pub type FPoint = Point<f32>;
 pub type IPoint = Point<i32>;

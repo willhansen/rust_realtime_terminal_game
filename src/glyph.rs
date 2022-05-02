@@ -30,12 +30,13 @@ pub fn quarter_block_by_offset(half_steps: (i32, i32)) -> char {
 #[derive(Clone, PartialEq, Eq, Debug, Copy)]
 pub enum ColorName {
     Red,
-    #[allow(dead_code)]
     Green,
     Blue,
+    LightBlue,
+    Cyan,
+    LightCyan,
     Black,
     White,
-    #[allow(dead_code)]
     Reset,
 }
 
@@ -89,6 +90,9 @@ impl Glyph {
             ColorName::Red => color::Fg(color::Red).to_string(),
             ColorName::Green => color::Fg(color::Green).to_string(),
             ColorName::Blue => color::Fg(color::Blue).to_string(),
+            ColorName::LightBlue => color::Fg(color::LightBlue).to_string(),
+            ColorName::Cyan => color::Fg(color::Cyan).to_string(),
+            ColorName::LightCyan => color::Fg(color::LightCyan).to_string(),
             ColorName::White => color::Fg(color::White).to_string(),
             ColorName::Black => color::Fg(color::Black).to_string(),
             ColorName::Reset => color::Fg(color::Reset).to_string(),
@@ -100,6 +104,9 @@ impl Glyph {
             ColorName::Red => color::Bg(color::Red).to_string(),
             ColorName::Green => color::Bg(color::Green).to_string(),
             ColorName::Blue => color::Bg(color::Blue).to_string(),
+            ColorName::LightBlue => color::Bg(color::LightBlue).to_string(),
+            ColorName::Cyan => color::Bg(color::Cyan).to_string(),
+            ColorName::LightCyan => color::Bg(color::LightCyan).to_string(),
             ColorName::White => color::Bg(color::White).to_string(),
             ColorName::Black => color::Bg(color::Black).to_string(),
             ColorName::Reset => color::Bg(color::Reset).to_string(),
