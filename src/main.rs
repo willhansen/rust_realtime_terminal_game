@@ -217,6 +217,7 @@ enum SpeedLineType {
     PerpendicularLines,
 }
 
+#[derive(PartialEq, Debug, Copy, Clone)]
 struct Turret {
     square: IPoint,
     laser_direction: FPoint,
@@ -714,6 +715,7 @@ impl Game {
             }
         }
         self.apply_particle_physics(dt_in_ticks);
+        self.apply_turret_physics(dt_in_ticks);
     }
 
     fn apply_physics_in_steps(&mut self, time_span_in_ticks: f32, time_step_in_ticks: f32) {
@@ -752,24 +754,23 @@ impl Game {
     }
 
     fn apply_turret_physics(&mut self, dt_in_ticks: f32) {
-        let mut laser_firing_results_by_turret_index = HashMap::new();
-        self.turrets.iter().enumerate().for_each(|(i, turret)| {
-            laser_firing_results_by_turret_index.insert(i, self.fire_turret_laser(turret));
-        });
-
-        for (turret_index, laser_result) in laser_firing_results_by_turret_index {
-            self.turrets
-                .get_mut(turret_index)
-                .unwrap()
-                .laser_firing_result = Some(laser_result);
+        for turret_index in 0..self.turrets.len() {
+            let mut updated_turret = self.turrets[turret_index].clone();
+            let rotation_speed_degrees_per_tick = 1.0;
+            let rotation_degrees_this_tick = rotation_speed_degrees_per_tick * dt_in_ticks;
+            updated_turret.laser_direction =
+                rotated_degrees(updated_turret.laser_direction, rotation_degrees_this_tick);
+            updated_turret.laser_firing_result = Some(self.fire_turret_laser(&updated_turret));
+            self.turrets[turret_index] = updated_turret;
         }
     }
 
     fn fire_turret_laser(&self, turret: &Turret) -> SquarecastResult {
         let turret_pos = floatify(turret.square);
+        let turret_range = 50.0;
         self.linecast_walls_only(
             turret_pos,
-            turret_pos + direction(turret.laser_direction) * 5.0,
+            turret_pos + direction(turret.laser_direction) * turret_range,
         )
     }
 
@@ -5254,13 +5255,29 @@ mod tests {
     }
     #[test]
     #[timeout(100)]
+    fn test_turret_fires_laser() {
+        let mut game = set_up_just_turret_facing_up();
+        game.tick_physics();
+        assert!(game.turrets[0].laser_firing_result.is_some());
+    }
+    #[test]
+    #[timeout(100)]
     fn test_turret_laser_is_visible_red_braille() {
         let mut game = set_up_just_turret_facing_up();
+        game.tick_physics();
         game.update_output_buffer();
         let square_that_should_be_braille = game.turrets[0].square + up_i();
         let glyph = game.get_buffered_glyph(square_that_should_be_braille);
-        game.print_output_buffer();
         assert!(Glyph::is_braille(glyph.character));
         assert!(glyph.fg_color == ColorName::Red);
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_turret_lasers_move() {
+        let mut game = set_up_just_turret_facing_up();
+        let start_laser_dir = game.turrets[0].laser_direction;
+        game.tick_physics();
+        let end_laser_dir = game.turrets[0].laser_direction;
+        assert!(start_laser_dir != end_laser_dir);
     }
 }
