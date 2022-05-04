@@ -67,11 +67,18 @@ pub fn zero_i() -> IPoint {
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
-pub struct SquarecastCollision {
-    pub unrounded_collider_pos: Point<f32>,
-    pub collider_pos: Point<f32>,
-    pub normal: Point<i32>,
-    pub collided_block_square: Point<i32>,
+pub struct SquarecastResult {
+    pub start_pos: FPoint,
+    pub unrounded_collider_pos: FPoint,
+    pub collider_pos: FPoint,
+    pub collision_normal: Option<IPoint>,
+    pub collided_block_square: Option<IPoint>,
+}
+
+impl SquarecastResult {
+    pub fn hit_something(&self) -> bool {
+        self.collided_block_square.is_some()
+    }
 }
 
 // TODO: use
@@ -92,7 +99,7 @@ pub fn single_block_squarecast(
     end_point: Point<f32>,
     grid_square_center: Point<i32>,
     moving_square_side_length: f32,
-) -> Option<SquarecastCollision> {
+) -> SquarecastResult {
     single_block_squarecast_with_edge_extensions(
         start_point,
         end_point,
@@ -125,7 +132,7 @@ pub fn single_block_linecast_with_filled_cracks(
     end_point: Point<f32>,
     grid_square_center: Point<i32>,
     adjacent_squares_occupied: AdjacentOccupancyMask,
-) -> Option<SquarecastCollision> {
+) -> SquarecastResult {
     single_block_squarecast_with_edge_extensions(
         start_point,
         end_point,
@@ -141,7 +148,14 @@ pub fn single_block_squarecast_with_edge_extensions(
     grid_square_center: Point<i32>,
     moving_square_side_length: f32,
     adjacent_squares_occupied: AdjacentOccupancyMask,
-) -> Option<SquarecastCollision> {
+) -> SquarecastResult {
+    let default_result = SquarecastResult {
+        start_pos: start_point,
+        unrounded_collider_pos: end_point,
+        collider_pos: end_point,
+        collision_normal: None,
+        collided_block_square: None,
+    };
     // formulates the problem as a point crossing the boundary of an r=1 square
     let movement_line = geo::Line::new(start_point, end_point);
     //println!("movement_line: {:?}", movement_line);
@@ -180,7 +194,7 @@ pub fn single_block_squarecast_with_edge_extensions(
         }
     }
     if candidate_edge_collisions.is_empty() {
-        return None;
+        return default_result;
     }
 
     // four intersections with extended walls of stationary square
@@ -200,12 +214,13 @@ pub fn single_block_squarecast_with_edge_extensions(
         adjacent_squares_occupied,
     );
 
-    Some(SquarecastCollision {
+    SquarecastResult {
+        start_pos: start_point,
         unrounded_collider_pos: true_collision_point,
         collider_pos: rounded_collision_point,
-        normal: collision_normal,
-        collided_block_square: grid_square_center,
-    })
+        collision_normal: Some(collision_normal),
+        collided_block_square: Some(grid_square_center),
+    }
 }
 
 pub fn get_counter_clockwise_collision_edges_with_known_adjacency(
@@ -318,7 +333,7 @@ pub fn single_block_linecast(
     start_point: Point<f32>,
     end_point: Point<f32>,
     grid_square_center: Point<i32>,
-) -> Option<SquarecastCollision> {
+) -> SquarecastResult {
     single_block_squarecast(start_point, end_point, grid_square_center, 0.0)
 }
 
@@ -326,7 +341,7 @@ pub fn single_block_unit_squarecast(
     start_point: Point<f32>,
     end_point: Point<f32>,
     grid_square_center: Point<i32>,
-) -> Option<SquarecastCollision> {
+) -> SquarecastResult {
     single_block_squarecast(start_point, end_point, grid_square_center, 1.0)
 }
 
@@ -1082,12 +1097,12 @@ mod tests {
         let wall = p(2, 0);
         let result = single_block_unit_squarecast(start, end, wall);
 
-        assert!(result != None);
+        assert!(result.hit_something());
         assert!(points_nearly_equal(
-            result.unwrap().collider_pos,
+            result.collider_pos,
             floatify(wall - p(1, 0))
         ));
-        assert!(result.unwrap().normal == p(-1, 0));
+        assert!(result.collision_normal.unwrap() == p(-1, 0));
     }
 
     #[test]
@@ -1204,9 +1219,7 @@ mod tests {
         let end_point = start_point + p(3.0, 0.0);
         let block_center = p(3, 0);
         assert!(points_nearly_equal(
-            single_block_unit_squarecast(start_point, end_point, block_center)
-                .unwrap()
-                .collider_pos,
+            single_block_unit_squarecast(start_point, end_point, block_center).collider_pos,
             p(2.0, 0.0)
         ));
     }
@@ -1217,9 +1230,7 @@ mod tests {
         let end_point = start_point + p(0.0, 5.0);
         let block_center = p(0, 5);
         assert!(points_nearly_equal(
-            single_block_unit_squarecast(start_point, end_point, block_center)
-                .unwrap()
-                .collider_pos,
+            single_block_unit_squarecast(start_point, end_point, block_center).collider_pos,
             p(start_point.x(), 4.0)
         ));
     }
@@ -1230,9 +1241,7 @@ mod tests {
         let end_point = start_point + p(3.0, 3.0);
         let block_center = p(7, 1);
         assert!(points_nearly_equal(
-            single_block_unit_squarecast(start_point, end_point, block_center)
-                .unwrap()
-                .collider_pos,
+            single_block_unit_squarecast(start_point, end_point, block_center).collider_pos,
             p(6.0, 1.0)
         ));
     }
@@ -1242,7 +1251,9 @@ mod tests {
         let start_point = p(0.0, 1.0);
         let end_point = start_point + p(10.0, 0.0);
         let block_center = p(4, 0);
-        assert!(single_block_unit_squarecast(start_point, end_point, block_center).is_none());
+        assert!(
+            !single_block_unit_squarecast(start_point, end_point, block_center).hit_something()
+        );
     }
 
     #[test]
@@ -1250,7 +1261,9 @@ mod tests {
         let start_point = p(0.0, 0.0);
         let end_point = start_point + right_f() * 10.0;
         let block_center = p(-1, 0);
-        assert!(single_block_unit_squarecast(start_point, end_point, block_center).is_none());
+        assert!(
+            !single_block_unit_squarecast(start_point, end_point, block_center).hit_something()
+        );
     }
 
     #[test]
@@ -1258,14 +1271,14 @@ mod tests {
         let start_point = p(0.0, 0.5);
         let end_point = start_point + p(10.0, 0.0);
         let block_center = p(4, 0);
-        assert!(single_block_linecast(start_point, end_point, block_center).is_none());
+        assert!(!single_block_linecast(start_point, end_point, block_center).hit_something());
     }
     #[test]
     fn test_single_block_linecast__exactly_on_bottom_edge() {
         let start_point = p(0.0, -0.5);
         let end_point = start_point + p(10.0, 0.0);
         let block_center = p(4, 0);
-        assert!(single_block_linecast(start_point, end_point, block_center).is_none());
+        assert!(!single_block_linecast(start_point, end_point, block_center).hit_something());
     }
 
     #[test]
@@ -1273,7 +1286,7 @@ mod tests {
         let block_center = p(0, 0);
         let start_point = p(0.5, 0.0);
         let end_point = start_point + right_f() * 10.0;
-        assert!(single_block_linecast(start_point, end_point, block_center).is_none());
+        assert!(!single_block_linecast(start_point, end_point, block_center).hit_something());
     }
 
     #[test]
@@ -1803,10 +1816,9 @@ mod tests {
             end_point,
             grid_square_center,
             adjacent_squares_occupied,
-        )
-        .unwrap();
-        assert!(collision.normal.x() != 0);
-        assert!(collision.normal.y() == 0);
+        );
+        assert!(collision.collision_normal.unwrap().x() != 0);
+        assert!(collision.collision_normal.unwrap().y() == 0);
     }
     #[test]
     fn test_single_block_squarecast_filled_cracks__do_not_expand_corner_when_only_surrounded_orthogonally(
@@ -1829,7 +1841,7 @@ mod tests {
             adjacent_squares_occupied,
         );
         dbg!(start_point, end_point, &maybe_collision);
-        assert!(maybe_collision.is_none());
+        assert!(!maybe_collision.hit_something());
     }
 
     #[test]

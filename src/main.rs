@@ -205,9 +205,7 @@ struct PlayerBlockCollision {
     time_in_ticks: f32,
     normal: Point<i32>,
     collider_velocity: Point<f32>,
-    #[allow(dead_code)]
     collider_pos: Point<f32>,
-    #[allow(dead_code)]
     collided_block_square: Point<i32>,
 }
 
@@ -215,7 +213,6 @@ struct PlayerBlockCollision {
 enum SpeedLineType {
     StillLine,
     BurstChain,
-    #[allow(dead_code)]
     BurstOnDash,
     PerpendicularLines,
 }
@@ -223,12 +220,15 @@ enum SpeedLineType {
 struct Turret {
     square: IPoint,
     laser_direction: FPoint,
+    laser_firing_result: Option<SquarecastResult>,
 }
+
 impl Turret {
     fn new() -> Turret {
         Turret {
             square: zero_i(),
             laser_direction: up_f(),
+            laser_firing_result: None,
         }
     }
 }
@@ -747,6 +747,31 @@ impl Game {
         self.time_from_start_in_ticks += dt;
         self.apply_physics(dt);
     }
+    fn tick_turrets(&mut self) {
+        self.apply_turret_physics(self.get_time_factor());
+    }
+
+    fn apply_turret_physics(&mut self, dt_in_ticks: f32) {
+        let mut laser_firing_results_by_turret_index = HashMap::new();
+        self.turrets.iter().enumerate().for_each(|(i, turret)| {
+            laser_firing_results_by_turret_index.insert(i, self.fire_turret_laser(turret));
+        });
+
+        for (turret_index, laser_result) in laser_firing_results_by_turret_index {
+            self.turrets
+                .get_mut(turret_index)
+                .unwrap()
+                .laser_firing_result = Some(laser_result);
+        }
+    }
+
+    fn fire_turret_laser(&self, turret: &Turret) -> SquarecastResult {
+        let turret_pos = floatify(turret.square);
+        self.linecast_walls_only(
+            turret_pos,
+            turret_pos + direction(turret.laser_direction) * 5.0,
+        )
+    }
 
     fn tick_particles(&mut self) {
         self.apply_particle_physics(self.get_time_factor());
@@ -875,14 +900,15 @@ impl Game {
 
             if particle.wall_collision_behavior != ParticleWallCollisionBehavior::PassThrough {
                 while magnitude(step) > 0.00001 {
-                    if let Some(collision) = self.linecast_walls_only(start_pos, end_pos) {
+                    let collision = self.linecast_walls_only(start_pos, end_pos);
+                    if collision.hit_something() {
                         if particle.wall_collision_behavior == ParticleWallCollisionBehavior::Bounce
                         {
                             let new_start = collision.collider_pos;
                             let step_taken = new_start - start_pos;
                             step.add_assign(-step_taken);
                             let vel = self.particles[i].vel;
-                            if collision.normal.x() != 0 {
+                            if collision.collision_normal.unwrap().x() != 0 {
                                 step.set_x(-step.x());
                                 self.particles[i].vel.set_x(-vel.x());
                             } else {
@@ -1030,6 +1056,7 @@ impl Game {
     fn update_output_buffer(&mut self) {
         self.fill_output_buffer_with_black();
         self.draw_particles();
+        self.draw_turrets();
         self.draw_non_air_blocks();
 
         if self.player.alive {
@@ -1084,6 +1111,22 @@ impl Game {
                 }
             }
         }
+    }
+    fn draw_turrets(&mut self) {
+        //self.turrets.iter().for_each(|turret| {
+        for i in 0..self.turrets.len() {
+            let turret = &self.turrets[i];
+            if let Some(laser_beam) = turret.laser_firing_result {
+                self.draw_laser(laser_beam);
+            }
+        }
+    }
+    fn draw_laser(&mut self, laser_beam: SquarecastResult) {
+        self.draw_visual_braille_line(
+            laser_beam.start_pos,
+            laser_beam.collider_pos,
+            ColorName::Red,
+        );
     }
 
     fn draw_particles(&mut self) {
@@ -1432,7 +1475,8 @@ impl Game {
 
             let mut end_state = target_state;
 
-            if let Some(collision) = maybe_collision {
+            if maybe_collision.hit_something() {
+                let collision = maybe_collision;
                 collision_occurred = true;
                 collisions.push(collision.clone());
 
@@ -1463,16 +1507,16 @@ impl Game {
 
                 self.player.last_collision = Some(PlayerBlockCollision {
                     time_in_ticks: self.time_in_ticks() - remaining_time,
-                    normal: collision.normal,
+                    normal: collision.collision_normal.unwrap(),
                     collider_velocity: end_state.vel,
                     collider_pos: collision.collider_pos,
-                    collided_block_square: collision.collided_block_square,
+                    collided_block_square: collision.collided_block_square.unwrap(),
                 });
 
-                if collision.normal.x() == 0 {
+                if collision.collision_normal.unwrap().x() == 0 {
                     end_state.vel.set_y(0.0);
                     end_state.accel.set_y(0.0);
-                } else if collision.normal.y() == 0 {
+                } else if collision.collision_normal.unwrap().y() == 0 {
                     end_state.vel.set_x(0.0);
                     end_state.accel.set_x(0.0);
                 } else {
@@ -1535,7 +1579,7 @@ impl Game {
 
     fn deflect_off_collision_plane(
         &mut self,
-        collision: SquarecastCollision,
+        collision: SquarecastResult,
         move_start: FPoint,
         relative_target: FPoint,
         vel: FPoint,
@@ -1544,10 +1588,10 @@ impl Game {
 
         let mut new_relative_target = relative_target - step_taken_to_this_collision;
         let mut new_vel = vel;
-        if collision.normal.x() != 0 {
+        if collision.collision_normal.unwrap().x() != 0 {
             new_vel.set_x(0.0);
             new_relative_target = project_a_onto_b(relative_target, up_f());
-        } else if collision.normal.y() != 0 {
+        } else if collision.collision_normal.unwrap().y() != 0 {
             new_vel.set_y(0.0);
             new_relative_target = project_a_onto_b(relative_target, right_f());
         } else {
@@ -1664,22 +1708,14 @@ impl Game {
     // tries to draw a line in air
     // returns None if out of bounds
     // returns the start position if start is not Block::Air
-    fn unit_squarecast(
-        &self,
-        start_pos: Point<f32>,
-        end_pos: Point<f32>,
-    ) -> Option<SquarecastCollision> {
+    fn unit_squarecast(&self, start_pos: Point<f32>, end_pos: Point<f32>) -> SquarecastResult {
         self.squarecast(start_pos, end_pos, 1.0)
     }
 
-    fn linecast(&self, start_pos: Point<f32>, end_pos: Point<f32>) -> Option<SquarecastCollision> {
+    fn linecast(&self, start_pos: Point<f32>, end_pos: Point<f32>) -> SquarecastResult {
         self.squarecast(start_pos, end_pos, 0.0)
     }
-    fn linecast_walls_only(
-        &self,
-        start_pos: Point<f32>,
-        end_pos: Point<f32>,
-    ) -> Option<SquarecastCollision> {
+    fn linecast_walls_only(&self, start_pos: Point<f32>, end_pos: Point<f32>) -> SquarecastResult {
         self.squarecast_one_block_type(start_pos, end_pos, 0.0, Block::Wall)
     }
 
@@ -1688,9 +1724,9 @@ impl Game {
         start_pos: Point<f32>,
         end_pos: Point<f32>,
         moving_square_side_length: f32,
-        whitelisted_block: Block,
-    ) -> Option<SquarecastCollision> {
-        let filter = |block: Block| -> bool { block == whitelisted_block };
+        hittable_block: Block,
+    ) -> SquarecastResult {
+        let filter = |block: Block| -> bool { block == hittable_block };
         self.squarecast_with_filter(start_pos, end_pos, moving_square_side_length, &filter)
     }
 
@@ -1699,7 +1735,7 @@ impl Game {
         start_pos: Point<f32>,
         end_pos: Point<f32>,
         moving_square_side_length: f32,
-    ) -> Option<SquarecastCollision> {
+    ) -> SquarecastResult {
         self.squarecast_with_filter(
             start_pos,
             end_pos,
@@ -1714,7 +1750,14 @@ impl Game {
         end_pos: Point<f32>,
         moving_square_side_length: f32,
         filter: &dyn Fn(Block) -> bool,
-    ) -> Option<SquarecastCollision> {
+    ) -> SquarecastResult {
+        let default_result = SquarecastResult {
+            start_pos,
+            unrounded_collider_pos: end_pos,
+            collider_pos: end_pos,
+            collision_normal: None,
+            collided_block_square: None,
+        };
         let mut intermediate_player_positions_to_check = lin_space_from_start_2d(
             start_pos,
             end_pos,
@@ -1727,19 +1770,20 @@ impl Game {
                 *point_to_check,
                 moving_square_side_length,
             );
-            let mut collisions = Vec::<SquarecastCollision>::new();
+            let mut collisions = Vec::<SquarecastResult>::new();
             for overlapping_square in &overlapping_squares {
                 if let Some(block) = self.try_get_block(*overlapping_square) {
                     if block.collides_with_player() && filter(block) {
                         let adjacent_occupancy =
                             self.get_occupancy_of_nearby_walls(*overlapping_square);
-                        if let Some(collision) = single_block_squarecast_with_edge_extensions(
+                        let collision = single_block_squarecast_with_edge_extensions(
                             start_pos,
                             end_pos,
                             *overlapping_square,
                             moving_square_side_length,
                             adjacent_occupancy,
-                        ) {
+                        );
+                        if collision.hit_something() {
                             collisions.push(collision);
                         }
                     }
@@ -1755,8 +1799,8 @@ impl Game {
                 //dbg!(&closest_collision_to_start);
 
                 // might have missed one
-                let normal_square = closest_collision_to_start.collided_block_square
-                    + closest_collision_to_start.normal;
+                let normal_square = closest_collision_to_start.collided_block_square.unwrap()
+                    + closest_collision_to_start.collision_normal.unwrap();
                 // TODO: have this account for block expansion from other adjacent blocks?
                 if !point_inside_square(start_pos, normal_square)
                     && self.square_is_in_world(normal_square)
@@ -1764,24 +1808,25 @@ impl Game {
                     && filter(self.get_block(normal_square))
                 {
                     let adjacent_occupancy = self.get_occupancy_of_nearby_walls(normal_square);
-                    if let Some(collision) = single_block_squarecast_with_edge_extensions(
+                    let collision = single_block_squarecast_with_edge_extensions(
                         start_pos,
                         end_pos,
                         normal_square,
                         moving_square_side_length,
                         adjacent_occupancy,
-                    ) {
+                    );
+                    if collision.hit_something() {
                         //dbg!( start_pos, end_pos, normal_square, moving_square_side_length, adjacent_occupancy, &collision );
-                        return Some(collision);
+                        return collision;
                     } else {
                         // Need to disable this panic due to the case of internal corners.  the corner block expands upwards from having a block orthogonal, and the player may collide with that corner block when moving into a corner as a result.  The block normal to that collision is the block the player is standing on.
                         //panic!("No collision with wall block normal to collision");
                     }
                 }
-                return Some(closest_collision_to_start);
+                return closest_collision_to_start;
             }
         }
-        return None;
+        return default_result;
     }
 
     fn player_is_supported(&self) -> bool {
@@ -1801,9 +1846,8 @@ impl Game {
     }
     fn player_exactly_touching_wall_in_direction(&self, direction: Point<i32>) -> bool {
         let direction_f = floatify(direction);
-        if let Some(collision) =
-            self.unit_squarecast(self.player.pos, self.player.pos + direction_f * 0.1)
-        {
+        let collision = self.unit_squarecast(self.player.pos, self.player.pos + direction_f * 0.1);
+        if collision.hit_something() {
             project_a_onto_b(collision.collider_pos, direction_f)
                 == project_a_onto_b(self.player.pos, direction_f)
         } else {
@@ -1855,6 +1899,7 @@ fn init_world(width: u16, height: u16) -> Game {
         p(game.width() as i32 / 6, game.height() as i32 / 6),
         p(game.width() as i32 / 5, game.height() as i32 / 5),
     );
+    game.place_turret(p(2, 2));
 
     game.place_player(
         game.terminal_size.0 as f32 / 2.0,
@@ -2528,7 +2573,7 @@ mod tests {
         let point = p(0.0, 0.0);
         let p_wall = p(5, 5);
 
-        assert!(single_block_unit_squarecast(point, point, p_wall) == None);
+        assert!(!single_block_unit_squarecast(point, point, p_wall).hit_something());
     }
 
     #[test]
@@ -2537,7 +2582,7 @@ mod tests {
         let game = Game::new(30, 30);
         let point = p(0.0, 0.0);
 
-        assert!(game.unit_squarecast(point, point) == None);
+        assert!(!game.unit_squarecast(point, point).hit_something());
     }
 
     #[test]
@@ -2551,12 +2596,12 @@ mod tests {
         let p2 = floatify(p_wall) + p(2.0, 0.0);
         let result = game.unit_squarecast(p1, p2);
 
-        assert!(result != None);
+        assert!(result.hit_something());
         assert!(points_nearly_equal(
-            result.unwrap().collider_pos,
+            result.collider_pos,
             floatify(p_wall) + p(-1.0, 0.0)
         ));
-        assert!(result.unwrap().normal == p(-1, 0));
+        assert!(result.collision_normal.unwrap() == p(-1, 0));
     }
 
     #[test]
@@ -2570,12 +2615,12 @@ mod tests {
         let p2 = floatify(p_wall);
         let result = game.unit_squarecast(p1, p2);
 
-        assert!(result != None);
+        assert!(result.hit_something());
         assert!(points_nearly_equal(
-            result.unwrap().collider_pos,
+            result.collider_pos,
             floatify(p_wall) + p(0.0, -1.0)
         ));
-        assert!(result.unwrap().normal == p(0, -1));
+        assert!(result.collision_normal.unwrap() == p(0, -1));
     }
 
     #[test]
@@ -2589,12 +2634,12 @@ mod tests {
         let p2 = floatify(p_wall) + p(0.0, 0.999);
         let result = game.unit_squarecast(p1, p2);
 
-        assert!(result != None);
+        assert!(result.hit_something());
         assert!(points_nearly_equal(
-            result.unwrap().collider_pos,
+            result.collider_pos,
             floatify(p_wall) + p(0.0, 1.0)
         ));
-        assert!(result.unwrap().normal == p(0, 1));
+        assert!(result.collision_normal.unwrap() == p(0, 1));
     }
 
     #[test]
@@ -2603,13 +2648,13 @@ mod tests {
         let mut game = Game::new(30, 30);
         game.place_line_of_blocks((10, 10), (20, 10), Block::Wall);
 
-        let squarecast_result = game.unit_squarecast(p(15.0, 9.0), p(17.0, 11.0)).unwrap();
+        let squarecast_result = game.unit_squarecast(p(15.0, 9.0), p(17.0, 11.0));
         assert!(points_nearly_equal(
             squarecast_result.collider_pos,
             p(15.0, 9.0)
         ));
-        assert!(squarecast_result.normal == p(0, -1));
-        assert!(squarecast_result.collided_block_square.y() == 10);
+        assert!(squarecast_result.collision_normal.unwrap() == p(0, -1));
+        assert!(squarecast_result.collided_block_square.unwrap().y() == 10);
     }
 
     #[test]
@@ -2619,18 +2664,16 @@ mod tests {
         let wall_square = p(10, 10);
         game.place_wall_block(wall_square);
 
-        let squarecast_result = game
-            .unit_squarecast(
-                floatify(wall_square + p(-5, 0)),
-                floatify(wall_square + p(5, 0)),
-            )
-            .unwrap();
+        let squarecast_result = game.unit_squarecast(
+            floatify(wall_square + p(-5, 0)),
+            floatify(wall_square + p(5, 0)),
+        );
         assert!(points_nearly_equal(
             squarecast_result.collider_pos,
             floatify(wall_square) - p(1.0, 0.0)
         ));
-        assert!(squarecast_result.normal == p(-1, 0));
-        assert!(squarecast_result.collided_block_square.y() == wall_square.y());
+        assert!(squarecast_result.collision_normal.unwrap() == p(-1, 0));
+        assert!(squarecast_result.collided_block_square.unwrap().y() == wall_square.y());
     }
 
     #[test]
@@ -2644,7 +2687,7 @@ mod tests {
             floatify(wall_square + p(0, 1)),
             floatify(wall_square + p(0, 5)),
         );
-        assert!(squarecast_result.is_none());
+        assert!(!squarecast_result.hit_something());
     }
 
     #[test]
@@ -2652,16 +2695,20 @@ mod tests {
     fn test_unit_squarecast_to_far_upper_right() {
         let mut game = Game::new(30, 30);
         game.place_line_of_blocks((10, 10), (20, 10), Block::Wall);
-        let squarecast_result = game.unit_squarecast(p(15.0, 9.0), p(17.0, 110.0)).unwrap();
+        let squarecast_result = game.unit_squarecast(p(15.0, 9.0), p(17.0, 110.0));
         assert!(points_nearly_equal(
             squarecast_result.collider_pos,
             p(15.0, 9.0)
         ));
-        assert!(squarecast_result.normal == p(0, -1));
-        assert!(squarecast_result.collided_block_square.y() == 10);
+        assert!(squarecast_result.collision_normal.unwrap() == p(0, -1));
+        assert!(squarecast_result.collided_block_square.unwrap().y() == 10);
 
-        assert!(game.unit_squarecast(p(1.0, 9.0), p(-17.0, 9.0)) == None);
-        assert!(game.unit_squarecast(p(15.0, 9.0), p(17.0, -11.0)) == None);
+        assert!(!game
+            .unit_squarecast(p(1.0, 9.0), p(-17.0, 9.0))
+            .hit_something());
+        assert!(!game
+            .unit_squarecast(p(15.0, 9.0), p(17.0, -11.0))
+            .hit_something());
     }
 
     #[test]
@@ -2669,7 +2716,9 @@ mod tests {
     fn test_squarecast_skips_player() {
         let game = set_up_player_on_platform();
 
-        assert!(game.unit_squarecast(p(15.0, 11.0), p(15.0, 13.0)) == None);
+        assert!(!game
+            .unit_squarecast(p(15.0, 11.0), p(15.0, 13.0))
+            .hit_something());
     }
 
     #[test]
@@ -4728,12 +4777,13 @@ mod tests {
         let start_pos = p(3.0, 5.3);
         let dir = right_f();
         let collision = game.squarecast(start_pos, start_pos + dir * 500.0, 1.0);
+        assert!(collision.hit_something());
         assert!(points_nearly_equal(
-            collision.unwrap().collider_pos,
+            collision.collider_pos,
             p(4.0, start_pos.y())
         ));
-        assert!(collision.unwrap().collided_block_square == p(5, 5));
-        assert!(collision.unwrap().normal == p(-1, 0));
+        assert!(collision.collided_block_square.unwrap() == p(5, 5));
+        assert!(collision.collision_normal.unwrap() == p(-1, 0));
     }
     #[test]
     #[timeout(100)]
@@ -4742,12 +4792,13 @@ mod tests {
         let start_pos = p(3.0, 5.3);
         let dir = right_f();
         let collision = game.squarecast(start_pos, start_pos + dir * 500.0, 0.0);
+        assert!(collision.hit_something());
         assert!(points_nearly_equal(
-            collision.unwrap().collider_pos,
+            collision.collider_pos,
             p(4.5, start_pos.y())
         ));
-        assert!(collision.unwrap().collided_block_square == p(5, 5));
-        assert!(collision.unwrap().normal == p(-1, 0));
+        assert!(collision.collided_block_square.unwrap() == p(5, 5));
+        assert!(collision.collision_normal.unwrap() == p(-1, 0));
     }
 
     #[test]
@@ -4785,10 +4836,10 @@ mod tests {
             + additional_offset_for_test;
 
         let collision = game.linecast(start_pos, end_pos);
-        assert!(collision.is_some());
-        assert!(nearly_equal(collision.unwrap().collider_pos.x(), 6.5));
-        assert!(collision.unwrap().collided_block_square == p(6, 6));
-        assert!(collision.unwrap().normal == p(1, 0));
+        assert!(collision.hit_something());
+        assert!(nearly_equal(collision.collider_pos.x(), 6.5));
+        assert!(collision.collided_block_square.unwrap() == p(6, 6));
+        assert!(collision.collision_normal.unwrap() == p(1, 0));
     }
     #[test]
     #[timeout(100)]
@@ -4798,9 +4849,9 @@ mod tests {
         let start_pos = floatify(plus_center) + p(-1.0, 1.0);
         let end_pos = floatify(plus_center) + p(0.0, -0.001);
         let collision = game.linecast(start_pos, end_pos);
-        assert!(collision.is_some());
-        assert!(collision.unwrap().collided_block_square == plus_center + p(-1, 0));
-        assert!(collision.unwrap().normal == p(0, 1));
+        assert!(collision.hit_something());
+        assert!(collision.collided_block_square.unwrap() == plus_center + p(-1, 0));
+        assert!(collision.collision_normal.unwrap() == p(0, 1));
     }
     #[test]
     #[timeout(100)]
@@ -4814,8 +4865,8 @@ mod tests {
             floatify(start_square),
             floatify(start_square + right_i() * 5),
         );
-        assert!(collision.is_some());
-        assert!(collision.unwrap().collided_block_square == wall_square);
+        assert!(collision.hit_something());
+        assert!(collision.collided_block_square.unwrap() == wall_square);
     }
 
     #[test]
@@ -4879,7 +4930,7 @@ mod tests {
         game.place_wall_block(p(1, 1));
         let collision = game.linecast(start_pos, end_pos);
         dbg!(&collision);
-        assert!(collision.is_some());
+        assert!(collision.hit_something());
     }
     #[test]
     #[timeout(100)]
@@ -5208,6 +5259,7 @@ mod tests {
         game.update_output_buffer();
         let square_that_should_be_braille = game.turrets[0].square + up_i();
         let glyph = game.get_buffered_glyph(square_that_should_be_braille);
+        game.print_output_buffer();
         assert!(Glyph::is_braille(glyph.character));
         assert!(glyph.fg_color == ColorName::Red);
     }
