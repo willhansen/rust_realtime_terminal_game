@@ -756,7 +756,7 @@ impl Game {
     fn apply_turret_physics(&mut self, dt_in_ticks: f32) {
         for turret_index in 0..self.turrets.len() {
             let mut updated_turret = self.turrets[turret_index].clone();
-            let rotation_speed_degrees_per_tick = 1.0;
+            let rotation_speed_degrees_per_tick = CLOCKWISE * 2.0;
             let rotation_degrees_this_tick = rotation_speed_degrees_per_tick * dt_in_ticks;
             updated_turret.laser_direction =
                 rotated_degrees(updated_turret.laser_direction, rotation_degrees_this_tick);
@@ -768,9 +768,15 @@ impl Game {
     fn fire_turret_laser(&self, turret: &Turret) -> SquarecastResult {
         let turret_pos = floatify(turret.square);
         let turret_range = 50.0;
+        let relative_endpoint_in_world_coordinates =
+            direction(turret.laser_direction) * turret_range;
+        let relative_endpoint_in_grid_coordinates = world_space_to_grid_space(
+            relative_endpoint_in_world_coordinates,
+            VERTICAL_STRETCH_FACTOR,
+        );
         self.linecast_walls_only(
             turret_pos,
-            turret_pos + direction(turret.laser_direction) * turret_range,
+            turret_pos + relative_endpoint_in_grid_coordinates,
         )
     }
 
@@ -1920,13 +1926,14 @@ fn main() {
     let mut game = init_world(width, height);
     // time saver
     //let mut game = Game::new(20, 40);
-    let mut stdout = MouseTerminal::from(stdout().into_raw_mode().unwrap());
+    let mut stdout =
+        termion::cursor::HideCursor::from(MouseTerminal::from(stdout().into_raw_mode().unwrap()));
 
     write!(
         stdout,
         "{}{}q to exit.  c to clear.  Mouse to draw.  Begin!",
         termion::clear::All,
-        termion::cursor::Goto(1, 1)
+        termion::cursor::Goto(1, 1),
     )
     .unwrap();
     stdout.flush().unwrap();

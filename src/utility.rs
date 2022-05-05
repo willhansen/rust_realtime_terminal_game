@@ -18,6 +18,9 @@ pub type IPoint = Point<i32>;
 pub type ILine = Line<i32>;
 pub type FLine = Line<f32>;
 
+pub const CLOCKWISE: f32 = 1.0;
+pub const COUNTER_CLOCKWISE: f32 = -1.0;
+
 pub fn p<T: 'static>(x: T, y: T) -> Point<T>
 where
     T: CoordNum,
