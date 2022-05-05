@@ -120,30 +120,40 @@ impl Block {
             Block::ParticleAmalgam(num_particles) => {
                 let amalgam_stage = num_particles / DEFAULT_PARTICLES_TO_AMALGAMATION_CHANGE;
                 match amalgam_stage {
-                    1 => Glyph {
+                    0 => Glyph {
                         character: '░',
                         fg_color: ColorName::Blue,
                         bg_color: ColorName::Black,
                     },
+                    1 => Glyph {
+                        character: '░',
+                        fg_color: ColorName::LightBlue,
+                        bg_color: ColorName::Black,
+                    },
                     2 => Glyph {
                         character: '▒',
-                        fg_color: ColorName::Blue,
+                        fg_color: ColorName::LightBlue,
                         bg_color: ColorName::Black,
                     },
                     3 => Glyph {
                         character: '▓',
-                        fg_color: ColorName::Blue,
+                        fg_color: ColorName::LightBlue,
                         bg_color: ColorName::Black,
                     },
                     4 => Glyph {
-                        character: 'x',
+                        character: '█',
                         fg_color: ColorName::Cyan,
                         bg_color: ColorName::Blue,
                     },
+                    5 => Glyph {
+                        character: '█',
+                        fg_color: ColorName::LightCyan,
+                        bg_color: ColorName::LightBlue,
+                    },
                     _ => Glyph {
                         character: 'X',
-                        fg_color: ColorName::LightBlue,
-                        bg_color: ColorName::Blue,
+                        fg_color: ColorName::Red,
+                        bg_color: ColorName::Green,
                     },
                 }
             }
@@ -403,6 +413,9 @@ impl Game {
         )
     }
     fn get_block(&self, square: Point<i32>) -> Block {
+        if !self.square_is_in_world(square) {
+            panic!("square {:?} is not in world", square);
+        }
         return self.grid[square.x() as usize][square.y() as usize];
     }
     fn try_get_block(&self, square: Point<i32>) -> Option<Block> {
@@ -1935,6 +1948,10 @@ fn init_world(width: u16, height: u16) -> Game {
     game.place_turret(p(4, 6));
     game.place_turret(p(5, 4));
     game.place_turret(p(6, 2));
+
+    for i in 1..DEFAULT_PARTICLES_IN_AMALGAMATION_FOR_EXPLOSION {
+        game.place_block(p(i, 1), Block::ParticleAmalgam(i));
+    }
 
     game.place_player(
         game.terminal_size.0 as f32 / 2.0,
