@@ -151,7 +151,8 @@ impl Block {
     }
 
     fn subject_to_block_gravity(&self) -> bool {
-        !matches!(self, Block::Air | Block::Wall | Block::ParticleAmalgam(_))
+        // !matches!(self, Block::Air | Block::Wall | Block::ParticleAmalgam(_))
+        false
     }
     fn collides_with_player(&self) -> bool {
         !matches!(self, Block::Air)
@@ -319,6 +320,7 @@ impl Player {
 
 struct Game {
     time_from_start_in_ticks: f32,
+    recent_tick_durations_s: VecDeque<f32>,
     grid: Vec<Vec<Block>>,             // (x,y), left to right, top to bottom
     output_buffer: Vec<Vec<Glyph>>,    // (x,y), left to right, top to bottom
     output_on_screen: Vec<Vec<Glyph>>, // (x,y), left to right, top to bottom
@@ -340,6 +342,7 @@ impl Game {
     fn new(width: u16, height: u16) -> Game {
         Game {
             time_from_start_in_ticks: 0.0,
+            recent_tick_durations_s: VecDeque::<f32>::new(),
             grid: vec![vec![Block::Air; height as usize]; width as usize],
             output_buffer: vec![vec![Glyph::from_char(' '); height as usize]; width as usize],
             output_on_screen: vec![vec![Glyph::from_char('x'); height as usize]; width as usize],
@@ -1353,9 +1356,29 @@ impl Game {
                 }
             }
         }
-        write!(stdout, "{}", termion::cursor::Goto(1, 1),).unwrap();
+        write!(
+            stdout,
+            "{}{}",
+            termion::cursor::Goto(1, 1),
+            self.fps() as i32
+        )
+        .unwrap();
         stdout.flush().unwrap();
         self.output_on_screen = self.output_buffer.clone();
+    }
+
+    fn fps(&self) -> f32 {
+        if self.recent_tick_durations_s.is_empty() {
+            return 0.0;
+        }
+        let avg_s_per_frame = self.recent_tick_durations_s.iter().sum::<f32>()
+            / self.recent_tick_durations_s.len() as f32;
+        let fps = 1.0 / avg_s_per_frame;
+        if fps > 100.0 {
+            0.0
+        } else {
+            fps
+        }
     }
 
     fn apply_gravity_to_blocks(&mut self) {
@@ -1907,6 +1930,11 @@ fn init_world(width: u16, height: u16) -> Game {
         p(game.width() as i32 / 5, game.height() as i32 / 5),
     );
     game.place_turret(p(2, 2));
+    game.place_turret(p(3, 4));
+    game.place_turret(p(4, 2));
+    game.place_turret(p(4, 6));
+    game.place_turret(p(5, 4));
+    game.place_turret(p(6, 2));
 
     game.place_player(
         game.terminal_size.0 as f32 / 2.0,
@@ -1948,8 +1976,19 @@ fn main() {
         }
     });
 
+    let mut prev_start_time = Instant::now();
     while game.running {
         let start_time = Instant::now();
+        let prev_tick_duration_ms = start_time.duration_since(prev_start_time).as_millis();
+        let prev_tick_duration_s: f32 = prev_tick_duration_ms as f32 / 1000.0;
+        prev_start_time = start_time;
+
+        game.recent_tick_durations_s
+            .push_front(prev_tick_duration_s);
+        if game.recent_tick_durations_s.len() > 10 {
+            game.recent_tick_durations_s.pop_back();
+        }
+
         while let Ok(evt) = rx.try_recv() {
             game.handle_event(evt);
         }
