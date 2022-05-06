@@ -233,6 +233,7 @@ struct Turret {
     square: IPoint,
     laser_direction: FPoint,
     laser_firing_result: Option<SquarecastResult>,
+    laser_can_hit_particles: bool,
 }
 
 impl Turret {
@@ -241,6 +242,7 @@ impl Turret {
             square: zero_i(),
             laser_direction: up_f(),
             laser_firing_result: None,
+            laser_can_hit_particles: true,
         }
     }
 }
@@ -790,9 +792,20 @@ impl Game {
             relative_endpoint_in_world_coordinates,
             VERTICAL_STRETCH_FACTOR,
         );
-        self.linecast_walls_only(
+        self.fire_laser(
             turret_pos,
             turret_pos + relative_endpoint_in_grid_coordinates,
+        )
+    }
+
+    fn fire_laser(
+        &self,
+        start_point_in_grid_coordinates: FPoint,
+        end_point_in_grid_coordinates: FPoint,
+    ) -> SquarecastResult {
+        self.linecast_walls_only(
+            start_point_in_grid_coordinates,
+            end_point_in_grid_coordinates,
         )
     }
 
@@ -1770,7 +1783,7 @@ impl Game {
         hittable_block: Block,
     ) -> SquarecastResult {
         let filter = |block: Block| -> bool { block == hittable_block };
-        self.squarecast_with_filter(start_pos, end_pos, moving_square_side_length, &filter)
+        self.squarecast_with_block_filter(start_pos, end_pos, moving_square_side_length, &filter)
     }
 
     fn squarecast(
@@ -1779,7 +1792,7 @@ impl Game {
         end_pos: Point<f32>,
         moving_square_side_length: f32,
     ) -> SquarecastResult {
-        self.squarecast_with_filter(
+        self.squarecast_with_block_filter(
             start_pos,
             end_pos,
             moving_square_side_length,
@@ -1787,20 +1800,14 @@ impl Game {
         )
     }
 
-    fn squarecast_with_filter(
+    fn squarecast_with_block_filter(
         &self,
         start_pos: Point<f32>,
         end_pos: Point<f32>,
         moving_square_side_length: f32,
-        filter: &dyn Fn(Block) -> bool,
+        block_filter: &dyn Fn(Block) -> bool,
     ) -> SquarecastResult {
-        let default_result = SquarecastResult {
-            start_pos,
-            unrounded_collider_pos: end_pos,
-            collider_pos: end_pos,
-            collision_normal: None,
-            collided_block_square: None,
-        };
+        let default_result = SquarecastResult::no_hit_result(start_pos, end_pos);
         let mut intermediate_player_positions_to_check = lin_space_from_start_2d(
             start_pos,
             end_pos,
@@ -1816,7 +1823,7 @@ impl Game {
             let mut collisions = Vec::<SquarecastResult>::new();
             for overlapping_square in &overlapping_squares {
                 if let Some(block) = self.try_get_block(*overlapping_square) {
-                    if block.collides_with_player() && filter(block) {
+                    if block.collides_with_player() && block_filter(block) {
                         let adjacent_occupancy =
                             self.get_occupancy_of_nearby_walls(*overlapping_square);
                         let collision = single_block_squarecast_with_edge_extensions(
@@ -1848,7 +1855,7 @@ impl Game {
                 if !point_inside_square(start_pos, normal_square)
                     && self.square_is_in_world(normal_square)
                     && self.get_block(normal_square).collides_with_player()
-                    && filter(self.get_block(normal_square))
+                    && block_filter(self.get_block(normal_square))
                 {
                     let adjacent_occupancy = self.get_occupancy_of_nearby_walls(normal_square);
                     let collision = single_block_squarecast_with_edge_extensions(
@@ -2230,6 +2237,11 @@ mod tests {
         game.place_particle_with_velocity(particle_start_pos, right_f() * DEFAULT_PARTICLE_SPEED);
         game
     }
+    fn set_up_one_stationary_particle() -> Game {
+        let mut game = set_up_game();
+        game.place_particle(p(15.0, 15.0));
+        game
+    }
 
     fn set_up_player_running_full_speed_to_right_on_platform() -> Game {
         let mut game = set_up_player_on_platform();
@@ -2576,9 +2588,10 @@ mod tests {
         be_in_space(game);
     }
 
+    #[ignore] // block gravity disabled for now
     #[test]
     #[timeout(100)]
-    fn test_placement_and_gravity() {
+    fn test_block_gravity() {
         let mut game = Game::new(30, 30);
         game.place_block(p(10, 10), Block::Wall);
         game.place_block(p(20, 10), Block::Brick);
@@ -5347,5 +5360,23 @@ mod tests {
         game.tick_physics();
         let end_laser_dir = game.turrets[0].laser_direction;
         assert!(start_laser_dir != end_laser_dir);
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_laser_destroy_particle() {
+        let mut game = set_up_one_stationary_particle();
+        let particle_pos = game.particles[0].pos;
+
+        assert!(game.particles.len() == 1);
+
+        let laser_result = game.fire_laser(
+            particle_pos + left_f() * 3.0,
+            particle_pos + right_f() * 3.0,
+        );
+
+        assert!(game.particles.is_empty());
+        assert!(laser_result.hit_something());
+        assert!(laser_result.collided_particle_pos == Some(particle_pos));
     }
 }

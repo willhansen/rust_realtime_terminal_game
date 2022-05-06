@@ -76,11 +76,23 @@ pub struct SquarecastResult {
     pub collider_pos: FPoint,
     pub collision_normal: Option<IPoint>,
     pub collided_block_square: Option<IPoint>,
+    pub collided_particle_pos: Option<FPoint>,
 }
 
 impl SquarecastResult {
     pub fn hit_something(&self) -> bool {
         self.collided_block_square.is_some()
+    }
+
+    pub fn no_hit_result(start_point: FPoint, end_point: FPoint) -> SquarecastResult {
+        SquarecastResult {
+            start_pos: start_point,
+            unrounded_collider_pos: end_point,
+            collider_pos: end_point,
+            collision_normal: None,
+            collided_block_square: None,
+            collided_particle_pos: None,
+        }
     }
 }
 
@@ -152,13 +164,7 @@ pub fn single_block_squarecast_with_edge_extensions(
     moving_square_side_length: f32,
     adjacent_squares_occupied: AdjacentOccupancyMask,
 ) -> SquarecastResult {
-    let default_result = SquarecastResult {
-        start_pos: start_point,
-        unrounded_collider_pos: end_point,
-        collider_pos: end_point,
-        collision_normal: None,
-        collided_block_square: None,
-    };
+    let default_result = SquarecastResult::no_hit_result(start_point, end_point);
     // formulates the problem as a point crossing the boundary of an r=1 square
     let movement_line = geo::Line::new(start_point, end_point);
     //println!("movement_line: {:?}", movement_line);
@@ -223,6 +229,7 @@ pub fn single_block_squarecast_with_edge_extensions(
         collider_pos: rounded_collision_point,
         collision_normal: Some(collision_normal),
         collided_block_square: Some(grid_square_center),
+        collided_particle_pos: None,
     }
 }
 
