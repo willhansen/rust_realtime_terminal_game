@@ -24,7 +24,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
 use std::io::{stdin, stdout, Write};
-use std::sync::mpsc::channel;
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 use strum::IntoEnumIterator;
@@ -1965,33 +1965,38 @@ fn seconds_to_ticks(s: f32) -> f32 {
     s * MAX_FPS
 }
 
-fn main() {
-    let stdin = stdin();
-    let (width, height) = termion::terminal_size().unwrap();
-    let mut game = init_world(width, height);
-    // time saver
-    //let mut game = Game::new(20, 40);
-    let mut stdout =
-        termion::cursor::HideCursor::from(MouseTerminal::from(stdout().into_raw_mode().unwrap()));
+fn setup_panic_hook() {
+    std::panic::set_hook(Box::new(move |panic_info| {
+        write!(stdout(), "{}", termion::screen::ToMainScreen);
+        write!(stdout(), "{:?}", panic_info);
+        //stdout().into_raw_mode().unwrap().suspend_raw_mode();
+        //std::panic::take_hook()(panic_info);
+    }));
+}
 
-    write!(
-        stdout,
-        "{}{}q to exit.  c to clear.  Mouse to draw.  Begin!",
-        termion::clear::All,
-        termion::cursor::Goto(1, 1),
-    )
-    .unwrap();
-    stdout.flush().unwrap();
-
+fn setup_input_thread() -> Receiver<Event> {
     let (tx, rx) = channel();
-
-    // Separate thread for reading input
     thread::spawn(move || {
-        for c in stdin.events() {
+        for c in stdin().events() {
             let evt = c.unwrap();
             tx.send(evt).unwrap();
         }
     });
+    rx
+}
+
+fn main() {
+    let (width, height) = termion::terminal_size().unwrap();
+    let mut game = init_world(width, height);
+
+    let mut terminal = termion::screen::AlternateScreen::from(termion::cursor::HideCursor::from(
+        MouseTerminal::from(stdout().into_raw_mode().unwrap()),
+    ));
+
+    setup_panic_hook();
+
+    // Separate thread for reading input
+    let event_receiver = setup_input_thread();
 
     let mut prev_start_time = Instant::now();
     while game.running {
@@ -2006,12 +2011,12 @@ fn main() {
             game.recent_tick_durations_s.pop_back();
         }
 
-        while let Ok(evt) = rx.try_recv() {
-            game.handle_event(evt);
+        while let Ok(event) = event_receiver.try_recv() {
+            game.handle_event(event);
         }
         game.tick_physics();
         game.update_output_buffer();
-        game.update_screen(&mut stdout);
+        game.update_screen(&mut terminal);
         let tick_duration_so_far_ms = start_time.elapsed().as_millis();
         if tick_duration_so_far_ms < IDEAL_FRAME_DURATION_MS {
             thread::sleep(Duration::from_millis(
