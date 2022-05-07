@@ -1,5 +1,6 @@
-#![allow(non_snake_case)]
+//#![allow(non_snake_case)]
 #![feature(is_sorted)]
+#![allow(warnings)]
 mod glyph;
 mod utility;
 
@@ -164,7 +165,7 @@ impl Block {
         // !matches!(self, Block::Air | Block::Wall | Block::ParticleAmalgam(_))
         false
     }
-    fn collides_with_player(&self) -> bool {
+    fn can_collide_with_player(&self) -> bool {
         !matches!(self, Block::Air)
     }
 }
@@ -208,6 +209,13 @@ impl Particle {
             random_walk_speed: 0.0,
             wall_collision_behavior: ParticleWallCollisionBehavior::Bounce,
         }
+    }
+
+    fn in_floating_square(&self, square_center: FPoint, side_length: f32) -> bool {
+        let diff = self.pos - square_center;
+        let in_x = diff.x().abs() <= side_length / 2.0;
+        let in_y = diff.y().abs() <= side_length / 2.0;
+        in_x && in_y
     }
 }
 
@@ -784,7 +792,7 @@ impl Game {
     }
 
     fn fire_turret_laser(&self, turret: &Turret) -> SquarecastResult {
-        let turret_pos = floatify(turret.square);
+        let laser_start_point = floatify(turret.square) + up_f() * 0.5;
         let turret_range = 50.0;
         let relative_endpoint_in_world_coordinates =
             direction(turret.laser_direction) * turret_range;
@@ -793,8 +801,8 @@ impl Game {
             VERTICAL_STRETCH_FACTOR,
         );
         self.fire_laser(
-            turret_pos,
-            turret_pos + relative_endpoint_in_grid_coordinates,
+            laser_start_point,
+            laser_start_point + relative_endpoint_in_grid_coordinates,
         )
     }
 
@@ -803,7 +811,7 @@ impl Game {
         start_point_in_grid_coordinates: FPoint,
         end_point_in_grid_coordinates: FPoint,
     ) -> SquarecastResult {
-        self.linecast_walls_only(
+        self.linecast_particles_only(
             start_point_in_grid_coordinates,
             end_point_in_grid_coordinates,
         )
@@ -828,8 +836,8 @@ impl Game {
         self.explode_overfull_particle_amalgams();
     }
 
-    fn get_particle_histogram(&self) -> HashMap<Point<i32>, Vec<usize>> {
-        let mut histogram = HashMap::<Point<i32>, Vec<usize>>::new();
+    fn get_particle_location_map(&self) -> ParticleLocationMap {
+        let mut histogram: ParticleLocationMap = HashMap::<Point<i32>, Vec<usize>>::new();
         for i in 0..self.particles.len() {
             let square = snap_to_grid(self.particles[i].pos);
             match histogram.entry(square) {
@@ -846,7 +854,7 @@ impl Game {
 
     fn combine_dense_particles(&mut self) {
         let mut particle_indexes_to_delete = vec![];
-        for (square, indexes_of_particles_in_square) in self.get_particle_histogram() {
+        for (square, indexes_of_particles_in_square) in self.get_particle_location_map() {
             let mut indexes_of_particles_that_did_not_start_here: Vec<usize> =
                 indexes_of_particles_in_square
                     .iter()
@@ -966,7 +974,7 @@ impl Game {
                 }
                 let end_square = snap_to_grid(end_pos);
                 let particle_ended_inside_square = self.get_block(end_square) == Block::Wall
-                    && point_inside_square(end_pos, end_square);
+                    && point_inside_grid_square(end_pos, end_square);
                 if particle_ended_inside_square
                     && particle.wall_collision_behavior == ParticleWallCollisionBehavior::Bounce
                 {
@@ -1765,14 +1773,24 @@ impl Game {
     // returns None if out of bounds
     // returns the start position if start is not Block::Air
     fn unit_squarecast(&self, start_pos: Point<f32>, end_pos: Point<f32>) -> SquarecastResult {
-        self.squarecast(start_pos, end_pos, 1.0)
+        self.squarecast_for_player_collision(start_pos, end_pos, 1.0)
     }
 
     fn linecast(&self, start_pos: Point<f32>, end_pos: Point<f32>) -> SquarecastResult {
-        self.squarecast(start_pos, end_pos, 0.0)
+        self.squarecast_for_player_collision(start_pos, end_pos, 0.0)
     }
     fn linecast_walls_only(&self, start_pos: Point<f32>, end_pos: Point<f32>) -> SquarecastResult {
         self.squarecast_one_block_type(start_pos, end_pos, 0.0, Block::Wall)
+    }
+    fn linecast_particles_only(&self, start_pos: FPoint, end_pos: FPoint) -> SquarecastResult {
+        let LINECAST_PARTICLE_DETECTION_RADIUS = 0.2;
+        // todo: maybe precalculate the location map?
+        self.squarecast_particles_only(
+            start_pos,
+            end_pos,
+            LINECAST_PARTICLE_DETECTION_RADIUS * 2.0,
+            Some(self.get_particle_location_map()),
+        )
     }
 
     fn squarecast_one_block_type(
@@ -1782,11 +1800,28 @@ impl Game {
         moving_square_side_length: f32,
         hittable_block: Block,
     ) -> SquarecastResult {
-        let filter = |block: Block| -> bool { block == hittable_block };
-        self.squarecast_with_block_filter(start_pos, end_pos, moving_square_side_length, &filter)
+        let filter = Box::new(move |block| block == hittable_block);
+        self.squarecast_with_block_filter(start_pos, end_pos, moving_square_side_length, filter)
     }
 
-    fn squarecast(
+    fn squarecast_particles_only(
+        &self,
+        start_pos: Point<f32>,
+        end_pos: Point<f32>,
+        moving_square_side_length: f32,
+        particle_location_map: Option<ParticleLocationMap>,
+    ) -> SquarecastResult {
+        let falsefilter = Box::new(|_| false);
+        self.squarecast(
+            start_pos,
+            end_pos,
+            moving_square_side_length,
+            falsefilter,
+            particle_location_map,
+        )
+    }
+
+    fn squarecast_for_player_collision(
         &self,
         start_pos: Point<f32>,
         end_pos: Point<f32>,
@@ -1796,7 +1831,7 @@ impl Game {
             start_pos,
             end_pos,
             moving_square_side_length,
-            &|block: Block| block.collides_with_player(),
+            Box::new(|block| block.can_collide_with_player()),
         )
     }
 
@@ -1805,7 +1840,24 @@ impl Game {
         start_pos: Point<f32>,
         end_pos: Point<f32>,
         moving_square_side_length: f32,
-        block_filter: &dyn Fn(Block) -> bool,
+        block_filter: BlockFilter,
+    ) -> SquarecastResult {
+        self.squarecast(
+            start_pos,
+            end_pos,
+            moving_square_side_length,
+            block_filter,
+            None,
+        )
+    }
+
+    fn squarecast(
+        &self,
+        start_pos: Point<f32>,
+        end_pos: Point<f32>,
+        moving_square_side_length: f32,
+        block_filter: BlockFilter,
+        particle_location_map: Option<ParticleLocationMap>,
     ) -> SquarecastResult {
         let default_result = SquarecastResult::no_hit_result(start_pos, end_pos);
         let mut intermediate_player_positions_to_check = lin_space_from_start_2d(
@@ -1822,8 +1874,28 @@ impl Game {
             );
             let mut collisions = Vec::<SquarecastResult>::new();
             for overlapping_square in &overlapping_squares {
+                if let Some(unwrapped_particle_map) = particle_location_map.as_ref() {
+                    if unwrapped_particle_map.contains_key(overlapping_square) {
+                        for particle_index in
+                            unwrapped_particle_map.get(overlapping_square).unwrap()
+                        {
+                            if self.particles[*particle_index]
+                                .in_floating_square(*point_to_check, moving_square_side_length)
+                            {
+                                collisions.push(SquarecastResult {
+                                    start_pos,
+                                    unrounded_collider_pos: *point_to_check,
+                                    collider_pos: *point_to_check,
+                                    collision_normal: None,
+                                    collided_block_square: None,
+                                    collided_particle_index: Some(*particle_index),
+                                });
+                            }
+                        }
+                    }
+                }
                 if let Some(block) = self.try_get_block(*overlapping_square) {
-                    if block.collides_with_player() && block_filter(block) {
+                    if block.can_collide_with_player() && block_filter(block) {
                         let adjacent_occupancy =
                             self.get_occupancy_of_nearby_walls(*overlapping_square);
                         let collision = single_block_squarecast_with_edge_extensions(
@@ -1849,28 +1921,30 @@ impl Game {
                 //dbg!(&closest_collision_to_start);
 
                 // might have missed one
-                let normal_square = closest_collision_to_start.collided_block_square.unwrap()
-                    + closest_collision_to_start.collision_normal.unwrap();
-                // TODO: have this account for block expansion from other adjacent blocks?
-                if !point_inside_square(start_pos, normal_square)
-                    && self.square_is_in_world(normal_square)
-                    && self.get_block(normal_square).collides_with_player()
-                    && block_filter(self.get_block(normal_square))
-                {
-                    let adjacent_occupancy = self.get_occupancy_of_nearby_walls(normal_square);
-                    let collision = single_block_squarecast_with_edge_extensions(
-                        start_pos,
-                        end_pos,
-                        normal_square,
-                        moving_square_side_length,
-                        adjacent_occupancy,
-                    );
-                    if collision.hit_something() {
-                        //dbg!( start_pos, end_pos, normal_square, moving_square_side_length, adjacent_occupancy, &collision );
-                        return collision;
-                    } else {
-                        // Need to disable this panic due to the case of internal corners.  the corner block expands upwards from having a block orthogonal, and the player may collide with that corner block when moving into a corner as a result.  The block normal to that collision is the block the player is standing on.
-                        //panic!("No collision with wall block normal to collision");
+                if closest_collision_to_start.hit_block() {
+                    let normal_square = closest_collision_to_start.collided_block_square.unwrap()
+                        + closest_collision_to_start.collision_normal.unwrap();
+                    // TODO: have this account for block expansion from other adjacent blocks?
+                    if !point_inside_grid_square(start_pos, normal_square)
+                        && self.square_is_in_world(normal_square)
+                        && self.get_block(normal_square).can_collide_with_player()
+                        && block_filter(self.get_block(normal_square))
+                    {
+                        let adjacent_occupancy = self.get_occupancy_of_nearby_walls(normal_square);
+                        let collision = single_block_squarecast_with_edge_extensions(
+                            start_pos,
+                            end_pos,
+                            normal_square,
+                            moving_square_side_length,
+                            adjacent_occupancy,
+                        );
+                        if collision.hit_something() {
+                            //dbg!( start_pos, end_pos, normal_square, moving_square_side_length, adjacent_occupancy, &collision );
+                            return collision;
+                        } else {
+                            // Need to disable this panic due to the case of internal corners.  the corner block expands upwards from having a block orthogonal, and the player may collide with that corner block when moving into a corner as a result.  The block normal to that collision is the block the player is standing on.
+                            //panic!("No collision with wall block normal to collision");
+                        }
                     }
                 }
                 return closest_collision_to_start;
@@ -4858,7 +4932,8 @@ mod tests {
         let game = set_up_four_wall_blocks_at_5_and_6();
         let start_pos = p(3.0, 5.3);
         let dir = right_f();
-        let collision = game.squarecast(start_pos, start_pos + dir * 500.0, 1.0);
+        let collision =
+            game.squarecast_for_player_collision(start_pos, start_pos + dir * 500.0, 1.0);
         assert!(collision.hit_something());
         assert!(points_nearly_equal(
             collision.collider_pos,
@@ -4873,7 +4948,8 @@ mod tests {
         let game = set_up_four_wall_blocks_at_5_and_6();
         let start_pos = p(3.0, 5.3);
         let dir = right_f();
-        let collision = game.squarecast(start_pos, start_pos + dir * 500.0, 0.0);
+        let collision =
+            game.squarecast_for_player_collision(start_pos, start_pos + dir * 500.0, 0.0);
         assert!(collision.hit_something());
         assert!(points_nearly_equal(
             collision.collider_pos,
@@ -5354,7 +5430,7 @@ mod tests {
     }
     #[test]
     #[timeout(100)]
-    fn test_turret_lasers_move() {
+    fn test_turret_lasers_rotate() {
         let mut game = set_up_just_turret_facing_up();
         let start_laser_dir = game.turrets[0].laser_direction;
         game.tick_physics();
@@ -5364,7 +5440,7 @@ mod tests {
 
     #[test]
     #[timeout(100)]
-    fn test_laser_destroy_particle() {
+    fn test_laser_hits_particle() {
         let mut game = set_up_one_stationary_particle();
         let particle_pos = game.particles[0].pos;
 
@@ -5375,8 +5451,9 @@ mod tests {
             particle_pos + right_f() * 3.0,
         );
 
-        assert!(game.particles.is_empty());
+        dbg!(laser_result);
+        assert!(game.particles.len() == 1);
         assert!(laser_result.hit_something());
-        assert!(laser_result.collided_particle_pos == Some(particle_pos));
+        assert!(laser_result.collided_particle_index == Some(0));
     }
 }

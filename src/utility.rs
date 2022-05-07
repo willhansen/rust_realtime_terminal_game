@@ -2,7 +2,7 @@ extern crate derive_more;
 extern crate geo;
 extern crate rand;
 
-use crate::RADIUS_OF_EXACTLY_TOUCHING_ZONE;
+use crate::{Block, RADIUS_OF_EXACTLY_TOUCHING_ZONE};
 use derive_more::{Add, Div, Mul, Sub};
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
@@ -11,6 +11,7 @@ use num::clamp;
 use num::traits::Pow;
 use ordered_float::OrderedFloat;
 use rand::Rng;
+use std::collections::HashMap;
 use std::f32::consts::TAU;
 
 pub type FPoint = Point<f32>;
@@ -69,6 +70,14 @@ pub fn zero_i() -> IPoint {
     p(0, 0)
 }
 
+pub struct SquarecastOptions {
+    pub start_pos: FPoint,
+    pub end_pos: FPoint,
+    pub moving_square_side_length: f32,
+    pub block_filter: BlockFilter,
+    pub particle_location_map: Option<ParticleLocationMap>,
+}
+
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub struct SquarecastResult {
     pub start_pos: FPoint,
@@ -76,12 +85,19 @@ pub struct SquarecastResult {
     pub collider_pos: FPoint,
     pub collision_normal: Option<IPoint>,
     pub collided_block_square: Option<IPoint>,
-    pub collided_particle_pos: Option<FPoint>,
+    pub collided_particle_index: Option<usize>,
 }
 
 impl SquarecastResult {
     pub fn hit_something(&self) -> bool {
+        self.collided_block_square.is_some() || self.collided_particle_index.is_some()
+    }
+    pub fn hit_block(&self) -> bool {
         self.collided_block_square.is_some()
+    }
+
+    pub fn distance(&self) -> f32 {
+        magnitude(self.collider_pos - self.start_pos)
     }
 
     pub fn no_hit_result(start_point: FPoint, end_point: FPoint) -> SquarecastResult {
@@ -91,7 +107,7 @@ impl SquarecastResult {
             collider_pos: end_point,
             collision_normal: None,
             collided_block_square: None,
-            collided_particle_pos: None,
+            collided_particle_index: None,
         }
     }
 }
@@ -107,6 +123,10 @@ enum EdgeExtension {
 pub type AdjacentOccupancyMask = [[bool; 3]; 3];
 // TODO: use
 pub type SquareEdgeExtensions = [[EdgeExtension; 3]; 3];
+
+pub type ParticleLocationMap = HashMap<Point<i32>, Vec<usize>>;
+
+pub type BlockFilter = Box<dyn Fn(Block) -> bool>;
 
 #[allow(dead_code)]
 pub fn single_block_squarecast(
@@ -229,7 +249,7 @@ pub fn single_block_squarecast_with_edge_extensions(
         collider_pos: rounded_collision_point,
         collision_normal: Some(collision_normal),
         collided_block_square: Some(grid_square_center),
-        collided_particle_pos: None,
+        collided_particle_index: None,
     }
 }
 
@@ -453,7 +473,7 @@ pub fn offset_from_grid(world_pos: Point<f32>) -> Point<f32> {
     return world_pos - floatify(snap_to_grid(world_pos));
 }
 
-pub fn point_inside_square(point: Point<f32>, square: Point<i32>) -> bool {
+pub fn point_inside_grid_square(point: Point<f32>, square: Point<i32>) -> bool {
     let diff = point - floatify(square);
     let within_x_limit = diff.x().abs() < 0.5 - RADIUS_OF_EXACTLY_TOUCHING_ZONE;
     let within_y_limit = diff.y().abs() < 0.5 - RADIUS_OF_EXACTLY_TOUCHING_ZONE;
@@ -1693,11 +1713,11 @@ mod tests {
 
     #[test]
     fn test_point_inside_square() {
-        assert!(point_inside_square(p(0.49, 0.6), p(0, 0)) == false);
-        assert!(point_inside_square(p(0.49, 0.4), p(0, 0)) == true);
-        assert!(point_inside_square(p(0.49, 0.6), p(0, 1)) == true);
-        assert!(point_inside_square(p(5.0, 5.1), p(5, 5)) == true);
-        assert!(point_inside_square(p(5.0, 8.1), p(5, 5)) == false);
+        assert!(point_inside_grid_square(p(0.49, 0.6), p(0, 0)) == false);
+        assert!(point_inside_grid_square(p(0.49, 0.4), p(0, 0)) == true);
+        assert!(point_inside_grid_square(p(0.49, 0.6), p(0, 1)) == true);
+        assert!(point_inside_grid_square(p(5.0, 5.1), p(5, 5)) == true);
+        assert!(point_inside_grid_square(p(5.0, 8.1), p(5, 5)) == false);
     }
 
     #[test]
@@ -1735,11 +1755,11 @@ mod tests {
 
         assert!(
             point_exactly_touching_unit_square(test_point_touching_square, test_square)
-                != point_inside_square(test_point_touching_square, test_square),
+                != point_inside_grid_square(test_point_touching_square, test_square)
         );
         assert!(
             point_exactly_touching_unit_square(test_point_in_square, test_square)
-                != point_inside_square(test_point_in_square, test_square),
+                != point_inside_grid_square(test_point_in_square, test_square)
         );
     }
     #[test]
