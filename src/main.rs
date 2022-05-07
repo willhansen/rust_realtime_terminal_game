@@ -780,15 +780,21 @@ impl Game {
     }
 
     fn apply_turret_physics(&mut self, dt_in_ticks: f32) {
+        let mut particles_to_destroy = Vec::<usize>::new();
         for turret_index in 0..self.turrets.len() {
             let mut updated_turret = self.turrets[turret_index].clone();
             let rotation_speed_degrees_per_tick = CLOCKWISE * 2.0;
             let rotation_degrees_this_tick = rotation_speed_degrees_per_tick * dt_in_ticks;
             updated_turret.laser_direction =
                 rotated_degrees(updated_turret.laser_direction, rotation_degrees_this_tick);
-            updated_turret.laser_firing_result = Some(self.fire_turret_laser(&updated_turret));
+            let laser_result = self.fire_turret_laser(&updated_turret);
+            if let Some(particle_index) = laser_result.collided_particle_index {
+                particles_to_destroy.push(particle_index);
+            }
+            updated_turret.laser_firing_result = Some(laser_result);
             self.turrets[turret_index] = updated_turret;
         }
+        self.delete_particles_at_indexes(particles_to_destroy);
     }
 
     fn fire_turret_laser(&self, turret: &Turret) -> SquarecastResult {
@@ -2639,6 +2645,13 @@ mod tests {
     fn set_up_just_turret_facing_up() -> Game {
         let mut game = set_up_game();
         game.place_turret(p(game.width() as i32 / 2, game.height() as i32 / 2));
+        game
+    }
+
+    fn set_up_turret_aiming_at_stationary_particle() -> Game {
+        let mut game = set_up_just_turret_facing_up();
+        let turret_pos = floatify(game.turrets[0].square);
+        game.place_particle(turret_pos + up_f() * 3.0);
         game
     }
 
@@ -5451,9 +5464,19 @@ mod tests {
             particle_pos + right_f() * 3.0,
         );
 
-        dbg!(laser_result);
         assert!(game.particles.len() == 1);
         assert!(laser_result.hit_something());
         assert!(laser_result.collided_particle_index == Some(0));
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_turret_laser_destroys_particle() {
+        let mut game = set_up_turret_aiming_at_stationary_particle();
+
+        assert!(game.particles.len() == 1);
+
+        game.tick_physics();
+
+        assert!(game.particles.len() == 0);
     }
 }
