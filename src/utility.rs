@@ -144,6 +144,14 @@ pub fn single_block_squarecast(
     )
 }
 
+pub fn first_hit(collisions: Vec<SquarecastResult>) -> SquarecastResult {
+    let start_pos = collisions[0].start_pos;
+    *collisions
+        .iter()
+        .min_by_key(|r| OrderedFloat(r.collider_pos.euclidean_distance(&start_pos)))
+        .unwrap()
+}
+
 pub fn visible_xy_to_actual_xy<T: Copy>(a: [[T; 3]; 3]) -> [[T; 3]; 3] {
     // visible
     // [ [ 7, 8, 9 ],
@@ -680,6 +688,14 @@ pub fn random_direction() -> Point<f32> {
     } else {
         return dir;
     }
+}
+
+pub fn rand_in_square(square: IPoint) -> FPoint {
+    let c = floatify(square);
+    p(
+        rand_in_range(c.x() - 0.5, c.x() + 0.5),
+        rand_in_range(c.y() - 0.5, c.y() + 0.5),
+    )
 }
 
 pub fn rand_in_range(start: f32, end: f32) -> f32 {
@@ -1870,7 +1886,7 @@ mod tests {
             grid_square_center,
             adjacent_squares_occupied,
         );
-        dbg!(start_point, end_point, &maybe_collision);
+        //dbg!(start_point, end_point, &maybe_collision);
         assert!(!maybe_collision.hit_something());
     }
 

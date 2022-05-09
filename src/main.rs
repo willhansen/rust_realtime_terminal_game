@@ -32,7 +32,7 @@ use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use termion::event::{Event, Key, MouseButton, MouseEvent};
 use termion::input::{MouseTerminal, TermRead};
-use termion::raw::IntoRawMode;
+use termion::raw::{IntoRawMode, RawTerminal};
 
 use glyph::*;
 use utility::*;
@@ -102,6 +102,7 @@ enum Block {
     Brick,
     ParticleAmalgam(i32),
     Turret,
+    StepFoe,
 }
 
 impl Block {
@@ -117,7 +118,8 @@ impl Block {
             Block::Air => Glyph::from_char(' '),
             Block::Brick => Glyph::from_char('▪'),
             Block::Wall => Glyph::from_char('█'),
-            Block::Turret => Glyph::from_char('⧊'), //◘▮⏧⌖
+            Block::Turret => Glyph::from_char('⧊'),   //◘▮⏧⌖
+            Block::StepFoe => Glyph::from_char('🨅'), //🩑😠
             Block::ParticleAmalgam(num_particles) => {
                 let amalgam_stage = num_particles / DEFAULT_PARTICLES_TO_AMALGAMATION_CHANGE;
                 match amalgam_stage {
@@ -167,6 +169,9 @@ impl Block {
     }
     fn can_collide_with_player(&self) -> bool {
         !matches!(self, Block::Air)
+    }
+    fn can_be_hit_by_laser(&self) -> bool {
+        !matches!(self, Block::Air | Block::Turret)
     }
 }
 
@@ -253,6 +258,11 @@ impl Turret {
             laser_can_hit_particles: true,
         }
     }
+}
+
+#[derive(PartialEq, Debug, Copy, Clone)]
+struct StepFoe {
+    square: IPoint,
 }
 
 struct Player {
@@ -346,6 +356,7 @@ struct Game {
     output_on_screen: Vec<Vec<Glyph>>, // (x,y), left to right, top to bottom
     particles: Vec<Particle>,
     turrets: Vec<Turret>,
+    step_foes: Vec<StepFoe>,
     terminal_size: (u16, u16),  // (width, height)
     prev_mouse_pos: (i32, i32), // where mouse was last frame (if pressed)
     running: bool,              // set false to quit
@@ -368,6 +379,7 @@ impl Game {
             output_on_screen: vec![vec![Glyph::from_char('x'); height as usize]; width as usize],
             particles: Vec::<Particle>::new(),
             turrets: Vec::<Turret>::new(),
+            step_foes: Vec::<StepFoe>::new(),
             terminal_size: (width, height),
             prev_mouse_pos: (1, 1),
             running: true,
@@ -524,6 +536,11 @@ impl Game {
     fn place_particle(&mut self, pos: Point<f32>) {
         self.place_particle_with_lifespan(pos, DEFAULT_PARTICLE_LIFETIME_IN_TICKS)
     }
+    fn place_n_particles(&mut self, num_particles: i32, pos: Point<f32>) {
+        for _ in 0..num_particles {
+            self.place_particle_with_lifespan(pos, DEFAULT_PARTICLE_LIFETIME_IN_TICKS)
+        }
+    }
 
     fn add_particle(&mut self, p: Particle) {
         self.particles.push(p);
@@ -643,6 +660,14 @@ impl Game {
         self.turrets.push(turret);
         self.set_block(square, Block::Turret);
     }
+    fn place_step_foe(&mut self, square: IPoint) {
+        if !self.square_is_empty(square) {
+            panic!("Tried to place step foe in occupied square: {:?}", square);
+        }
+        let mut step_foe = StepFoe { square };
+        self.step_foes.push(step_foe);
+        self.set_block(square, Block::StepFoe);
+    }
     fn player_jump(&mut self) {
         let compression_bonus = self.jump_bonus_vel_from_compression();
 
@@ -697,6 +722,7 @@ impl Game {
                 Key::Char('2') => self.selected_block = Block::Wall,
                 Key::Char('3') => self.selected_block = Block::Brick,
                 Key::Char('c') => self.particles.clear(),
+                Key::Char('k') => self.kill_player(),
                 Key::Char('r') => self.place_player(
                     self.terminal_size.0 as f32 / 2.0,
                     self.terminal_size.1 as f32 / 2.0,
@@ -788,8 +814,14 @@ impl Game {
             updated_turret.laser_direction =
                 rotated_degrees(updated_turret.laser_direction, rotation_degrees_this_tick);
             let laser_result = self.fire_turret_laser(&updated_turret);
-            if let Some(particle_index) = laser_result.collided_particle_index {
-                particles_to_destroy.push(particle_index);
+            if let Some(hit_particle_index) = laser_result.collided_particle_index {
+                particles_to_destroy.push(hit_particle_index);
+            }
+            if let Some(hit_square) = laser_result.collided_block_square {
+                match self.get_block(hit_square) {
+                    Block::ParticleAmalgam(_) => self.decay_amalgam_once(hit_square),
+                    _ => {}
+                }
             }
             updated_turret.laser_firing_result = Some(laser_result);
             self.turrets[turret_index] = updated_turret;
@@ -798,7 +830,7 @@ impl Game {
     }
 
     fn fire_turret_laser(&self, turret: &Turret) -> SquarecastResult {
-        let laser_start_point = floatify(turret.square) + up_f() * 0.5;
+        let laser_start_point = floatify(turret.square) + up_f() * 0.45;
         let turret_range = 50.0;
         let relative_endpoint_in_world_coordinates =
             direction(turret.laser_direction) * turret_range;
@@ -817,7 +849,7 @@ impl Game {
         start_point_in_grid_coordinates: FPoint,
         end_point_in_grid_coordinates: FPoint,
     ) -> SquarecastResult {
-        self.linecast_particles_only(
+        self.linecast_laser(
             start_point_in_grid_coordinates,
             end_point_in_grid_coordinates,
         )
@@ -860,24 +892,21 @@ impl Game {
 
     fn combine_dense_particles(&mut self) {
         let mut particle_indexes_to_delete = vec![];
-        for (square, indexes_of_particles_in_square) in self.get_particle_location_map() {
+        for (square, mut indexes_of_particles_in_square) in self.get_particle_location_map() {
             let mut indexes_of_particles_that_did_not_start_here: Vec<usize> =
                 indexes_of_particles_in_square
                     .iter()
                     .filter(|&&index| snap_to_grid(self.particles[index].start_pos) != square)
                     .cloned()
                     .collect();
+            //if !self.square_is_in_world(square) { continue; }
             let block = self.get_block(square);
-            if indexes_of_particles_that_did_not_start_here.len()
-                >= self.particle_amalgamation_density as usize
-                || (!indexes_of_particles_that_did_not_start_here.is_empty()
-                    && matches!(block, Block::ParticleAmalgam(_)))
-            {
-                let existing_count = if let Block::ParticleAmalgam(count) = block {
-                    count
-                } else {
-                    0
-                };
+            let enough_non_native_particles_to_condense =
+                indexes_of_particles_that_did_not_start_here.len()
+                    >= self.particle_amalgamation_density as usize;
+            let block_already_condensed = matches!(block, Block::ParticleAmalgam(_));
+            if block_already_condensed {
+                let existing_count: i32 = *block.as_particle_amalgam().unwrap();
                 self.set_block(
                     square,
                     Block::ParticleAmalgam(
@@ -886,9 +915,59 @@ impl Game {
                 );
                 particle_indexes_to_delete
                     .append(&mut indexes_of_particles_that_did_not_start_here);
+            } else if enough_non_native_particles_to_condense {
+                self.set_block(
+                    square,
+                    Block::ParticleAmalgam(indexes_of_particles_in_square.len() as i32),
+                );
+                particle_indexes_to_delete.append(&mut indexes_of_particles_in_square);
             }
         }
         self.delete_particles_at_indexes(particle_indexes_to_delete);
+    }
+
+    fn get_num_particles_in_amalgam(&self, square: IPoint) -> Option<i32> {
+        if let Some(block) = self.try_get_block(square) {
+            if let Block::ParticleAmalgam(particle_count) = block {
+                Some(particle_count)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    fn remove_particle_from_amalgam(&mut self, square: IPoint) -> bool {
+        if let Some(particle_count) = self.get_num_particles_in_amalgam(square) {
+            if particle_count > 1 {
+                self.set_block(square, Block::ParticleAmalgam(particle_count - 1));
+            } else {
+                self.set_block(square, Block::Air);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    fn decay_amalgam_once(&mut self, square: IPoint) {
+        if self.remove_particle_from_amalgam(square) {
+            self.place_decay_particle(square);
+        }
+    }
+
+    fn place_decay_particle(&mut self, square: IPoint) {
+        let dir = random_direction();
+        let pos = rand_in_square(square);
+        let max_speed = 0.5;
+        let min_speed = max_speed / 2.0;
+        let speed = rand_in_range(min_speed, max_speed);
+        self.place_particle_with_velocity_and_lifetime(
+            pos,
+            dir * speed,
+            self.player.speed_line_lifetime_in_ticks,
+        );
     }
 
     fn explode_overfull_particle_amalgams(&mut self) {
@@ -897,7 +976,8 @@ impl Game {
                 let pos = p(x as i32, y as i32);
                 if let Some(Block::ParticleAmalgam(num_particles)) = self.try_get_block(pos) {
                     if num_particles >= DEFAULT_PARTICLES_IN_AMALGAMATION_FOR_EXPLOSION {
-                        self.place_grid_space_particle_burst(
+                        //self.place_grid_space_particle_burst(
+                        self.place_particle_blast(
                             floatify(pos),
                             num_particles,
                             DEFAULT_PARTICLE_SPEED,
@@ -979,9 +1059,10 @@ impl Game {
                     }
                 }
                 let end_square = snap_to_grid(end_pos);
-                let particle_ended_inside_square = self.get_block(end_square) == Block::Wall
+                let particle_ended_inside_wall = self.try_get_block(end_square)
+                    == Some(Block::Wall)
                     && point_inside_grid_square(end_pos, end_square);
-                if particle_ended_inside_square
+                if particle_ended_inside_wall
                     && particle.wall_collision_behavior == ParticleWallCollisionBehavior::Bounce
                 {
                     dbg!(&self.particles[i], start_pos, end_pos);
@@ -1138,12 +1219,16 @@ impl Game {
         self.grid[0].len()
     }
 
+    fn mid_square(&self) -> IPoint {
+        p(self.width() as i32 / 2, self.height() as i32 / 2)
+    }
+
     fn fill_output_buffer_with_black(&mut self) {
         let width = self.grid.len();
         let height = self.grid[0].len();
         for x in 0..width {
             for y in 0..height {
-                self.output_buffer[x][y] = Glyph::from_char(Block::Air.character());
+                self.output_buffer[x][y] = Glyph::from_char(' ');
             }
         }
     }
@@ -1214,6 +1299,17 @@ impl Game {
                 }
                 _ => {}
             }
+        }
+    }
+    fn place_particle_blast(&mut self, pos: Point<f32>, num_particles: i32, max_speed: f32) {
+        for i in 0..num_particles {
+            let dir = random_direction();
+            let speed = rand_in_range(0.0, max_speed);
+            self.place_particle_with_velocity_and_lifetime(
+                pos,
+                dir * speed,
+                self.player.speed_line_lifetime_in_ticks,
+            );
         }
     }
 
@@ -1442,6 +1538,7 @@ impl Game {
 
     fn kill_player(&mut self) {
         self.player.alive = false;
+        self.place_particle_blast(self.player.pos, 100, 3.0);
     }
 
     fn player_is_grabbing_wall(&self) -> bool {
@@ -1782,8 +1879,12 @@ impl Game {
         self.squarecast_for_player_collision(start_pos, end_pos, 1.0)
     }
 
-    fn linecast(&self, start_pos: Point<f32>, end_pos: Point<f32>) -> SquarecastResult {
-        self.squarecast_for_player_collision(start_pos, end_pos, 0.0)
+    fn linecast_laser(&self, start_pos: Point<f32>, end_pos: Point<f32>) -> SquarecastResult {
+        let filter = Box::new(|block: Block| block.can_be_hit_by_laser());
+        first_hit(vec![
+            self.linecast_with_block_filter(start_pos, end_pos, filter),
+            self.linecast_particles_only(start_pos, end_pos),
+        ])
     }
     fn linecast_walls_only(&self, start_pos: Point<f32>, end_pos: Point<f32>) -> SquarecastResult {
         self.squarecast_one_block_type(start_pos, end_pos, 0.0, Block::Wall)
@@ -1807,6 +1908,25 @@ impl Game {
         hittable_block: Block,
     ) -> SquarecastResult {
         let filter = Box::new(move |block| block == hittable_block);
+        self.squarecast_with_block_filter(start_pos, end_pos, moving_square_side_length, filter)
+    }
+
+    fn linecast_for_non_air_blocks(
+        &self,
+        start_pos: Point<f32>,
+        end_pos: Point<f32>,
+    ) -> SquarecastResult {
+        let filter = Box::new(|block| block != Block::Air);
+        self.squarecast_with_block_filter(start_pos, end_pos, 0.0, filter)
+    }
+
+    fn squarecast_for_non_air_blocks(
+        &self,
+        start_pos: Point<f32>,
+        end_pos: Point<f32>,
+        moving_square_side_length: f32,
+    ) -> SquarecastResult {
+        let filter = Box::new(|block| block != Block::Air);
         self.squarecast_with_block_filter(start_pos, end_pos, moving_square_side_length, filter)
     }
 
@@ -1839,6 +1959,15 @@ impl Game {
             moving_square_side_length,
             Box::new(|block| block.can_collide_with_player()),
         )
+    }
+
+    fn linecast_with_block_filter(
+        &self,
+        start_pos: Point<f32>,
+        end_pos: Point<f32>,
+        block_filter: BlockFilter,
+    ) -> SquarecastResult {
+        self.squarecast_with_block_filter(start_pos, end_pos, 0.0, block_filter)
     }
 
     fn squarecast_with_block_filter(
@@ -1918,12 +2047,7 @@ impl Game {
                 }
             }
             if !collisions.is_empty() {
-                collisions.sort_by(|a, b| {
-                    let a_dist = a.collider_pos.euclidean_distance(&start_pos);
-                    let b_dist = b.collider_pos.euclidean_distance(&start_pos);
-                    a_dist.partial_cmp(&b_dist).unwrap()
-                });
-                let closest_collision_to_start = collisions[0];
+                let closest_collision_to_start = first_hit(collisions);
                 //dbg!(&closest_collision_to_start);
 
                 // might have missed one
@@ -2029,15 +2153,19 @@ fn init_world(width: u16, height: u16) -> Game {
         p(game.width() as i32 / 6, game.height() as i32 / 6),
         p(game.width() as i32 / 5, game.height() as i32 / 5),
     );
-    game.place_turret(p(2, 2));
-    game.place_turret(p(3, 4));
-    game.place_turret(p(4, 2));
-    game.place_turret(p(4, 6));
-    game.place_turret(p(5, 4));
-    game.place_turret(p(6, 2));
+    let cube_start = p(2, 2);
+    for x in 0..4 {
+        for y in 0..4 {
+            game.place_turret(cube_start + p(x, y));
+        }
+    }
 
+    game.place_step_foe(p(game.width() as i32 - 3, 1));
+
+    let start_square = p(1, game.height() as i32 - 2);
+    let step = right_i();
     for i in 1..DEFAULT_PARTICLES_IN_AMALGAMATION_FOR_EXPLOSION {
-        game.place_block(p(i, 1), Block::ParticleAmalgam(i));
+        game.place_block(start_square + step * i, Block::ParticleAmalgam(i));
     }
 
     game.place_player(
@@ -2052,16 +2180,14 @@ fn seconds_to_ticks(s: f32) -> f32 {
     s * MAX_FPS
 }
 
-fn setup_panic_hook() {
+fn set_up_panic_hook() {
     std::panic::set_hook(Box::new(move |panic_info| {
         write!(stdout(), "{}", termion::screen::ToMainScreen);
         write!(stdout(), "{:?}", panic_info);
-        //stdout().into_raw_mode().unwrap().suspend_raw_mode();
-        //std::panic::take_hook()(panic_info);
     }));
 }
 
-fn setup_input_thread() -> Receiver<Event> {
+fn set_up_input_thread() -> Receiver<Event> {
     let (tx, rx) = channel();
     thread::spawn(move || {
         for c in stdin().events() {
@@ -2080,10 +2206,10 @@ fn main() {
         MouseTerminal::from(stdout().into_raw_mode().unwrap()),
     ));
 
-    setup_panic_hook();
+    set_up_panic_hook();
 
     // Separate thread for reading input
-    let event_receiver = setup_input_thread();
+    let event_receiver = set_up_input_thread();
 
     let mut prev_start_time = Instant::now();
     while game.running {
@@ -2117,6 +2243,7 @@ fn main() {
 mod tests {
     use super::*;
     use assert2::assert;
+    use std::collections::HashSet;
     use std::iter::Map;
 
     fn set_up_game() -> Game {
@@ -2577,6 +2704,17 @@ mod tests {
         }
         game
     }
+    fn set_up_particles_about_to_combine() -> Game {
+        let mut game = set_up_game();
+        game.place_n_particles(
+            game.particle_amalgamation_density,
+            floatify(game.mid_square()),
+        );
+        for particle in &mut game.particles {
+            particle.start_pos = particle.start_pos + left_f() * 2.0;
+        }
+        game
+    }
 
     fn set_up_four_wall_blocks_at_5_and_6() -> Game {
         let mut game = set_up_game();
@@ -2642,16 +2780,33 @@ mod tests {
         return game;
     }
 
-    fn set_up_just_turret_facing_up() -> Game {
+    fn set_up_turret_facing_up() -> Game {
+        set_up_turret_facing_direction(up_f())
+    }
+    fn set_up_turret_facing_direction(dir: FPoint) -> Game {
         let mut game = set_up_game();
-        game.place_turret(p(game.width() as i32 / 2, game.height() as i32 / 2));
+        game.place_turret(game.mid_square());
+        game.turrets[0].laser_direction = dir;
         game
     }
 
     fn set_up_turret_aiming_at_stationary_particle() -> Game {
-        let mut game = set_up_just_turret_facing_up();
+        let mut game = set_up_turret_facing_up();
         let turret_pos = floatify(game.turrets[0].square);
         game.place_particle(turret_pos + up_f() * 3.0);
+        game
+    }
+
+    fn set_up_turret_aiming_at_particle_amalgam() -> Game {
+        let mut game = set_up_turret_facing_up();
+        let turret_square = game.turrets[0].square;
+        game.place_block(turret_square + up_i() * 3, Block::ParticleAmalgam(50));
+        game
+    }
+
+    fn set_up_single_step_foe() -> Game {
+        let mut game = set_up_game();
+        game.place_step_foe(game.mid_square());
         game
     }
 
@@ -3189,7 +3344,7 @@ mod tests {
         let good_end_pos = floatify(snap_to_grid(start_pos));
 
         game.tick_physics();
-        dbg!(game.player.pos, game.player.vel);
+        //dbg!(game.player.pos, game.player.vel);
         assert!(game.player.pos == good_end_pos);
         assert!(game.player.vel == zero_f());
     }
@@ -3239,7 +3394,7 @@ mod tests {
     #[test]
     #[timeout(100)]
     fn test_respawn_button() {
-        let mut game = Game::new(30, 30);
+        let mut game = set_up_game();
         game.handle_event(Event::Key(Key::Char('r')));
         assert!(game.player.alive);
         assert!(game.player.pos == p(15.0, 15.0));
@@ -4244,7 +4399,7 @@ mod tests {
 
         assert!(end_pos_1 != end_pos_2);
 
-        dbg!(diff1, magnitude(diff1), diff2, magnitude(diff2));
+        //dbg!(diff1, magnitude(diff1), diff2, magnitude(diff2));
         assert!(abs_diff_eq!(
             magnitude(diff1),
             magnitude(diff2),
@@ -4396,7 +4551,7 @@ mod tests {
             chars_in_compression_end.push(game.get_compressed_player_glyph().character);
             game.tick_physics();
         }
-        dbg!(&chars_in_compression_start, &chars_in_compression_end);
+        //dbg!(&chars_in_compression_start, &chars_in_compression_end);
 
         assert!(*chars_in_compression_end.last().unwrap() == EIGHTH_BLOCKS_FROM_BOTTOM[8]);
 
@@ -4886,7 +5041,7 @@ mod tests {
         let start_square = p(0, 0);
         let particle_square = p(1, 0);
         game.tick_physics();
-        dbg!(game.particles.len());
+        //dbg!(game.particles.len());
         assert!(game.particles.is_empty());
         assert!(matches!(
             game.get_block(particle_square),
@@ -5006,7 +5161,7 @@ mod tests {
             + offset_to_edge_of_exact_touch_border_corner
             + additional_offset_for_test;
 
-        let collision = game.linecast(start_pos, end_pos);
+        let collision = game.linecast_walls_only(start_pos, end_pos);
         assert!(collision.hit_something());
         assert!(nearly_equal(collision.collider_pos.x(), 6.5));
         assert!(collision.collided_block_square.unwrap() == p(6, 6));
@@ -5019,7 +5174,7 @@ mod tests {
         let game = set_up_plus_sign_wall_blocks_at_square(plus_center);
         let start_pos = floatify(plus_center) + p(-1.0, 1.0);
         let end_pos = floatify(plus_center) + p(0.0, -0.001);
-        let collision = game.linecast(start_pos, end_pos);
+        let collision = game.linecast_walls_only(start_pos, end_pos);
         assert!(collision.hit_something());
         assert!(collision.collided_block_square.unwrap() == plus_center + p(-1, 0));
         assert!(collision.collision_normal.unwrap() == p(0, 1));
@@ -5099,8 +5254,8 @@ mod tests {
         let mut game = set_up_game();
         game.place_wall_block(p(1, 0));
         game.place_wall_block(p(1, 1));
-        let collision = game.linecast(start_pos, end_pos);
-        dbg!(&collision);
+        let collision = game.linecast_walls_only(start_pos, end_pos);
+        //dbg!(&collision);
         assert!(collision.hit_something());
     }
     #[test]
@@ -5393,7 +5548,7 @@ mod tests {
         game.tick_physics();
         assert!(game.particles.len() > 5); // approx enough particles for test to be meaningful
         for i in 2..game.particles.len() {
-            dbg!(game.particles[i].vel);
+            //dbg!(game.particles[i].vel);
             assert!(game.particles[i].vel != game.particles[i - 1].vel);
             assert!(game.particles[i].vel != game.particles[i - 2].vel);
         }
@@ -5419,21 +5574,21 @@ mod tests {
     #[test]
     #[timeout(100)]
     fn test_turret_is_drawn() {
-        let mut game = set_up_just_turret_facing_up();
+        let mut game = set_up_turret_facing_up();
         game.update_output_buffer();
         assert!(game.get_buffered_glyph(game.turrets[0].square) == &Block::Turret.glyph());
     }
     #[test]
     #[timeout(100)]
     fn test_turret_fires_laser() {
-        let mut game = set_up_just_turret_facing_up();
+        let mut game = set_up_turret_facing_up();
         game.tick_physics();
         assert!(game.turrets[0].laser_firing_result.is_some());
     }
     #[test]
     #[timeout(100)]
     fn test_turret_laser_is_visible_red_braille() {
-        let mut game = set_up_just_turret_facing_up();
+        let mut game = set_up_turret_facing_up();
         game.tick_physics();
         game.update_output_buffer();
         let square_that_should_be_braille = game.turrets[0].square + up_i();
@@ -5444,7 +5599,7 @@ mod tests {
     #[test]
     #[timeout(100)]
     fn test_turret_lasers_rotate() {
-        let mut game = set_up_just_turret_facing_up();
+        let mut game = set_up_turret_facing_up();
         let start_laser_dir = game.turrets[0].laser_direction;
         game.tick_physics();
         let end_laser_dir = game.turrets[0].laser_direction;
@@ -5478,5 +5633,94 @@ mod tests {
         game.tick_physics();
 
         assert!(game.particles.len() == 0);
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_step_foe_exists() {
+        let mut game = set_up_single_step_foe();
+
+        assert!(!game.step_foes.is_empty());
+    }
+
+    #[ignore] // maybe later
+    #[test]
+    #[timeout(100)]
+    fn test_turrets_and_step_foes_take_up_two_squares() {}
+
+    #[test]
+    #[timeout(100)]
+    fn test_player_dies_if_they_are_killed() {
+        let mut game = set_up_just_player();
+        assert!(game.player.alive);
+        game.kill_player();
+        assert!(!game.player.alive);
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_particles_on_player_death() {
+        let mut game = set_up_just_player();
+        assert!(game.particles.is_empty());
+        game.kill_player();
+        assert!(game.particles.len() > 30);
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_k_button_kills_player() {
+        let mut game = set_up_just_player();
+        assert!(game.player.alive);
+        game.handle_event(Event::Key(Key::Char('k')));
+        assert!(!game.player.alive);
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_particle_amalgamation_gets_all_particles_in_square() {
+        let mut game = set_up_particles_about_to_combine();
+        game.place_n_particles(5, game.particles[0].pos);
+        game.combine_dense_particles();
+
+        assert!(game.particles.is_empty());
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_existing_particle_amalgams_do_not_grab_new_particles_on_same_square() {
+        let mut game = set_up_particles_about_to_combine();
+        let particle_pos = game.particles[0].pos;
+        game.combine_dense_particles();
+        assert!(game.particles.is_empty());
+        game.place_n_particles(5, particle_pos);
+        game.combine_dense_particles();
+        assert!(!game.particles.is_empty());
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_lasers_decay_particle_amalgams() {
+        let mut game = set_up_turret_aiming_at_particle_amalgam();
+        let the_turret = &game.turrets[0];
+        let amalgam_square = the_turret.square + up_i() * 3;
+        assert!(matches!(
+            game.get_block(amalgam_square),
+            Block::ParticleAmalgam(_)
+        ));
+        assert!(game.particles.is_empty());
+        game.tick_physics();
+        let laser_result = game.turrets[0].laser_firing_result.unwrap();
+        assert!(laser_result.hit_something());
+        assert!(laser_result.hit_block());
+        assert!(laser_result.collided_block_square.unwrap() == amalgam_square);
+        assert!(game.particles.len() == 1);
+        assert!(snap_to_grid(game.particles[0].pos) == amalgam_square);
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_turret_laser_does_not_hit_firing_turret() {
+        let mut game = set_up_turret_facing_direction(down_f());
+        game.tick_physics();
+        let maybe_hit_square = game.turrets[0]
+            .laser_firing_result
+            .unwrap()
+            .collided_block_square;
+        assert!(maybe_hit_square.is_none());
     }
 }
