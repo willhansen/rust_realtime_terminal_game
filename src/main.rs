@@ -3093,7 +3093,6 @@ mod tests {
     #[timeout(100)]
     fn test_move_player_for_multiple_ticks() {
         let mut game = set_up_player_on_platform();
-        game.place_player(15.0, 11.0);
         game.player.max_run_speed = 1.0;
         game.player.ground_friction_start_speed = game.player.max_run_speed;
         game.player.acceleration_from_floor_traction = 1.0;
