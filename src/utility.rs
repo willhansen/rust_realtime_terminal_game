@@ -10,6 +10,7 @@ use geo::{point, CoordNum, Line, Point};
 use num::clamp;
 use num::traits::Pow;
 use ordered_float::OrderedFloat;
+use rand::distributions::uniform::SampleUniform;
 use rand::Rng;
 use std::collections::HashMap;
 use std::f32::consts::TAU;
@@ -698,7 +699,7 @@ pub fn rand_in_square(square: IPoint) -> FPoint {
     )
 }
 
-pub fn rand_in_range(start: f32, end: f32) -> f32 {
+pub fn rand_in_range<T: SampleUniform + std::cmp::PartialOrd>(start: T, end: T) -> T {
     let mut rng = rand::thread_rng();
     rng.gen_range(start..end)
 }

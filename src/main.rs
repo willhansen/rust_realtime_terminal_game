@@ -351,8 +351,9 @@ impl Player {
 struct Game {
     time_from_start_in_ticks: f32,
     recent_tick_durations_s: VecDeque<f32>,
-    grid: Vec<Vec<Block>>,             // (x,y), left to right, top to bottom
-    output_buffer: Vec<Vec<Glyph>>,    // (x,y), left to right, top to bottom
+    grid: Vec<Vec<Block>>, // (x,y), left to right, top to bottom
+    particle_location_map: ParticleLocationMap,
+    output_buffer: Vec<Vec<Glyph>>, // (x,y), left to right, top to bottom
     output_on_screen: Vec<Vec<Glyph>>, // (x,y), left to right, top to bottom
     particles: Vec<Particle>,
     turrets: Vec<Turret>,
@@ -375,6 +376,7 @@ impl Game {
             time_from_start_in_ticks: 0.0,
             recent_tick_durations_s: VecDeque::<f32>::new(),
             grid: vec![vec![Block::Air; height as usize]; width as usize],
+            particle_location_map: HashMap::<Point<i32>, Vec<usize>>::new(),
             output_buffer: vec![vec![Glyph::from_char(' '); height as usize]; width as usize],
             output_on_screen: vec![vec![Glyph::from_char('x'); height as usize]; width as usize],
             particles: Vec::<Particle>::new(),
@@ -807,6 +809,7 @@ impl Game {
 
     fn apply_turret_physics(&mut self, dt_in_ticks: f32) {
         let mut particles_to_destroy = Vec::<usize>::new();
+        self.update_particle_location_map();
         for turret_index in 0..self.turrets.len() {
             let mut updated_turret = self.turrets[turret_index].clone();
             let rotation_speed_degrees_per_tick = CLOCKWISE * 2.0;
@@ -874,7 +877,11 @@ impl Game {
         self.explode_overfull_particle_amalgams();
     }
 
-    fn get_particle_location_map(&self) -> ParticleLocationMap {
+    fn get_particle_location_map(&self) -> &ParticleLocationMap {
+        &self.particle_location_map
+    }
+
+    fn update_particle_location_map(&mut self) {
         let mut histogram: ParticleLocationMap = HashMap::<Point<i32>, Vec<usize>>::new();
         for i in 0..self.particles.len() {
             let square = snap_to_grid(self.particles[i].pos);
@@ -887,13 +894,15 @@ impl Game {
                 }
             }
         }
-        histogram
+        self.particle_location_map = histogram;
     }
 
     fn combine_dense_particles(&mut self) {
         let mut particle_indexes_to_delete = vec![];
-        for (square, mut indexes_of_particles_in_square) in self.get_particle_location_map() {
-            let mut indexes_of_particles_that_did_not_start_here: Vec<usize> =
+        self.update_particle_location_map();
+        let particle_map_copy = self.get_particle_location_map().clone();
+        for (square, indexes_of_particles_in_square) in particle_map_copy {
+            let indexes_of_particles_that_did_not_start_here: Vec<usize> =
                 indexes_of_particles_in_square
                     .iter()
                     .filter(|&&index| snap_to_grid(self.particles[index].start_pos) != square)
@@ -914,13 +923,13 @@ impl Game {
                     ),
                 );
                 particle_indexes_to_delete
-                    .append(&mut indexes_of_particles_that_did_not_start_here);
+                    .append(&mut indexes_of_particles_that_did_not_start_here.clone());
             } else if enough_non_native_particles_to_condense {
                 self.set_block(
                     square,
                     Block::ParticleAmalgam(indexes_of_particles_in_square.len() as i32),
                 );
-                particle_indexes_to_delete.append(&mut indexes_of_particles_in_square);
+                particle_indexes_to_delete.append(&mut indexes_of_particles_in_square.clone());
             }
         }
         self.delete_particles_at_indexes(particle_indexes_to_delete);
@@ -1222,6 +1231,12 @@ impl Game {
     fn mid_square(&self) -> IPoint {
         p(self.width() as i32 / 2, self.height() as i32 / 2)
     }
+    fn x_max(&self) -> i32 {
+        self.width() as i32 - 1
+    }
+    fn y_max(&self) -> i32 {
+        self.height() as i32 - 1
+    }
 
     fn fill_output_buffer_with_black(&mut self) {
         let width = self.grid.len();
@@ -1304,7 +1319,8 @@ impl Game {
     fn place_particle_blast(&mut self, pos: Point<f32>, num_particles: i32, max_speed: f32) {
         for i in 0..num_particles {
             let dir = random_direction();
-            let speed = rand_in_range(0.0, max_speed);
+            // want more even distribution over the blast
+            let speed = rand_in_range(0.0f32, 1.0f32).sqrt() * max_speed;
             self.place_particle_with_velocity_and_lifetime(
                 pos,
                 dir * speed,
@@ -1935,7 +1951,7 @@ impl Game {
         start_pos: Point<f32>,
         end_pos: Point<f32>,
         moving_square_side_length: f32,
-        particle_location_map: Option<ParticleLocationMap>,
+        particle_location_map: Option<&ParticleLocationMap>,
     ) -> SquarecastResult {
         let falsefilter = Box::new(|_| false);
         self.squarecast(
@@ -1992,7 +2008,7 @@ impl Game {
         end_pos: Point<f32>,
         moving_square_side_length: f32,
         block_filter: BlockFilter,
-        particle_location_map: Option<ParticleLocationMap>,
+        particle_location_map: Option<&ParticleLocationMap>,
     ) -> SquarecastResult {
         let default_result = SquarecastResult::no_hit_result(start_pos, end_pos);
         let mut intermediate_player_positions_to_check = lin_space_from_start_2d(
@@ -2124,7 +2140,21 @@ impl Game {
             || (self.player_is_supported() && self.player.desired_direction.x() == 0)
     }
 }
-fn init_world(width: u16, height: u16) -> Game {
+fn init_platformer_test_world(width: u16, height: u16) -> Game {
+    let mut game = Game::new(width, height);
+    game.place_line_of_blocks((2, 3), (8, 3), Block::Wall);
+    game.place_player(5.0, 5.0);
+
+    let num_platforms = 20;
+    for i in 0..num_platforms {
+        let x_start = rand_in_range(0, game.x_max() - 8);
+        let height = rand_in_range(0, game.y_max() - 5);
+        game.place_line_of_blocks((x_start, height), (x_start + 5, height), Block::Wall);
+    }
+
+    game
+}
+fn init_test_world_1(width: u16, height: u16) -> Game {
     let mut game = Game::new(width, height);
     //let mut game = Game::new(10, 40);
     //game.set_player_jump_delta_v(1.0);
@@ -2200,7 +2230,7 @@ fn set_up_input_thread() -> Receiver<Event> {
 
 fn main() {
     let (width, height) = termion::terminal_size().unwrap();
-    let mut game = init_world(width, height);
+    let mut game = init_test_world_1(width, height);
 
     let mut terminal = termion::screen::AlternateScreen::from(termion::cursor::HideCursor::from(
         MouseTerminal::from(stdout().into_raw_mode().unwrap()),
@@ -5613,6 +5643,7 @@ mod tests {
 
         assert!(game.particles.len() == 1);
 
+        game.update_particle_location_map();
         let laser_result = game.fire_laser(
             particle_pos + left_f() * 3.0,
             particle_pos + right_f() * 3.0,
