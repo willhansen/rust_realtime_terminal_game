@@ -34,6 +34,7 @@ use termion::event::{Event, Key, MouseButton, MouseEvent};
 use termion::input::{MouseTerminal, TermRead};
 use termion::raw::{IntoRawMode, RawTerminal};
 
+use crate::BoostBehavior::AddButInstantTurnAround;
 use glyph::*;
 use utility::*;
 
@@ -59,13 +60,13 @@ const DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION: f32 = 0.2;
 const DEFAULT_PLAYER_ACCELERATION_FROM_AIR_TRACTION: f32 =
     DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION;
 const DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION: f32 =
-    DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION / 5.0;
+    DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION; // / 5.0;
 const DEFAULT_PLAYER_MAX_RUN_SPEED: f32 = 0.4;
-const DEFAULT_PLAYER_GROUND_FRICTION_START_SPEED: f32 = 0.7;
+const DEFAULT_PLAYER_GROUND_FRICTION_START_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED; //0.7;
 const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED * 5.0;
-const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
+const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION;
 const DEFAULT_PLAYER_MIDAIR_MAX_MOVE_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED;
-const DEFAULT_PLAYER_AIR_FRICTION_START_SPEED: f32 = DEFAULT_PLAYER_DASH_SPEED;
+const DEFAULT_PLAYER_AIR_FRICTION_START_SPEED: f32 = DEFAULT_PLAYER_GROUND_FRICTION_START_SPEED;
 
 const DEFAULT_PARTICLE_LIFETIME_IN_SECONDS: f32 = 5.0;
 const DEFAULT_PARTICLE_LIFETIME_IN_TICKS: f32 = DEFAULT_PARTICLE_LIFETIME_IN_SECONDS * MAX_FPS;
@@ -187,6 +188,12 @@ enum WallJumpBehavior {
     Stop,
     KeepDirection,
 }
+#[derive(EnumIter, PartialEq, Debug, Clone, Copy)]
+enum BoostBehavior {
+    Add,
+    Set,
+    AddButInstantTurnAround,
+}
 
 #[derive(Clone, PartialEq, Debug)]
 struct Particle {
@@ -286,7 +293,7 @@ struct Player {
     remaining_coyote_time: f32,
     max_coyote_time: f32,
     dash_vel: f32,
-    dash_adds_to_vel: bool,
+    boost_behavior: BoostBehavior,
     time_of_last_boost: Option<f32>,
     last_collision: Option<PlayerBlockCollision>,
     moved_normal_to_collision_since_collision: bool,
@@ -324,7 +331,7 @@ impl Player {
             remaining_coyote_time: DEFAULT_PLAYER_MAX_COYOTE_TIME,
             max_coyote_time: DEFAULT_PLAYER_MAX_COYOTE_TIME,
             dash_vel: DEFAULT_PLAYER_DASH_SPEED,
-            dash_adds_to_vel: false,
+            boost_behavior: AddButInstantTurnAround,
             time_of_last_boost: None,
             last_collision: None,
             moved_normal_to_collision_since_collision: false,
@@ -654,9 +661,7 @@ impl Game {
     }
 
     fn place_turret(&mut self, square: IPoint) {
-        if !self.square_is_empty(square) {
-            panic!("Tried to place turret in occupied square: {:?}", square);
-        }
+        //if !self.square_is_empty(square) { panic!("Tried to place turret in occupied square: {:?}", square); }
         let mut turret = Turret::new();
         turret.square = square;
         self.turrets.push(turret);
@@ -704,10 +709,17 @@ impl Game {
     fn player_dash(&mut self) {
         if self.player.desired_direction != p(0, 0) {
             let dash_vel = floatify(self.player.desired_direction) * self.player.dash_vel;
-            if self.player.dash_adds_to_vel {
-                self.player.vel.add_assign(dash_vel);
-            } else {
-                self.player.vel = dash_vel;
+            match self.player.boost_behavior {
+                BoostBehavior::Add => self.player.vel.add_assign(dash_vel),
+                BoostBehavior::Set => self.player.vel = dash_vel,
+                BoostBehavior::AddButInstantTurnAround => {
+                    let want_increase_speed = dash_vel.dot(self.player.vel) > 0.0;
+                    if want_increase_speed {
+                        self.player.vel.add_assign(dash_vel);
+                    } else {
+                        self.player.vel = dash_vel;
+                    }
+                }
             }
             self.player.time_of_last_boost = Some(self.time_in_ticks());
         }
@@ -834,7 +846,7 @@ impl Game {
 
     fn fire_turret_laser(&self, turret: &Turret) -> SquarecastResult {
         let laser_start_point = floatify(turret.square) + up_f() * 0.45;
-        let turret_range = 50.0;
+        let turret_range = 20.0;
         let relative_endpoint_in_world_coordinates =
             direction(turret.laser_direction) * turret_range;
         let relative_endpoint_in_grid_coordinates = world_space_to_grid_space(
@@ -2145,11 +2157,28 @@ fn init_platformer_test_world(width: u16, height: u16) -> Game {
     game.place_line_of_blocks((2, 3), (8, 3), Block::Wall);
     game.place_player(5.0, 5.0);
 
-    let num_platforms = 20;
+    let num_platforms = 5;
+    let platform_width = 28;
+    let horizontal_buffer = 3;
+    let vertical_buffer = horizontal_buffer;
     for i in 0..num_platforms {
-        let x_start = rand_in_range(0, game.x_max() - 8);
-        let height = rand_in_range(0, game.y_max() - 5);
-        game.place_line_of_blocks((x_start, height), (x_start + 5, height), Block::Wall);
+        let x_start = rand_in_range(
+            horizontal_buffer,
+            game.x_max() - (platform_width + horizontal_buffer),
+        );
+        let height = rand_in_range(vertical_buffer, game.y_max() - vertical_buffer);
+        game.place_line_of_blocks(
+            (x_start, height),
+            (x_start + platform_width, height),
+            Block::Wall,
+        );
+    }
+
+    let num_turrets = 2;
+    for i in 0..num_turrets {
+        let x = rand_in_range(horizontal_buffer, game.x_max() - horizontal_buffer);
+        let y = rand_in_range(vertical_buffer, game.y_max() - vertical_buffer);
+        game.place_turret(p(x, y));
     }
 
     game
@@ -2231,6 +2260,7 @@ fn set_up_input_thread() -> Receiver<Event> {
 fn main() {
     let (width, height) = termion::terminal_size().unwrap();
     let mut game = init_test_world_1(width, height);
+    //let mut game = init_platformer_test_world(width, height);
 
     let mut terminal = termion::screen::AlternateScreen::from(termion::cursor::HideCursor::from(
         MouseTerminal::from(stdout().into_raw_mode().unwrap()),
@@ -2498,9 +2528,15 @@ mod tests {
         game.player.desired_direction = left_i();
         game
     }
-    fn set_up_player_running_double_max_speed_right() -> Game {
+    fn set_up_player_running_double_max_run_speed_right() -> Game {
         let mut game = set_up_player_on_platform();
         game.player.vel = right_f() * game.player.max_run_speed * 2.0;
+        game.player.desired_direction = right_i();
+        game
+    }
+    fn set_up_player_running_double_max_boost_speed_right() -> Game {
+        let mut game = set_up_player_on_platform();
+        game.player.vel = right_f() * game.player.dash_vel * 2.0;
         game.player.desired_direction = right_i();
         game
     }
@@ -4050,24 +4086,38 @@ mod tests {
 
     #[test]
     #[timeout(100)]
-    fn test_dash_sets_velocity_rather_than_adds_to_it_if_set() {
-        let mut game = set_up_just_player();
-        game.player.dash_adds_to_vel = false;
-        game.player.vel = p(-game.player.dash_vel * 4.0, 0.0);
-        game.player.desired_direction = p(1, 0);
-        game.player_dash();
-        assert!(game.player.vel.x() > 0.0);
+    fn test_boost_trying_to_go_faster() {
+        for boost_type in BoostBehavior::iter() {
+            let mut game = set_up_player_running_double_max_boost_speed_right();
+            let start_vx = game.player.vel.x();
+            game.player.boost_behavior = boost_type;
+            game.player_dash();
+            let correct_final_vx = match boost_type {
+                BoostBehavior::Set => game.player.dash_vel,
+                BoostBehavior::Add | BoostBehavior::AddButInstantTurnAround => {
+                    start_vx + game.player.dash_vel
+                }
+            };
+            assert!(game.player.vel.x() == correct_final_vx);
+        }
     }
-
     #[test]
     #[timeout(100)]
-    fn test_dash_adds_velocity_rather_than_sets_it_if_set() {
-        let mut game = set_up_just_player();
-        game.player.dash_adds_to_vel = true;
-        game.player.vel = p(-game.player.dash_vel * 4.0, 0.0);
-        game.player.desired_direction = p(1, 0);
-        game.player_dash();
-        assert!(game.player.vel.x() == -game.player.dash_vel * 3.0);
+    fn test_boost_trying_to_turn_around() {
+        for boost_type in BoostBehavior::iter() {
+            let mut game = set_up_player_running_double_max_boost_speed_right();
+            game.player.desired_direction = left_i();
+            let start_vx = game.player.vel.x();
+            game.player.boost_behavior = boost_type;
+            game.player_dash();
+            let correct_final_vx = match boost_type {
+                BoostBehavior::Set | BoostBehavior::AddButInstantTurnAround => {
+                    -game.player.dash_vel
+                }
+                BoostBehavior::Add => start_vx + -game.player.dash_vel,
+            };
+            assert!(game.player.vel.x() == correct_final_vx);
+        }
     }
 
     #[test]
@@ -5550,7 +5600,7 @@ mod tests {
     #[timeout(100)]
     fn test_ground_friction_is_left_right_symmetric() {
         let mut game1 = set_up_player_running_double_max_speed_left();
-        let mut game2 = set_up_player_running_double_max_speed_right();
+        let mut game2 = set_up_player_running_double_max_run_speed_right();
 
         assert!(game1.player.vel.x().abs() == game2.player.vel.x().abs());
         game1.tick_physics();
