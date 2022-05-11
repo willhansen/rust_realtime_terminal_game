@@ -66,9 +66,10 @@ const DEFAULT_PLAYER_GROUND_FRICTION_START_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_S
 const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED * 5.0;
 const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION;
 const DEFAULT_PLAYER_MIDAIR_MAX_MOVE_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED;
-const DEFAULT_PLAYER_AIR_FRICTION_START_SPEED: f32 = DEFAULT_PLAYER_GROUND_FRICTION_START_SPEED;
+const DEFAULT_PLAYER_AIR_FRICTION_START_SPEED: f32 =
+    DEFAULT_PLAYER_GROUND_FRICTION_START_SPEED * 3.0;
 
-const DEFAULT_PARTICLE_LIFETIME_IN_SECONDS: f32 = 5.0;
+const DEFAULT_PARTICLE_LIFETIME_IN_SECONDS: f32 = 15.0;
 const DEFAULT_PARTICLE_LIFETIME_IN_TICKS: f32 = DEFAULT_PARTICLE_LIFETIME_IN_SECONDS * MAX_FPS;
 const DEFAULT_PARTICLE_SPEED: f32 = 0.3;
 const DEFAULT_PARTICLE_TURN_RADIANS_PER_TICK: f32 = 0.0;
@@ -1865,8 +1866,7 @@ impl Game {
                 total_acceleration.add_assign(down_f() * self.player.acceleration_from_gravity);
 
                 // air friction
-                // DISABLED
-                if false && magnitude(self.player.vel) > self.player.air_friction_start_speed {
+                if magnitude(self.player.vel) > self.player.air_friction_start_speed {
                     total_acceleration.add_assign(
                         direction(-self.player.vel) * self.player.deceleration_from_air_friction,
                     );
@@ -2389,7 +2389,7 @@ mod tests {
 
     fn set_up_player_barely_fighting_air_friction_to_the_right_in_zero_g() -> Game {
         let mut game = set_up_player_in_zero_g();
-        game.player.desired_direction = p(1, 0);
+        game.player.desired_direction = right_i();
         game.player.vel = right_f()
             * (game.player.air_friction_start_speed
                 + game.player.deceleration_from_air_friction * 0.9);
@@ -3366,6 +3366,7 @@ mod tests {
     #[timeout(100)]
     fn test_land_after_jump__moving_right() {
         let mut game = set_up_player_running_full_speed_to_right_on_platform();
+        be_in_vacuum(&mut game);
         let start_pos = game.player.pos;
 
         game.player_jump();
@@ -3383,6 +3384,7 @@ mod tests {
     #[timeout(100)]
     fn test_land_after_jump__moving_left() {
         let mut game = set_up_player_running_full_speed_to_left_on_platform();
+        be_in_vacuum(&mut game);
         let start_pos = game.player.pos;
 
         game.player_jump();
@@ -4196,9 +4198,7 @@ mod tests {
     #[test]
     #[timeout(100)]
     fn test_bullet_time_slows_down_motion() {
-        let mut game = set_up_player_in_zero_g();
-        game.player.acceleration_from_floor_traction = 0.0;
-        game.player.acceleration_from_air_traction = 0.0;
+        let mut game = set_up_player_in_zero_g_frictionless_vacuum();
         game.player.vel = p(1.0, 0.0);
         let start_x = game.player.pos.x();
         game.bullet_time_factor = 0.5;
@@ -5469,6 +5469,7 @@ mod tests {
     #[timeout(100)]
     fn test_verify_time_to_jump_peak_function() {
         let mut game = set_up_player_on_platform();
+        be_in_vacuum(&mut game);
         game.player_jump_if_possible();
 
         let start_pos = game.player.pos;
@@ -5492,6 +5493,7 @@ mod tests {
     #[timeout(100)]
     fn test_verify_calc_jump_height() {
         let mut game = set_up_player_on_platform();
+        be_in_vacuum(&mut game);
         game.player_jump_if_possible();
 
         let y0 = game.player.pos.y();
