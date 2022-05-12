@@ -195,6 +195,11 @@ enum BoostBehavior {
     Set,
     AddButInstantTurnAround,
 }
+#[derive(EnumIter, PartialEq, Debug, Clone, Copy)]
+enum InternalCornerBehavior {
+    StopPlayer,
+    RedirectPlayer,
+}
 
 #[derive(Clone, PartialEq, Debug)]
 struct Particle {
@@ -376,6 +381,7 @@ struct Game {
     player: Player,
     particle_amalgamation_density: i32,
     particle_rotation_speed_towards_player: f32,
+    internal_corner_behavior: InternalCornerBehavior,
 }
 
 impl Game {
@@ -401,6 +407,7 @@ impl Game {
             player: Player::new(),
             particle_amalgamation_density: DEFAULT_PARTICLE_DENSITY_FOR_AMALGAMATION,
             particle_rotation_speed_towards_player: DEFAULT_PARTICLE_TURN_RADIANS_PER_TICK,
+            internal_corner_behavior: InternalCornerBehavior::RedirectPlayer,
         }
     }
 
@@ -2666,6 +2673,13 @@ mod tests {
         return game;
     }
 
+    fn set_up_player_stationary_slightly_to_the_side_of_corner_of_big_L() -> Game {
+        let mut game = set_up_player_on_platform();
+        game.place_line_of_blocks((14, 10), (14, 20), Block::Wall);
+        game.player.pos.add_assign(right_f() * 0.01);
+        return game;
+    }
+
     fn set_up_player_in_corner_of_backward_L() -> Game {
         let mut game = set_up_player_on_platform();
         let wall_x = game.player.pos.x() as i32 + 1;
@@ -3571,11 +3585,63 @@ mod tests {
 
     #[test]
     #[timeout(100)]
-    fn test_wall_jump_while_running_up_wall() {
+    fn test_wall_jump_while_starting_to_run_up_wall() {
         let mut game = set_up_player_hanging_on_wall_on_left();
         game.player.vel.set_y(1.0);
         game.player_jump_if_possible();
         assert!(game.player.vel.x() > 0.0);
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_wall_jump_while_running_up_wall() {
+        let mut game = set_up_player_hanging_on_wall_on_left();
+        game.player.vel.set_y(1.0);
+        game.tick_physics();
+        assert!(game.player.vel.x() == 0.0);
+        assert!(game.player.vel.y() > 0.0);
+        game.player_jump_if_possible();
+        assert!(game.player.vel.x() > 0.0);
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_wall_jump_while_running_up_wall_after_running_into_it() {
+        let mut game = set_up_player_about_to_run_into_corner_of_backward_L();
+        let away_from_wall = left_f();
+        game.tick_physics();
+        assert!(game.player.vel == zero_f());
+        assert!(game.player.pos == floatify(snap_to_grid(game.player.pos)));
+        game.player_jump_if_possible();
+        assert!(game.player.vel.y() > 0.0);
+        assert!(game.player.vel.x() == 0.0);
+        game.tick_physics();
+        game.tick_physics();
+        game.tick_physics();
+        assert!(game.player.vel.y() > 0.0);
+        assert!(game.player.vel.x() == 0.0);
+        game.player_jump_if_possible();
+        assert!(game.player.vel.y() > 0.0);
+        assert!(game.player.vel.dot(away_from_wall) > 0.0);
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_wall_jump_while_jumping_beside_wall() {
+        let mut game = set_up_player_in_corner_of_big_L();
+        let away_from_wall = right_f();
+        assert!(game.player.vel == zero_f());
+        assert!(game.player.pos == floatify(snap_to_grid(game.player.pos)));
+        game.player_jump_if_possible();
+        assert!(game.player.vel.x() == 0.0);
+        assert!(game.player.vel.y() > 0.0);
+        game.tick_physics();
+        game.tick_physics();
+        game.tick_physics();
+        assert!(game.player.vel.y() > 0.0);
+        assert!(game.player.vel.x() == 0.0);
+        game.player_jump_if_possible();
+        assert!(game.player.vel.y() > 0.0);
+        assert!(game.player.vel.dot(away_from_wall) > 0.0);
     }
 
     #[test]
@@ -3893,6 +3959,7 @@ mod tests {
         assert!(game.player.vel == floatify(game.player.desired_direction) * game.player.dash_vel);
     }
 
+    #[ignore] // TODO: Come back to this
     #[test]
     #[timeout(100)]
     fn test_slow_down_to_exactly_max_speed_horizontally_midair() {
@@ -3901,11 +3968,16 @@ mod tests {
         assert!(game.player.vel.x() == game.player.air_friction_start_speed);
     }
 
+    #[ignore] // TODO: Come back to this
     #[test]
     #[timeout(100)]
     fn test_slow_down_to_exactly_max_speed_vertically_midair() {
         let mut game = set_up_player_barely_fighting_air_friction_up_in_zero_g();
+        dbg!(game.player.kinematic_state());
+        dbg!(game.player.air_friction_start_speed);
+        dbg!(game.player.deceleration_from_air_friction);
         game.tick_physics();
+        dbg!(game.player.kinematic_state());
         assert!(game.player.vel.y() == game.player.air_friction_start_speed);
     }
 
@@ -5796,7 +5868,7 @@ mod tests {
     }
     #[test]
     #[timeout(100)]
-    fn test_turret_laser_does_not_hit_firing_turret() {
+    fn test_turret_does_not_laser_itself() {
         let mut game = set_up_turret_facing_direction(down_f());
         game.tick_physics();
         let maybe_hit_square = game.turrets[0]
@@ -5805,4 +5877,36 @@ mod tests {
             .collided_block_square;
         assert!(maybe_hit_square.is_none());
     }
+    #[test]
+    #[timeout(100)]
+    fn test_internal_wall_corner_momentum_interaction() {
+        for internal_corner_behavior in InternalCornerBehavior::iter() {
+            let mut game = set_up_player_about_to_run_into_corner_of_backward_L();
+            game.tick_physics();
+            match internal_corner_behavior {
+                InternalCornerBehavior::StopPlayer => assert!(game.player.vel == zero_f()),
+                InternalCornerBehavior::RedirectPlayer => {
+                    assert!(game.player.vel.x() == 0.0);
+                    assert!(game.player.vel.y() > 0.0);
+                }
+            }
+        }
+    }
+
+    #[ignore] // TODO
+    #[test]
+    #[timeout(100)]
+    fn test_turrets_and_step_foes_flash_red_when_hit_by_particle() {}
+    #[ignore] // TODO
+    #[test]
+    #[timeout(100)]
+    fn test_particle_amalgams_attract_particles() {}
+    #[ignore] // TODO
+    #[test]
+    #[timeout(100)]
+    fn test_turrets_attract_particles() {}
+    #[ignore] // TODO
+    #[test]
+    #[timeout(100)]
+    fn test_step_foes_move_towards_player() {}
 }
