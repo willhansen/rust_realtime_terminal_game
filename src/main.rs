@@ -683,19 +683,21 @@ impl Game {
         self.step_foes.push(step_foe);
         self.set_block(square, Block::StepFoe);
     }
+
     fn player_jump(&mut self) {
         let compression_bonus = self.jump_bonus_vel_from_compression();
 
         if self.player_is_grabbing_wall() || self.player_is_running_up_wall() {
-            let wall_direction = sign(self.player.desired_direction);
-            self.player
-                .vel
-                .add_assign(floatify(-wall_direction) * self.player.max_run_speed);
-            self.player.desired_direction = match self.player.wall_jump_behavior {
-                WallJumpBehavior::SwitchDirection => -wall_direction,
-                WallJumpBehavior::Stop => zero_i(),
-                WallJumpBehavior::KeepDirection => wall_direction,
-            };
+            if let Some(wall_direction) = self.get_lone_touched_wall_direction() {
+                self.player
+                    .vel
+                    .add_assign(floatify(-wall_direction) * self.player.max_run_speed);
+                self.player.desired_direction = match self.player.wall_jump_behavior {
+                    WallJumpBehavior::SwitchDirection => -wall_direction,
+                    WallJumpBehavior::Stop => zero_i(),
+                    WallJumpBehavior::KeepDirection => wall_direction,
+                };
+            }
         }
         self.player.vel.add_assign(p(0.0, self.player.jump_delta_v));
 
@@ -1606,7 +1608,23 @@ impl Game {
     }
 
     fn player_is_running_up_wall(&self) -> bool {
-        self.player_is_pressing_against_wall_horizontally() && self.player.vel.y() > 0.0
+        self.player_is_touching_wall_horizontally() && self.player.vel.y() > 0.0
+    }
+    fn player_is_touching_wall_horizontally(&self) -> bool {
+        self.player_exactly_touching_wall_in_direction(right_i())
+            || self.player_exactly_touching_wall_in_direction(left_i())
+    }
+
+    fn get_lone_touched_wall_direction(&self) -> Option<IPoint> {
+        let touching_left = self.player_exactly_touching_wall_in_direction(left_i());
+        let touching_right = self.player_exactly_touching_wall_in_direction(right_i());
+        if touching_left == touching_right {
+            None
+        } else if touching_left {
+            Some(left_i())
+        } else {
+            Some(right_i())
+        }
     }
 
     fn player_is_pressing_against_wall_horizontally(&self) -> bool {
@@ -2414,6 +2432,7 @@ mod tests {
         }
         game
     }
+
     fn set_up_player_in_bottom_right_wall_corner() -> Game {
         let mut game = Game::new(30, 30);
         game.place_boundary_wall();
@@ -2477,6 +2496,7 @@ mod tests {
         game.place_line_of_blocks((0, platform_y), (29, platform_y), Block::Wall);
         return game;
     }
+
     fn set_up_player_on_amalgam_platform() -> Game {
         let mut game = set_up_just_player();
         let platform_y = game.player.pos.y() as i32 - 1;
@@ -2502,6 +2522,7 @@ mod tests {
             collided_block_square: p(5, 5),
         }
     }
+
     fn get_player_block_collision_from_running_into_wall_on_left() -> PlayerBlockCollision {
         PlayerBlockCollision {
             time_in_ticks: 0.0,
@@ -2528,6 +2549,7 @@ mod tests {
         game.player.last_collision = Some(collision);
         game
     }
+
     fn set_up_player_fully_compressed_from_vertical_jump_while_running_right_on_platform() -> Game {
         let mut game = set_up_player_fully_compressed_from_vertical_jump_on_platform();
         game.player.vel = right_f() * game.player.max_run_speed;
@@ -2540,6 +2562,7 @@ mod tests {
         game.player.desired_direction = right_i();
         game
     }
+
     fn set_up_player_fully_compressed_from_leftwards_impact_on_wall() -> Game {
         let mut game = set_up_player_hanging_on_wall_on_left();
         let mut collision = get_player_block_collision_from_running_into_wall_on_left();
@@ -2547,6 +2570,7 @@ mod tests {
         game.player.last_collision = Some(collision);
         game
     }
+
     fn set_up_player_fully_compressed_from_down_leftwards_impact_on_wall() -> Game {
         let mut game = set_up_player_hanging_on_wall_on_left();
         let mut collision = get_player_block_collision_from_running_into_wall_on_left();
@@ -2563,6 +2587,7 @@ mod tests {
         game.place_particle_with_velocity(particle_start_pos, right_f() * DEFAULT_PARTICLE_SPEED);
         game
     }
+
     fn set_up_one_stationary_particle() -> Game {
         let mut game = set_up_game();
         game.place_particle(p(15.0, 15.0));
@@ -2575,24 +2600,28 @@ mod tests {
         game.player.desired_direction = right_i();
         game
     }
+
     fn set_up_player_running_full_speed_to_left_on_platform() -> Game {
         let mut game = set_up_player_on_platform();
         game.player.vel = left_f() * game.player.max_run_speed;
         game.player.desired_direction = left_i();
         game
     }
+
     fn set_up_player_running_double_max_speed_left() -> Game {
         let mut game = set_up_player_on_platform();
         game.player.vel = left_f() * game.player.max_run_speed * 2.0;
         game.player.desired_direction = left_i();
         game
     }
+
     fn set_up_player_running_double_max_run_speed_right() -> Game {
         let mut game = set_up_player_on_platform();
         game.player.vel = right_f() * game.player.max_run_speed * 2.0;
         game.player.desired_direction = right_i();
         game
     }
+
     fn set_up_player_running_double_max_boost_speed_right() -> Game {
         let mut game = set_up_player_on_platform();
         game.player.vel = right_f() * game.player.dash_vel * 2.0;
@@ -2621,6 +2650,7 @@ mod tests {
         game.player.pos.add_assign(p(0.999, 0.0));
         game
     }
+
     fn set_up_player_about_to_land_straight_down() -> Game {
         let mut game = set_up_just_player();
         game.player.vel = down_f() * game.player.max_run_speed; // somewhat arbitrary
@@ -2742,6 +2772,7 @@ mod tests {
         );
         return game;
     }
+
     fn set_up_player_about_to_run_into_corner_of_backward_L() -> Game {
         let mut game = set_up_player_in_corner_of_backward_L();
         game.player.pos.add_assign(left_f() * 0.1);
@@ -2769,6 +2800,7 @@ mod tests {
         game.player.desired_direction.set_x(-1);
         return game;
     }
+
     fn set_up_player_about_to_reach_peak_of_jump() -> Game {
         let mut game = set_up_just_player();
         game.player.vel = up_f() * 0.0001;
@@ -2827,6 +2859,7 @@ mod tests {
         }
         game
     }
+
     fn set_up_30_particles_moving_slowly_right_from_origin() -> Game {
         let mut game = set_up_game();
         let start_pos = p(0.0, 0.0);
@@ -2836,6 +2869,7 @@ mod tests {
         }
         game
     }
+
     fn set_up_particles_about_to_combine() -> Game {
         let mut game = set_up_game();
         game.place_n_particles(
@@ -2865,6 +2899,7 @@ mod tests {
         }
         game
     }
+
     fn set_up_particle_about_to_hit_concave_corner_exactly() -> Game {
         let plus_center = p(7, 7);
         let mut game = set_up_plus_sign_wall_blocks_at_square(plus_center);
@@ -2915,6 +2950,7 @@ mod tests {
     fn set_up_turret_facing_up() -> Game {
         set_up_turret_facing_direction(up_f())
     }
+
     fn set_up_turret_facing_direction(dir: FPoint) -> Game {
         let mut game = set_up_game();
         game.place_turret(game.mid_square());
@@ -2946,17 +2982,21 @@ mod tests {
         game.player.acceleration_from_floor_traction = 0.0;
         game.player.deceleration_from_ground_friction = 0.0;
     }
+
     fn be_in_vacuum(game: &mut Game) {
         game.player.acceleration_from_air_traction = 0.0;
         game.player.deceleration_from_air_friction = 0.0;
     }
+
     fn be_in_zero_g(game: &mut Game) {
         game.player.acceleration_from_gravity = 0.0
     }
+
     fn be_in_space(game: &mut Game) {
         be_in_zero_g(game);
         be_in_vacuum(game);
     }
+
     fn be_in_frictionless_space(game: &mut Game) {
         be_frictionless(game);
         be_in_space(game);
@@ -3221,6 +3261,7 @@ mod tests {
 
         assert!(game.player.pos == start_pos + left_f() * 0.5);
     }
+
     #[test]
     #[timeout(100)]
     fn test_move_player_for_multiple_ticks() {
@@ -3428,6 +3469,7 @@ mod tests {
         }
         assert!(nearly_equal(game.player.pos.y(), start_pos.y()));
     }
+
     #[test]
     #[timeout(100)]
     fn test_land_after_jump__moving_right() {
@@ -3446,6 +3488,7 @@ mod tests {
         }
         assert!(nearly_equal(game.player.pos.y(), start_pos.y()));
     }
+
     #[test]
     #[timeout(100)]
     fn test_land_after_jump__moving_left() {
@@ -3677,10 +3720,12 @@ mod tests {
         assert!(game.player.vel.y() > 0.0);
         assert!(game.player.vel.dot(away_from_wall) > 0.0);
     }
+
     #[test]
     #[timeout(100)]
     fn test_wall_jump_while_jumping_beside_wall() {
         let mut game = set_up_player_in_corner_of_big_L();
+        game.internal_corner_behavior = InternalCornerBehavior::StopPlayer;
         let away_from_wall = right_f();
         assert!(game.player.vel == zero_f());
         assert!(game.player.pos == floatify(snap_to_grid(game.player.pos)));
@@ -4148,6 +4193,7 @@ mod tests {
         assert!(game.get_buffered_glyph(start_square + p(1, 0)).character == '\u{28D2}');
         assert!(game.get_buffered_glyph(start_square + p(2, 0)).character == '\u{2842}');
     }
+
     #[test]
     #[timeout(100)]
     fn test_braille_point() {
@@ -4228,6 +4274,7 @@ mod tests {
             assert!(game.player.vel.x() == correct_final_vx);
         }
     }
+
     #[test]
     #[timeout(100)]
     fn test_boost_trying_to_turn_around() {
@@ -4452,6 +4499,7 @@ mod tests {
         assert!(game.particles.len() == 1);
         assert!(game.particles[0].pos == pos);
     }
+
     #[test]
     #[timeout(100)]
     fn test_draw_placed_particle() {
@@ -4494,6 +4542,7 @@ mod tests {
         assert!(game.get_indexes_of_particles_in_square(p(7, 5)).len() == 4);
         assert!(game.get_indexes_of_particles_in_square(p(-7, -5)).len() == 0);
     }
+
     #[test]
     #[timeout(100)]
     fn test_count_braille_dots_in_square() {
@@ -4527,6 +4576,7 @@ mod tests {
         assert!(game.get_indexes_of_particles_in_square(p(5, 5)).len() == 8);
         assert!(game.count_braille_dots_in_square(p(5, 5)) == 8);
     }
+
     #[test]
     #[timeout(100)]
     fn test_particles__can_expire() {
@@ -4552,6 +4602,7 @@ mod tests {
         game.update_output_buffer();
         assert!(game.get_buffered_glyph(snap_to_grid(point)).character == Block::Air.character());
     }
+
     #[test]
     #[timeout(100)]
     fn test_particles__move_around() {
@@ -4787,6 +4838,7 @@ mod tests {
         // Assertion
         assert!(game.get_player_compression_fraction() == 1.0);
     }
+
     #[test]
     #[timeout(100)]
     fn test_leaving_ceiling_cancels_vertical_compression() {
@@ -4806,6 +4858,7 @@ mod tests {
         // Assertion
         assert!(game.get_player_compression_fraction() == 1.0);
     }
+
     #[test]
     #[timeout(100)]
     fn test_leaving_wall_cancels_horizontal_compression() {
@@ -4950,6 +5003,7 @@ mod tests {
 
         assert!(!game.player_exactly_touching_wall_in_direction(p(0, -1)));
     }
+
     #[test]
     #[timeout(100)]
     fn test_player_exactly_touching_block_down_left_supported() {
@@ -4960,6 +5014,7 @@ mod tests {
 
         assert!(game.player_exactly_touching_wall_in_direction(p(0, -1)));
     }
+
     #[test]
     #[timeout(100)]
     fn test_player_exactly_touching_block_on_right() {
@@ -5120,6 +5175,7 @@ mod tests {
 
         assert!(magnitude(game.player.vel) <= magnitude(vel_at_start_of_jump));
     }
+
     #[ignore]
     #[test]
     #[timeout(100)]
@@ -5265,6 +5321,7 @@ mod tests {
         assert!(game.particles.len() == 30);
         assert!(matches!(game.get_block(start_square), Block::Air));
     }
+
     #[test]
     #[timeout(100)]
     fn test_particle_amalgams_absorb_particles_when_particle_lands_inside() {
@@ -5316,6 +5373,7 @@ mod tests {
         assert!(collision.collided_block_square.unwrap() == p(5, 5));
         assert!(collision.collision_normal.unwrap() == p(-1, 0));
     }
+
     #[test]
     #[timeout(100)]
     fn test_squarecast__hit_some_blocks_with_a_point() {
@@ -5373,6 +5431,7 @@ mod tests {
         assert!(collision.collided_block_square.unwrap() == p(6, 6));
         assert!(collision.collision_normal.unwrap() == p(1, 0));
     }
+
     #[test]
     #[timeout(100)]
     fn test_linecast__hit_near_corner_at_grid_bottom() {
@@ -5385,6 +5444,7 @@ mod tests {
         assert!(collision.collided_block_square.unwrap() == plus_center + p(-1, 0));
         assert!(collision.collision_normal.unwrap() == p(0, 1));
     }
+
     #[test]
     #[timeout(100)]
     fn test_linecast_walls_only() {
@@ -5412,6 +5472,7 @@ mod tests {
         let end_vel = game.particles[0].vel;
         assert!(end_vel == -start_vel);
     }
+
     #[test]
     #[timeout(100)]
     fn test_particle__hit_inner_corner_exactly() {
@@ -5431,6 +5492,7 @@ mod tests {
             set_up_particle_moving_in_direction_about_to_hit_wall_at_square(down_f(), p(15, 0));
         game.tick_physics();
     }
+
     #[test]
     #[timeout(100)]
     fn test_particle_bounce_off_wall_at_top_of_grid() {
@@ -5438,6 +5500,7 @@ mod tests {
             set_up_particle_moving_in_direction_about_to_hit_wall_at_square(up_f(), p(15, 29));
         game.tick_physics();
     }
+
     #[test]
     #[timeout(100)]
     fn test_particle_bounce_off_wall_at_right_of_grid() {
@@ -5445,6 +5508,7 @@ mod tests {
             set_up_particle_moving_in_direction_about_to_hit_wall_at_square(right_f(), p(29, 15));
         game.tick_physics();
     }
+
     #[test]
     #[timeout(100)]
     fn test_particle_bounce_off_wall_at_left_of_grid() {
@@ -5452,6 +5516,7 @@ mod tests {
             set_up_particle_moving_in_direction_about_to_hit_wall_at_square(left_f(), p(0, 15));
         game.tick_physics();
     }
+
     #[test]
     #[timeout(100)]
     fn test_linecast_straight_into_wall_seam() {
@@ -5464,18 +5529,21 @@ mod tests {
         //dbg!(&collision);
         assert!(collision.hit_something());
     }
+
     #[test]
     #[timeout(100)]
     fn test_occupancy_with_no_walls() {
         let game = set_up_game();
         assert!(game.get_occupancy_of_nearby_walls(p(5, 5)) == [[false; 3]; 3]);
     }
+
     #[test]
     #[timeout(100)]
     fn test_occupancy_with_all_walls() {
         let game = set_up_game_filled_with_walls();
         assert!(game.get_occupancy_of_nearby_walls(p(5, 5)) == [[true; 3]; 3]);
     }
+
     #[test]
     #[timeout(100)]
     fn test_occupancy_with_some_walls() {
@@ -5494,6 +5562,7 @@ mod tests {
                 ]
         );
     }
+
     #[test]
     #[timeout(100)]
     fn test_occupancy_on_grid_edges() {
@@ -5513,6 +5582,7 @@ mod tests {
             game.tick_physics();
         }
     }
+
     #[test]
     #[timeout(100)]
     fn test_dash_right_then_up_in_corner() {
@@ -5524,6 +5594,7 @@ mod tests {
         game.player_dash();
         game.tick_physics();
     }
+
     #[test]
     #[timeout(100)]
     fn test_particles_should_slowly_turn_towards_player() {
@@ -5592,6 +5663,7 @@ mod tests {
         game.tick_physics();
         assert!(game.particles.is_empty());
     }
+
     #[test]
     #[timeout(100)]
     fn test_verify_time_to_jump_peak_function() {
@@ -5684,6 +5756,7 @@ mod tests {
         let distance_from_start = magnitude(game.player.pos - start_pos);
         assert!(distance_from_start < 0.5);
     }
+
     #[test]
     #[timeout(100)]
     fn test_player_wants_to_stop_by_aiming_at_floor() {
@@ -5691,6 +5764,7 @@ mod tests {
         game.player.desired_direction = down_i();
         assert!(game.player_wants_to_come_to_a_full_stop());
     }
+
     #[test]
     #[timeout(100)]
     fn test_player_does_not_want_to_stop_if_aiming_forwards() {
@@ -5698,6 +5772,7 @@ mod tests {
         game.player.desired_direction = right_i();
         assert!(!game.player_wants_to_come_to_a_full_stop());
     }
+
     #[test]
     #[timeout(100)]
     fn test_player_does_not_want_to_stop_if_aiming_backwards() {
@@ -5705,18 +5780,21 @@ mod tests {
         game.player.desired_direction = left_i();
         assert!(!game.player_wants_to_come_to_a_full_stop());
     }
+
     #[test]
     #[timeout(100)]
     fn test_player_wants_to_stop_when_grabbing_wall() {
         let game = set_up_player_hanging_on_wall_on_left();
         assert!(game.player_wants_to_come_to_a_full_stop());
     }
+
     #[test]
     #[timeout(100)]
     fn test_player_does_not_want_to_stop_when_midair() {
         let game = set_up_just_player();
         assert!(!game.player_wants_to_come_to_a_full_stop());
     }
+
     #[test]
     #[timeout(100)]
     fn test_player_cannot_fly() {
@@ -5725,6 +5803,7 @@ mod tests {
         game.tick_physics();
         assert!(game.player.vel.y() < 0.0);
     }
+
     #[test]
     #[timeout(100)]
     fn test_ground_friction_is_left_right_symmetric() {
@@ -5736,6 +5815,7 @@ mod tests {
         game2.tick_physics();
         assert!(game1.player.vel.x().abs() == game2.player.vel.x().abs());
     }
+
     #[test]
     #[timeout(100)]
     fn test_grab_wall_after_impact_with_wall() {
@@ -5747,6 +5827,7 @@ mod tests {
         assert!(game.player.vel.y() == 0.0);
         assert!(game.player.accel == zero_f());
     }
+
     #[test]
     #[timeout(100)]
     fn test_boost_particles_interpolate_starting_velocities() {
@@ -5768,6 +5849,7 @@ mod tests {
         let turret = Turret::new();
         assert!(turret.laser_direction != zero_f());
     }
+
     #[test]
     #[timeout(100)]
     fn test_place_turret() {
@@ -5779,6 +5861,7 @@ mod tests {
         assert!(game.turrets[0].laser_direction == up_f());
         assert!(game.get_block(turret_square) == Block::Turret);
     }
+
     #[test]
     #[timeout(100)]
     fn test_turret_is_drawn() {
@@ -5786,6 +5869,7 @@ mod tests {
         game.update_output_buffer();
         assert!(game.get_buffered_glyph(game.turrets[0].square) == &Block::Turret.glyph());
     }
+
     #[test]
     #[timeout(100)]
     fn test_turret_fires_laser() {
@@ -5793,6 +5877,7 @@ mod tests {
         game.tick_physics();
         assert!(game.turrets[0].laser_firing_result.is_some());
     }
+
     #[test]
     #[timeout(100)]
     fn test_turret_laser_is_visible_red_braille() {
@@ -5804,6 +5889,7 @@ mod tests {
         assert!(Glyph::is_braille(glyph.character));
         assert!(glyph.fg_color == ColorName::Red);
     }
+
     #[test]
     #[timeout(100)]
     fn test_turret_lasers_rotate() {
@@ -5832,6 +5918,7 @@ mod tests {
         assert!(laser_result.hit_something());
         assert!(laser_result.collided_particle_index == Some(0));
     }
+
     #[test]
     #[timeout(100)]
     fn test_turret_laser_destroys_particle() {
@@ -5865,6 +5952,7 @@ mod tests {
         game.kill_player();
         assert!(!game.player.alive);
     }
+
     #[test]
     #[timeout(100)]
     fn test_particles_on_player_death() {
@@ -5873,6 +5961,7 @@ mod tests {
         game.kill_player();
         assert!(game.particles.len() > 30);
     }
+
     #[test]
     #[timeout(100)]
     fn test_k_button_kills_player() {
@@ -5881,6 +5970,7 @@ mod tests {
         game.handle_event(Event::Key(Key::Char('k')));
         assert!(!game.player.alive);
     }
+
     #[test]
     #[timeout(100)]
     fn test_particle_amalgamation_gets_all_particles_in_square() {
@@ -5890,6 +5980,7 @@ mod tests {
 
         assert!(game.particles.is_empty());
     }
+
     #[test]
     #[timeout(100)]
     fn test_existing_particle_amalgams_do_not_grab_new_particles_on_same_square() {
@@ -5921,6 +6012,7 @@ mod tests {
         assert!(game.particles.len() == 1);
         assert!(snap_to_grid(game.particles[0].pos) == amalgam_square);
     }
+
     #[test]
     #[timeout(100)]
     fn test_turret_does_not_laser_itself() {
@@ -5932,6 +6024,7 @@ mod tests {
             .collided_block_square;
         assert!(maybe_hit_square.is_none());
     }
+
     #[test]
     #[timeout(100)]
     fn test_internal_wall_corner_momentum_interaction__right_to_up() {
@@ -5948,6 +6041,7 @@ mod tests {
             }
         }
     }
+
     #[test]
     #[timeout(100)]
     fn test_internal_wall_corner_momentum_interaction__down_to_right() {
@@ -5977,14 +6071,17 @@ mod tests {
     #[test]
     #[timeout(100)]
     fn test_turrets_and_step_foes_flash_red_when_hit_by_particle() {}
+
     #[ignore] // TODO
     #[test]
     #[timeout(100)]
     fn test_particle_amalgams_attract_particles() {}
+
     #[ignore] // TODO
     #[test]
     #[timeout(100)]
     fn test_turrets_attract_particles() {}
+
     #[ignore] // TODO
     #[test]
     #[timeout(100)]
@@ -6002,5 +6099,13 @@ mod tests {
             [true, true, true],
         ]);
         assert!(adjacency == correct_adjacency);
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_player_only_needs_to_be_next_to_a_wall_to_count_as_running_up_it() {
+        let mut game = set_up_player_in_corner_of_big_L();
+        game.player_jump_if_possible();
+        assert!(game.player_is_running_up_wall());
     }
 }

@@ -614,13 +614,13 @@ pub trait SignedExt: num::Signed {
 impl<T: num::Signed> SignedExt for T {
     // I am so angry this is not built-in
     fn sign(&self) -> T {
-        if *self == T::zero() {
-            return T::zero();
+        return if *self == T::zero() {
+            T::zero()
         } else if self.is_negative() {
-            return -T::one();
+            -T::one()
         } else {
-            return T::one();
-        }
+            T::one()
+        };
     }
 }
 
