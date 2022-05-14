@@ -52,10 +52,11 @@ const DEFAULT_PLAYER_COYOTE_TIME_DURATION_S: f32 = 0.1;
 const DEFAULT_PLAYER_MAX_COYOTE_TIME: f32 = (DEFAULT_PLAYER_COYOTE_TIME_DURATION_S * MAX_FPS) + 1.0;
 
 const DEFAULT_PLAYER_JUMP_HEIGHT_IN_GRID_COORDINATES: f32 = 3.0;
+const DEFAULT_PLAYER_JUMP_DURATION_IN_SECONDS: f32 = 0.5;
 
 const VERTICAL_STRETCH_FACTOR: f32 = 2.0; // because the grid is not really square
 
-const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
+//const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
 const DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION: f32 = 0.2;
 const DEFAULT_PLAYER_ACCELERATION_FROM_AIR_TRACTION: f32 =
     DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION;
@@ -311,9 +312,14 @@ struct Player {
 
 impl Player {
     fn new() -> Player {
+        let jump_duration_in_ticks = DEFAULT_PLAYER_JUMP_DURATION_IN_SECONDS * MAX_FPS;
+        let g = g_from_jump_height_and_duration(
+            DEFAULT_PLAYER_JUMP_HEIGHT_IN_GRID_COORDINATES,
+            jump_duration_in_ticks,
+        );
         let jump_delta_v = calc_jump_vel_from_height_in_grid_coordinates(
             DEFAULT_PLAYER_JUMP_HEIGHT_IN_GRID_COORDINATES,
-            DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
+            g,
             VERTICAL_STRETCH_FACTOR,
         );
         Player {
@@ -329,7 +335,7 @@ impl Player {
             accel: Point::<f32>::new(0.0, 0.0),
             desired_direction: p(0, 0),
             jump_delta_v: jump_delta_v,
-            acceleration_from_gravity: DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
+            acceleration_from_gravity: g,
             acceleration_from_floor_traction: DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION,
             acceleration_from_air_traction: DEFAULT_PLAYER_ACCELERATION_FROM_AIR_TRACTION,
             deceleration_from_air_friction: DEFAULT_PLAYER_AIR_FRICTION_DECELERATION,
@@ -2508,14 +2514,14 @@ mod tests {
         return game;
     }
 
-    fn get_vertical_jump_landing_player_block_collision() -> PlayerBlockCollision {
+    fn get_vertical_jump_landing_player_block_collision(player: &Player) -> PlayerBlockCollision {
         PlayerBlockCollision {
             time_in_ticks: 0.0,
             normal: p(0, 1),
             collider_velocity: down_f()
                 * calc_jump_vel_from_height_in_grid_coordinates(
                     DEFAULT_PLAYER_JUMP_HEIGHT_IN_GRID_COORDINATES,
-                    DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY,
+                    player.acceleration_from_gravity,
                     VERTICAL_STRETCH_FACTOR,
                 ),
             collider_pos: p(5.0, 6.0),
@@ -2535,7 +2541,7 @@ mod tests {
 
     fn set_up_player_halfway_through_decompressing_from_vertical_jump_on_platform() -> Game {
         let mut game = set_up_player_on_platform();
-        let mut collision = get_vertical_jump_landing_player_block_collision();
+        let mut collision = get_vertical_jump_landing_player_block_collision(&game.player);
         collision.time_in_ticks = game.time_in_ticks()
             - (DEFAULT_TICKS_TO_MAX_COMPRESSION + DEFAULT_TICKS_FROM_MAX_TO_END_COMPRESSION / 2.0);
         game.player.last_collision = Some(collision);
@@ -2544,7 +2550,7 @@ mod tests {
 
     fn set_up_player_fully_compressed_from_vertical_jump_on_platform() -> Game {
         let mut game = set_up_player_on_platform();
-        let mut collision = get_vertical_jump_landing_player_block_collision();
+        let mut collision = get_vertical_jump_landing_player_block_collision(&game.player);
         collision.time_in_ticks = game.time_in_ticks() - DEFAULT_TICKS_TO_MAX_COMPRESSION;
         game.player.last_collision = Some(collision);
         game

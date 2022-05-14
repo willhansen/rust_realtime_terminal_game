@@ -940,6 +940,11 @@ pub fn time_to_jump_landing(jump_vel: f32, grav_accel: f32) -> f32 {
     time_to_jump_peak(jump_vel, grav_accel) * 2.0
 }
 
+pub fn g_from_jump_height_and_duration(jump_height: f32, duration: f32) -> f32 {
+    let time_to_peak = duration / 2.0;
+    2.0 * jump_height / (time_to_peak * time_to_peak)
+}
+
 pub fn ticks_to_stop_from_speed(v0: f32, a: f32) -> Option<f32> {
     if a == 0.0 {
         None
