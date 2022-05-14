@@ -52,6 +52,18 @@ pub fn down_f() -> Point<f32> {
 pub fn zero_f() -> Point<f32> {
     p(0.0, 0.0)
 }
+pub fn up_right_f() -> Point<f32> {
+    up_f() + right_f()
+}
+pub fn up_left_f() -> Point<f32> {
+    up_f() + left_f()
+}
+pub fn down_right_f() -> Point<f32> {
+    down_f() + right_f()
+}
+pub fn down_left_f() -> Point<f32> {
+    down_f() + left_f()
+}
 
 pub fn right_i() -> IPoint {
     p(1, 0)
@@ -121,7 +133,7 @@ enum EdgeExtension {
     Retracted,
 }
 
-pub type AdjacentOccupancyMask = [[bool; 3]; 3];
+pub type LocalBlockOccupancy = [[bool; 3]; 3];
 // TODO: use
 pub type SquareEdgeExtensions = [[EdgeExtension; 3]; 3];
 
@@ -175,7 +187,7 @@ pub fn single_block_linecast_with_filled_cracks(
     start_point: Point<f32>,
     end_point: Point<f32>,
     grid_square_center: Point<i32>,
-    adjacent_squares_occupied: AdjacentOccupancyMask,
+    adjacent_squares_occupied: LocalBlockOccupancy,
 ) -> SquarecastResult {
     single_block_squarecast_with_edge_extensions(
         start_point,
@@ -191,7 +203,7 @@ pub fn single_block_squarecast_with_edge_extensions(
     end_point: Point<f32>,
     grid_square_center: Point<i32>,
     moving_square_side_length: f32,
-    adjacent_squares_occupied: AdjacentOccupancyMask,
+    adjacent_squares_occupied: LocalBlockOccupancy,
 ) -> SquarecastResult {
     let default_result = SquarecastResult::no_hit_result(start_point, end_point);
     // formulates the problem as a point crossing the boundary of an r=1 square
@@ -265,7 +277,7 @@ pub fn single_block_squarecast_with_edge_extensions(
 pub fn get_counter_clockwise_collision_edges_with_known_adjacency(
     center: FPoint,
     nominal_side_length: f32,
-    adjacency_map: AdjacentOccupancyMask,
+    adjacency_map: LocalBlockOccupancy,
 ) -> Vec<geo::Line<f32>> {
     // ┌────────────────┐
     // │                │
@@ -1064,6 +1076,67 @@ pub fn remove_by_value<T: PartialEq>(vec: &mut Vec<T>, val: &T) {
     vec.retain(|x| *x != *val);
 }
 
+pub fn get_3x3_squares() -> Vec<IPoint> {
+    let mut output_squares = Vec::<IPoint>::new();
+    for dx in -1..=1 {
+        for dy in -1..=1 {
+            let delta = p(dx, dy);
+            output_squares.push(delta);
+        }
+    }
+    output_squares
+}
+
+pub fn empty_local_block_occupancy() -> LocalBlockOccupancy {
+    [[false; 3]; 3]
+}
+
+pub fn flip_block_occupancy_x(occupancy: LocalBlockOccupancy) -> LocalBlockOccupancy {
+    let mut flipped = empty_local_block_occupancy();
+    for y in 0..3 {
+        for x in 0..3 {
+            flipped[x][y] = occupancy[2 - x][y];
+        }
+    }
+    flipped
+}
+pub fn flip_block_occupancy_y(occupancy: LocalBlockOccupancy) -> LocalBlockOccupancy {
+    let mut flipped = empty_local_block_occupancy();
+    for x in 0..3 {
+        for y in 0..3 {
+            flipped[x][y] = occupancy[x][2 - y];
+        }
+    }
+    flipped
+}
+
+pub fn is_deep_concave_corner(candidate: LocalBlockOccupancy) -> bool {
+    let eg = visible_xy_to_actual_xy([
+        [true, false, false],
+        [true, false, false],
+        [true, true, true],
+    ]);
+    let possible_corners = vec![
+        eg,
+        flip_block_occupancy_x(eg),
+        flip_block_occupancy_y(eg),
+        flip_block_occupancy_x(flip_block_occupancy_y(eg)),
+    ];
+    possible_corners.contains(&candidate)
+}
+pub fn inside_direction_of_corner(corner: LocalBlockOccupancy) -> FPoint {
+    let mut output_vector = zero_f();
+    for i in 0..4 {
+        let dir = orthogonal_direction(i as i32);
+        let (x, y) = dir.x_y();
+        let square_empty = corner[(x + 1) as usize][(y + 1) as usize] == false;
+        if square_empty {
+            output_vector.add_assign(floatify(dir));
+        }
+    }
+    output_vector
+}
+
 // for tests
 pub fn points_nearly_equal(a: Point<f32>, b: Point<f32>) -> bool {
     let result = magnitude(a - b) < 0.0001;
@@ -1083,7 +1156,7 @@ pub fn snap_to_square_perimeter_with_forbidden_sides(
     point_to_snap: Point<f32>,
     square_center: Point<f32>,
     square_side_length: f32,
-    forbidden_sides: AdjacentOccupancyMask,
+    forbidden_sides: LocalBlockOccupancy,
 ) -> Point<f32> {
     let square_radius = square_side_length / 2.0;
     let relative_normalized_point = (point_to_snap - square_center) / square_radius;
@@ -1128,6 +1201,20 @@ pub fn snap_to_square_perimeter(
         square_side_length,
         [[false; 3]; 3],
     )
+}
+
+pub fn reflect_vector_over_axis(to_reflect: FPoint, reflection_axis: FPoint) -> FPoint {
+    let axis_angle = angle_of_vector(reflection_axis);
+    // 2d reflection matrix
+    // A B
+    // C D
+    let a2 = 2.0 * axis_angle;
+    let A = a2.cos();
+    let B = a2.sin();
+    let C = a2.sin();
+    let D = -a2.cos();
+    let (x, y) = to_reflect.x_y();
+    p(x * A + y * B, x * C + y * D)
 }
 
 #[cfg(test)]
@@ -1824,7 +1911,7 @@ mod tests {
     }
     #[test]
     fn test_snap_to_square_perimeter_with_forbidden_sides() {
-        let mut top_filled: AdjacentOccupancyMask = [[false; 3]; 3];
+        let mut top_filled: LocalBlockOccupancy = [[false; 3]; 3];
         top_filled[1][2] = true;
 
         let square = p(1, 1);
@@ -2167,5 +2254,25 @@ mod tests {
                 .vel
                 == zero_f()
         );
+    }
+
+    #[test]
+    fn test_reflection() {
+        assert!(points_nearly_equal(
+            reflect_vector_over_axis(left_f(), up_f()),
+            right_f()
+        ));
+        assert!(points_nearly_equal(
+            reflect_vector_over_axis(left_f() * 123.0, down_f() * 0.3),
+            right_f() * 123.0
+        ));
+        assert!(points_nearly_equal(
+            reflect_vector_over_axis(p(201.0, 3.5), right_f()),
+            p(201.0, -3.5)
+        ));
+        assert!(points_nearly_equal(
+            reflect_vector_over_axis(p(0.0, 5.0), up_right_f()),
+            p(5.0, 0.0)
+        ));
     }
 }

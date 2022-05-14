@@ -702,6 +702,28 @@ impl Game {
         self.player.vel.add_assign(compression_bonus);
     }
 
+    fn player_is_exactly_on_square(&self) -> bool {
+        self.pos_is_exactly_on_square(self.player.pos)
+    }
+    fn pos_is_exactly_on_square(&self, pos: FPoint) -> bool {
+        pos == floatify(snap_to_grid(pos))
+    }
+
+    fn try_get_player_square_adjacency(&self) -> Option<LocalBlockOccupancy> {
+        self.get_square_adjacency(self.player_square())
+    }
+
+    fn is_deep_corner(&self, square: IPoint) -> bool {
+        if let Some(adjacency) = self.get_square_adjacency(square) {
+            is_deep_concave_corner(adjacency)
+        } else {
+            false
+        }
+    }
+    fn pos_is_in_deep_corner(&self, pos: FPoint) -> bool {
+        self.is_deep_corner(snap_to_grid(pos))
+    }
+
     fn player_can_jump(&self) -> bool {
         self.player_is_supported()
             || self.player_is_grabbing_wall()
@@ -1470,8 +1492,8 @@ impl Game {
         }
     }
 
-    fn get_occupancy_of_nearby_walls(&self, square: Point<i32>) -> AdjacentOccupancyMask {
-        let mut output = [[false; 3]; 3];
+    fn get_occupancy_of_nearby_walls(&self, square: Point<i32>) -> LocalBlockOccupancy {
+        let mut output = empty_local_block_occupancy();
         for i in 0..3 {
             for j in 0..3 {
                 let rx = i as i32 - 1;
@@ -1642,7 +1664,7 @@ impl Game {
 
         let mut remaining_time = dt_in_ticks;
         let mut collision_occurred = false;
-        let mut collisions = Vec::new();
+        let mut collisions_that_happened = Vec::new();
 
         let mut timeout_counter = 0;
         while remaining_time > 0.0 {
@@ -1650,7 +1672,7 @@ impl Game {
             if timeout_counter > 100 {
                 dbg!(start_kinematic_state);
                 dbg!(remaining_time);
-                dbg!(collisions.last());
+                dbg!(collisions_that_happened.last());
                 panic!("player kinematics looped too much :( ");
             }
 
@@ -1681,7 +1703,7 @@ impl Game {
             if maybe_collision.hit_something() {
                 let collision = maybe_collision;
                 collision_occurred = true;
-                collisions.push(collision.clone());
+                collisions_that_happened.push(collision.clone());
 
                 let fraction_through_remaining_movement_just_moved = inverse_lerp_2d(
                     start_kinematic_state.pos,
@@ -1716,6 +1738,16 @@ impl Game {
                     collided_block_square: collision.collided_block_square.unwrap(),
                 });
 
+                if self.internal_corner_behavior == InternalCornerBehavior::RedirectPlayer
+                    && self.pos_is_exactly_on_square(end_state.pos)
+                    && self.pos_is_in_deep_corner(end_state.pos)
+                {
+                    let player_square_adjacency = self.try_get_player_square_adjacency().unwrap();
+                    let symmetry_axis: FPoint = inside_direction_of_corner(player_square_adjacency);
+                    end_state.vel = -reflect_vector_over_axis(end_state.vel, symmetry_axis);
+                    // not super sure about this one
+                    end_state.accel = -reflect_vector_over_axis(end_state.accel, symmetry_axis);
+                }
                 if collision.collision_normal.unwrap().x() == 0 {
                     end_state.vel.set_y(0.0);
                     end_state.accel.set_y(0.0);
@@ -1804,6 +1836,10 @@ impl Game {
         (new_move_start, new_relative_target, new_vel)
     }
 
+    fn player_square(&self) -> IPoint {
+        snap_to_grid(self.player.pos)
+    }
+
     fn movement_is_normal_to_last_collision(&mut self, step_taken: FPoint) -> bool {
         self.player.last_collision.is_some()
             && step_taken.dot(floatify(
@@ -1817,6 +1853,22 @@ impl Game {
         {
             self.player.recent_kinematic_states.pop_back();
         }
+    }
+
+    fn get_square_adjacency(&self, square: IPoint) -> Option<LocalBlockOccupancy> {
+        let mut local_block_occupancy = empty_local_block_occupancy();
+        for rel_square in get_3x3_squares() {
+            let abs_square = rel_square + square;
+            let abs_square_blocks_player = if let Some(block) = self.try_get_block(abs_square) {
+                block.can_collide_with_player()
+            } else {
+                return None;
+            };
+            let index_2d = rel_square + p(1, 1);
+            local_block_occupancy[index_2d.x() as usize][index_2d.y() as usize] =
+                abs_square_blocks_player;
+        }
+        Some(local_block_occupancy)
     }
 
     fn player_is_sliding_down_wall(&self) -> bool {
@@ -3608,6 +3660,7 @@ mod tests {
     #[timeout(100)]
     fn test_wall_jump_while_running_up_wall_after_running_into_it() {
         let mut game = set_up_player_about_to_run_into_corner_of_backward_L();
+        game.internal_corner_behavior = InternalCornerBehavior::StopPlayer;
         let away_from_wall = left_f();
         game.tick_physics();
         assert!(game.player.vel == zero_f());
@@ -4562,6 +4615,7 @@ mod tests {
     #[timeout(100)]
     fn test_track_last_collision() {
         let mut game = set_up_player_in_corner_of_big_L();
+        game.internal_corner_behavior = InternalCornerBehavior::StopPlayer;
         be_in_frictionless_space(&mut game);
         assert!(&game.player.last_collision.is_none());
         let collision_velocity = down_f() * 5.0;
@@ -4809,6 +4863,7 @@ mod tests {
     #[timeout(100)]
     fn test_player_remembers_movement_normal_to_last_collision__horizontal_collision() {
         let mut game = set_up_player_about_to_run_into_corner_of_backward_L();
+        game.internal_corner_behavior = InternalCornerBehavior::StopPlayer;
         game.tick_physics();
         assert!(game.player.last_collision.is_some());
         assert!(game.ticks_since_last_player_collision().unwrap() < 1.0);
@@ -5879,15 +5934,40 @@ mod tests {
     }
     #[test]
     #[timeout(100)]
-    fn test_internal_wall_corner_momentum_interaction() {
+    fn test_internal_wall_corner_momentum_interaction__right_to_up() {
         for internal_corner_behavior in InternalCornerBehavior::iter() {
             let mut game = set_up_player_about_to_run_into_corner_of_backward_L();
+            game.internal_corner_behavior = internal_corner_behavior;
             game.tick_physics();
-            match internal_corner_behavior {
+            match game.internal_corner_behavior {
                 InternalCornerBehavior::StopPlayer => assert!(game.player.vel == zero_f()),
                 InternalCornerBehavior::RedirectPlayer => {
                     assert!(game.player.vel.x() == 0.0);
                     assert!(game.player.vel.y() > 0.0);
+                }
+            }
+        }
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_internal_wall_corner_momentum_interaction__down_to_right() {
+        for internal_corner_behavior in InternalCornerBehavior::iter() {
+            let mut game = set_up_player_in_corner_of_big_L();
+            game.internal_corner_behavior = internal_corner_behavior;
+            let square_pos = floatify(game.player_square());
+            game.player.pos.add_assign(up_f() * 0.01);
+            game.player.vel = down_f() * 20.0;
+            game.tick_physics();
+            assert!(game.player.pos.y() == square_pos.y());
+            match game.internal_corner_behavior {
+                InternalCornerBehavior::StopPlayer => {
+                    assert!(game.player.vel == zero_f());
+                    assert!(game.player.pos.x() == square_pos.x());
+                }
+                InternalCornerBehavior::RedirectPlayer => {
+                    assert!(game.player.pos.x() > square_pos.x());
+                    assert!(game.player.vel.y() == 0.0);
+                    assert!(game.player.vel.x() > 0.0);
                 }
             }
         }
@@ -5909,4 +5989,18 @@ mod tests {
     #[test]
     #[timeout(100)]
     fn test_step_foes_move_towards_player() {}
+
+    #[test]
+    #[timeout(100)]
+    fn test_getting_block_adjacency() {
+        let game = set_up_player_in_corner_of_big_L();
+        let player_square = game.player_square();
+        let adjacency = game.get_square_adjacency(player_square).unwrap();
+        let correct_adjacency = visible_xy_to_actual_xy([
+            [true, false, false],
+            [true, false, false],
+            [true, true, true],
+        ]);
+        assert!(adjacency == correct_adjacency);
+    }
 }
