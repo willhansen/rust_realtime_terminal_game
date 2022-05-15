@@ -38,7 +38,6 @@ use crate::BoostBehavior::AddButInstantTurnAround;
 use glyph::*;
 use utility::*;
 
-// const player_jump_height: i32 = 3;
 // const player_jump_hang_frames: i32 = 4;
 const MAX_FPS: f32 = 60.0; // frames per second
 const IDEAL_FRAME_DURATION_MS: u128 = (1000.0 / MAX_FPS) as u128;
@@ -51,8 +50,8 @@ const NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS: f32 = 8.0;
 const DEFAULT_PLAYER_COYOTE_TIME_DURATION_S: f32 = 0.1;
 const DEFAULT_PLAYER_MAX_COYOTE_TIME: f32 = (DEFAULT_PLAYER_COYOTE_TIME_DURATION_S * MAX_FPS) + 1.0;
 
-const DEFAULT_PLAYER_JUMP_HEIGHT_IN_GRID_COORDINATES: f32 = 3.0;
-const DEFAULT_PLAYER_JUMP_DURATION_IN_SECONDS: f32 = 0.5;
+const DEFAULT_PLAYER_JUMP_HEIGHT_IN_GRID_COORDINATES: f32 = 2.0;
+const DEFAULT_PLAYER_JUMP_DURATION_IN_SECONDS: f32 = 0.3;
 
 const VERTICAL_STRETCH_FACTOR: f32 = 2.0; // because the grid is not really square
 
@@ -5716,7 +5715,11 @@ mod tests {
         game.apply_physics_in_n_steps(time_to_peak / 2.0, 100);
         game.apply_physics_in_n_steps(time_to_peak / 2.0, 100);
         assert!(nearly_equal(game.player.pos.y(), start_pos.y()));
-        assert!(nearly_equal(game.player.vel.y(), -vi));
+        game.tick_physics();
+        assert!(nearly_equal(
+            game.player.last_collision.unwrap().collider_velocity.y(),
+            -vi
+        ));
     }
 
     #[test]
