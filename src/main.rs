@@ -312,17 +312,7 @@ struct Player {
 
 impl Player {
     fn new() -> Player {
-        let jump_duration_in_ticks = DEFAULT_PLAYER_JUMP_DURATION_IN_SECONDS * MAX_FPS;
-        let g = g_from_jump_height_and_duration(
-            DEFAULT_PLAYER_JUMP_HEIGHT_IN_GRID_COORDINATES,
-            jump_duration_in_ticks,
-        );
-        let jump_delta_v = calc_jump_vel_from_height_in_grid_coordinates(
-            DEFAULT_PLAYER_JUMP_HEIGHT_IN_GRID_COORDINATES,
-            g,
-            VERTICAL_STRETCH_FACTOR,
-        );
-        Player {
+        let mut new_player = Player {
             alive: false,
             pos: p(0.0, 0.0),
             recent_kinematic_states: VecDeque::<KinematicState>::new(),
@@ -334,8 +324,8 @@ impl Player {
             vel: Point::<f32>::new(0.0, 0.0),
             accel: Point::<f32>::new(0.0, 0.0),
             desired_direction: p(0, 0),
-            jump_delta_v: jump_delta_v,
-            acceleration_from_gravity: g,
+            jump_delta_v: 0.0,
+            acceleration_from_gravity: 0.0,
             acceleration_from_floor_traction: DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION,
             acceleration_from_air_traction: DEFAULT_PLAYER_ACCELERATION_FROM_AIR_TRACTION,
             deceleration_from_air_friction: DEFAULT_PLAYER_AIR_FRICTION_DECELERATION,
@@ -351,7 +341,12 @@ impl Player {
             speed_line_behavior: SpeedLineType::PerpendicularLines,
             enable_jump_compression_bonus: ENABLE_JUMP_COMPRESSION_BONUS,
             wall_jump_behavior: WallJumpBehavior::SwitchDirection,
-        }
+        };
+        new_player.set_jump_duration_in_seconds_and_height_in_grid_squares(
+            DEFAULT_PLAYER_JUMP_DURATION_IN_SECONDS,
+            DEFAULT_PLAYER_JUMP_HEIGHT_IN_GRID_COORDINATES,
+        );
+        new_player
     }
 
     fn kinematic_state(&self) -> KinematicState {
@@ -364,6 +359,24 @@ impl Player {
 
     fn jump_height_in_world_coordinates(&self) -> f32 {
         calc_jump_height_in_world_coordinates(self.jump_delta_v, self.acceleration_from_gravity)
+    }
+
+    fn jump_duration_in_ticks(&self) -> f32 {
+        time_to_jump_landing(self.jump_delta_v, self.acceleration_from_gravity)
+    }
+
+    fn set_jump_duration_in_seconds_and_height_in_grid_squares(
+        &mut self,
+        seconds: f32,
+        height: f32,
+    ) {
+        let jump_duration_in_ticks = seconds * MAX_FPS;
+
+        let g = g_from_jump_height_and_duration(height, jump_duration_in_ticks);
+        let jump_delta_v =
+            calc_jump_vel_from_height_in_grid_coordinates(height, g, VERTICAL_STRETCH_FACTOR);
+        self.acceleration_from_gravity = g;
+        self.jump_delta_v = jump_delta_v;
     }
 }
 
@@ -3480,15 +3493,19 @@ mod tests {
     #[timeout(100)]
     fn test_land_after_jump__moving_right() {
         let mut game = set_up_player_running_full_speed_to_right_on_platform();
+        game.player
+            .set_jump_duration_in_seconds_and_height_in_grid_squares(0.1, 0.1);
         be_in_vacuum(&mut game);
         let start_pos = game.player.pos;
 
         game.player_jump();
         let mut prev_vel_y = game.player.vel.y();
-        for _ in 0..50 {
+        let jump_duration_in_ticks: i32 = game.player.jump_duration_in_ticks().ceil() as i32;
+        for _ in 0..jump_duration_in_ticks {
             game.tick_physics();
             assert!(game.player.vel.x().abs() == game.player.max_run_speed);
             assert!(game.player.accel.x() == 0.0);
+            //dbg!(game.player.kinematic_state());
             assert!(game.player.vel.y() < prev_vel_y || game.player.vel.y() == 0.0);
             prev_vel_y = game.player.vel.y();
         }
@@ -3499,6 +3516,8 @@ mod tests {
     #[timeout(100)]
     fn test_land_after_jump__moving_left() {
         let mut game = set_up_player_running_full_speed_to_left_on_platform();
+        game.player
+            .set_jump_duration_in_seconds_and_height_in_grid_squares(0.1, 0.1);
         be_in_vacuum(&mut game);
         let start_pos = game.player.pos;
 
@@ -3506,7 +3525,8 @@ mod tests {
         let initial_vy = game.player.vel.y();
         let mut prev_vel_y = game.player.vel.y();
         let mut initial_y = game.player.pos.y();
-        for i in 0..50 {
+        let jump_duration_in_ticks: i32 = game.player.jump_duration_in_ticks().ceil() as i32;
+        for _ in 0..jump_duration_in_ticks {
             game.tick_physics();
             assert!(game.player.vel.x().abs() == game.player.max_run_speed);
             assert!(game.player.accel.x() == 0.0);
