@@ -702,11 +702,14 @@ impl Game {
         self.step_foes.push(step_foe);
         self.set_block(square, Block::StepFoe);
     }
+    fn player_can_wall_jump(&mut self) -> bool {
+        self.player_is_grabbing_wall() || self.player_is_running_up_wall()
+    }
 
     fn player_jump(&mut self) {
         let compression_bonus = self.jump_bonus_vel_from_compression();
 
-        if self.player_is_grabbing_wall() || self.player_is_running_up_wall() {
+        if self.player_can_wall_jump() {
             if let Some(wall_direction) = self.get_lone_touched_wall_direction() {
                 self.player
                     .vel
@@ -3730,11 +3733,13 @@ mod tests {
     fn test_wall_jump_while_running_up_wall_after_running_into_it() {
         let mut game = set_up_player_about_to_run_into_corner_of_backward_L();
         game.internal_corner_behavior = InternalCornerBehavior::StopPlayer;
+        game.player.enable_jump_compression_bonus = false;
         let away_from_wall = left_f();
         game.tick_physics();
         assert!(game.player.vel == zero_f());
         assert!(game.player.pos == floatify(snap_to_grid(game.player.pos)));
         game.player_jump_if_possible();
+        dbg!(game.player.kinematic_state());
         assert!(game.player.vel.y() > 0.0);
         assert!(game.player.vel.x() == 0.0);
         game.tick_physics();
