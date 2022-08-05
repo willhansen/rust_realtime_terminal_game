@@ -46,9 +46,9 @@ const PLAYER_HIGH_SPEED_COLOR: ColorName = ColorName::Blue;
 const NUM_SAVED_PLAYER_KINEMATIC_STATES: i32 = 10;
 const NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS: f32 = 8.0;
 
-// a block every two ticks
-const DEFAULT_PLAYER_COYOTE_TIME_DURATION_S: f32 = 0.1;
-const DEFAULT_PLAYER_MAX_COYOTE_TIME: f32 = (DEFAULT_PLAYER_COYOTE_TIME_DURATION_S * MAX_FPS) + 1.0;
+const DEFAULT_PLAYER_COYOTE_TICKS_DURATION_S: f32 = 0.1;
+
+const DEFAULT_PLAYER_HANGTIME_TICKS_DURATION_S: f32 = 0.1;
 
 const DEFAULT_PLAYER_JUMP_HEIGHT_IN_GRID_COORDINATES: f32 = 2.0;
 const DEFAULT_PLAYER_JUMP_DURATION_IN_SECONDS: f32 = 0.3;
@@ -64,7 +64,8 @@ const DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION: f32 =
 const DEFAULT_PLAYER_MAX_RUN_SPEED: f32 = 0.4;
 const DEFAULT_PLAYER_GROUND_FRICTION_START_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED; //0.7;
 const DEFAULT_PLAYER_DASH_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED * 5.0;
-const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION;
+//const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION;
+const DEFAULT_PLAYER_AIR_FRICTION_DECELERATION: f32 = 0.0;
 const DEFAULT_PLAYER_MIDAIR_MAX_MOVE_SPEED: f32 = DEFAULT_PLAYER_MAX_RUN_SPEED;
 const DEFAULT_PLAYER_AIR_FRICTION_START_SPEED: f32 =
     DEFAULT_PLAYER_GROUND_FRICTION_START_SPEED * 3.0;
@@ -296,8 +297,10 @@ struct Player {
     acceleration_from_air_traction: f32,
     deceleration_from_air_friction: f32,
     deceleration_from_ground_friction: f32,
-    remaining_coyote_time: f32,
-    max_coyote_time: f32,
+    remaining_coyote_ticks: f32,
+    max_coyote_ticks: f32,
+    remaining_hangtime_ticks: f32,
+    max_hangtime_ticks: f32,
     dash_vel: f32,
     boost_behavior: BoostBehavior,
     time_of_last_boost: Option<f32>,
@@ -329,8 +332,10 @@ impl Player {
             acceleration_from_air_traction: DEFAULT_PLAYER_ACCELERATION_FROM_AIR_TRACTION,
             deceleration_from_air_friction: DEFAULT_PLAYER_AIR_FRICTION_DECELERATION,
             deceleration_from_ground_friction: DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION,
-            remaining_coyote_time: DEFAULT_PLAYER_MAX_COYOTE_TIME,
-            max_coyote_time: DEFAULT_PLAYER_MAX_COYOTE_TIME,
+            remaining_coyote_ticks: 0.0,
+            max_coyote_ticks: (DEFAULT_PLAYER_COYOTE_TICKS_DURATION_S * MAX_FPS),
+            remaining_hangtime_ticks: 0.0,
+            max_hangtime_ticks: (DEFAULT_PLAYER_HANGTIME_TICKS_DURATION_S * MAX_FPS),
             dash_vel: DEFAULT_PLAYER_DASH_SPEED,
             boost_behavior: AddButInstantTurnAround,
             time_of_last_boost: None,
@@ -362,6 +367,7 @@ impl Player {
 
     fn jump_duration_in_ticks(&self) -> f32 {
         time_to_jump_landing(self.jump_delta_v, self.acceleration_from_gravity)
+            + self.max_hangtime_ticks
     }
 
     fn set_jump_duration_in_seconds_and_height_in_grid_squares(
@@ -683,7 +689,6 @@ impl Game {
         self.player.desired_direction = p(0, 0);
         self.player.pos = p(x, y);
         self.player.alive = true;
-        self.player.remaining_coyote_time = 0.0;
     }
 
     fn place_turret(&mut self, square: IPoint) {
@@ -723,6 +728,7 @@ impl Game {
         self.player.vel.add_assign(p(0.0, self.player.jump_delta_v));
 
         self.player.vel.add_assign(compression_bonus);
+        self.player.remaining_hangtime_ticks = self.player.max_hangtime_ticks;
     }
 
     fn player_is_exactly_on_square(&self) -> bool {
@@ -1705,6 +1711,8 @@ impl Game {
         let mut collision_occurred = false;
         let mut collisions_that_happened = Vec::new();
 
+        let mut spent_hangtime: f32 = 0.0;
+
         let mut timeout_counter = 0;
         while remaining_time > 0.0 {
             timeout_counter += 1;
@@ -1727,6 +1735,12 @@ impl Game {
             } else if self.player_is_supported() {
                 kinematic_state_at_start_of_submove
                     .extrapolated_delta_with_speed_cap(remaining_time, self.player.max_run_speed)
+            } else if self.player_is_approaching_peak_of_jump() {
+                spent_hangtime += (remaining_time
+                    - kinematic_state_at_start_of_submove.dt_to_slowest_point())
+                .max(0.0);
+                kinematic_state_at_start_of_submove
+                    .extrapolated_delta_with_linear_motion_at_slowest(remaining_time)
             } else {
                 kinematic_state_at_start_of_submove.extrapolated_delta(remaining_time)
             };
@@ -1832,21 +1846,28 @@ impl Game {
 
         if collision_occurred {
             self.player.moved_normal_to_collision_since_collision = false;
-        } else if self.movement_is_normal_to_last_collision(step_taken) {
-            self.player.moved_normal_to_collision_since_collision = true;
+            self.player.remaining_hangtime_ticks = 0.0;
+        } else {
+            if self.movement_is_normal_to_last_collision(step_taken) {
+                self.player.moved_normal_to_collision_since_collision = true;
+            }
+            if spent_hangtime > 0.0 {
+                self.player.remaining_hangtime_ticks =
+                    (self.player.remaining_hangtime_ticks - spent_hangtime).max(0.0);
+            }
         }
 
         // moved vertically => instant empty charge
         if step_taken.y() != 0.0 {
-            self.player.remaining_coyote_time = 0.0;
+            self.player.remaining_coyote_ticks = 0.0;
         }
         if self.player_is_standing_on_block() {
-            self.player.remaining_coyote_time = self.player.max_coyote_time;
-        } else if self.player.remaining_coyote_time > 0.0 {
-            if self.player.remaining_coyote_time > dt_in_ticks {
-                self.player.remaining_coyote_time -= dt_in_ticks;
+            self.player.remaining_coyote_ticks = self.player.max_coyote_ticks;
+        } else if self.player.remaining_coyote_ticks > 0.0 {
+            if self.player.remaining_coyote_ticks > dt_in_ticks {
+                self.player.remaining_coyote_ticks -= dt_in_ticks;
             } else {
-                self.player.remaining_coyote_time = 0.0;
+                self.player.remaining_coyote_ticks = 0.0;
             }
         }
     }
@@ -1961,7 +1982,9 @@ impl Game {
                 }
             } else {
                 // gravity
-                total_acceleration.add_assign(down_f() * self.player.acceleration_from_gravity);
+                if !self.player_is_in_hangtime() {
+                    total_acceleration.add_assign(down_f() * self.player.acceleration_from_gravity);
+                }
 
                 // air friction
                 if magnitude(self.player.vel) > self.player.air_friction_start_speed {
@@ -2210,7 +2233,7 @@ impl Game {
     }
 
     fn player_is_supported(&self) -> bool {
-        return self.player_is_standing_on_block() || self.player.remaining_coyote_time > 0.0;
+        return self.player_is_standing_on_block() || self.player.remaining_coyote_ticks > 0.0;
     }
 
     fn player_is_standing_on_block(&self) -> bool {
@@ -2248,6 +2271,12 @@ impl Game {
     fn player_wants_to_come_to_a_full_stop(&self) -> bool {
         self.player_is_grabbing_wall()
             || (self.player_is_supported() && self.player.desired_direction.x() == 0)
+    }
+    fn player_is_approaching_peak_of_jump(&self) -> bool {
+        !self.player_is_supported() && self.player.vel.y() > 0.0
+    }
+    fn player_is_in_hangtime(&self) -> bool {
+        self.player.remaining_hangtime_ticks > 0.0 && self.player.vel.y() == 0.0
     }
 }
 fn init_platformer_test_world(width: u16, height: u16) -> Game {
@@ -2467,9 +2496,9 @@ mod tests {
         return game;
     }
 
-    fn set_up_player_supported_by_coyote_frames() -> Game {
+    fn set_up_player_supported_by_coyote_ticks() -> Game {
         let mut game = set_up_just_player();
-        game.player.remaining_coyote_time = game.player.max_coyote_time;
+        game.player.remaining_coyote_ticks = game.player.max_coyote_ticks;
         return game;
     }
 
@@ -2824,6 +2853,7 @@ mod tests {
 
     fn set_up_player_about_to_reach_peak_of_jump() -> Game {
         let mut game = set_up_just_player();
+        game.player.remaining_hangtime_ticks = game.player.max_hangtime_ticks;
         game.player.vel = up_f() * 0.0001;
         game
     }
@@ -3065,7 +3095,7 @@ mod tests {
         let mut game = Game::new(30, 30);
         game.place_player(15.0, 0.0);
         game.player.acceleration_from_gravity = 1.0;
-        game.player.remaining_coyote_time = 0.0;
+        game.player.remaining_coyote_ticks = 0.0;
         game.tick_physics();
         game.tick_physics();
         assert!(game.player.alive == false);
@@ -3076,7 +3106,7 @@ mod tests {
     fn test_player_falls_in_gravity() {
         let mut game = set_up_just_player();
         game.player.acceleration_from_gravity = 1.0;
-        game.player.remaining_coyote_time = 0.0;
+        game.player.remaining_coyote_ticks = 0.0;
         let start_pos = game.player.pos;
         let start_vel = game.player.vel;
         game.tick_physics();
@@ -3442,7 +3472,7 @@ mod tests {
 
     #[test]
     #[timeout(100)]
-    fn test_fast_player_collision_between_frames() {
+    fn test_fast_player_collision_between_ticks() {
         let mut game = set_up_player_on_platform();
         // Player should not teleport through this block
         game.place_block(p(16, 11), Block::Wall);
@@ -3471,7 +3501,7 @@ mod tests {
         let mut game = Game::new(30, 30);
         game.place_player(15.0, 11.0);
         game.player.acceleration_from_gravity = 1.0;
-        game.player.remaining_coyote_time = 0.0;
+        game.player.remaining_coyote_ticks = 0.0;
 
         game.tick_physics();
 
@@ -3665,12 +3695,12 @@ mod tests {
 
     #[test]
     #[timeout(100)]
-    fn test_coyote_frames() {
+    fn test_coyote_ticks() {
         let mut game = set_up_just_player();
         let start_pos = game.player.pos;
         game.player.acceleration_from_gravity = 1.0;
-        game.player.max_coyote_time = 1.0;
-        game.player.remaining_coyote_time = 1.0;
+        game.player.max_coyote_ticks = 1.0;
+        game.player.remaining_coyote_ticks = 1.0;
         game.tick_physics();
         assert!(game.player.pos.y() == start_pos.y());
         game.tick_physics();
@@ -3679,11 +3709,11 @@ mod tests {
 
     #[test]
     #[timeout(100)]
-    fn test_coyote_frames_dont_assist_jump() {
+    fn test_coyote_ticks_dont_assist_jump() {
         let mut game1 = set_up_player_on_platform();
         let mut game2 = set_up_player_on_platform();
 
-        game1.player.remaining_coyote_time = 0.0;
+        game1.player.remaining_coyote_ticks = 0.0;
         game1.player_jump_if_possible();
         game2.player_jump_if_possible();
         game1.tick_physics();
@@ -3698,7 +3728,7 @@ mod tests {
 
     #[test]
     #[timeout(100)]
-    fn test_player_does_not_spawn_with_coyote_frames() {
+    fn test_player_does_not_spawn_with_coyote_ticks() {
         let mut game = set_up_just_player();
         let start_pos = game.player.pos;
         game.player.acceleration_from_gravity = 1.0;
@@ -4969,12 +4999,12 @@ mod tests {
 
     #[test]
     #[timeout(100)]
-    fn test_coyote_frames_respect_bullet_time() {
-        let mut game = set_up_player_supported_by_coyote_frames();
-        assert!(game.player.remaining_coyote_time == game.player.max_coyote_time);
+    fn test_coyote_ticks_respect_bullet_time() {
+        let mut game = set_up_player_supported_by_coyote_ticks();
+        assert!(game.player.remaining_coyote_ticks == game.player.max_coyote_ticks);
         game.toggle_bullet_time();
         game.tick_physics();
-        assert!(game.player.remaining_coyote_time + 1.0 > game.player.max_coyote_time);
+        assert!(game.player.remaining_coyote_ticks + 1.0 > game.player.max_coyote_ticks);
     }
 
     #[test]
@@ -5117,7 +5147,7 @@ mod tests {
     #[timeout(100)]
     fn test_player_supported_by_block_if_mostly_off_edge() {
         let mut game = set_up_player_on_block_more_overhanging_than_not_on_right();
-        game.player.remaining_coyote_time = 0.0;
+        game.player.remaining_coyote_ticks = 0.0;
         assert!(game.player_is_supported());
         assert!(game.player_is_standing_on_block());
     }
@@ -5698,6 +5728,7 @@ mod tests {
     #[timeout(100)]
     fn test_verify_time_to_jump_peak_function() {
         let mut game = set_up_player_on_platform();
+        game.player.max_hangtime_ticks = 0.0;
         be_in_vacuum(&mut game);
         game.player_jump_if_possible();
 
@@ -5720,6 +5751,16 @@ mod tests {
             game.player.last_collision.unwrap().collider_velocity.y(),
             -vi
         ));
+    }
+    #[test]
+    #[timeout(100)]
+    fn test_verify_jump_duration_calculation_with_hangtime() {
+        let mut game = set_up_player_on_platform();
+        game.player.max_hangtime_ticks = 4.0; // arbitrary, but > 1
+        be_in_vacuum(&mut game);
+        game.player_jump_if_possible();
+        game.apply_physics_in_n_steps(game.player.jump_duration_in_ticks(), 100);
+        assert!(game.ticks_since_last_player_collision().unwrap() < 1.0);
     }
 
     #[test]
@@ -6141,5 +6182,27 @@ mod tests {
         let mut game = set_up_player_in_corner_of_big_L();
         game.player_jump_if_possible();
         assert!(game.player_is_running_up_wall());
+    }
+
+    #[test]
+    #[timeout(100)]
+    fn test_jumps_have_hangtime_at_peak() {
+        let mut game = set_up_player_about_to_reach_peak_of_jump();
+        assert!(game.player.max_hangtime_ticks > 0.0);
+        assert!(game.player.remaining_hangtime_ticks == game.player.max_hangtime_ticks);
+        assert!(game.player.vel.y() > 0.0);
+        game.tick_physics();
+        assert!(nearly_equal(game.player.vel.y(), 0.0));
+        let hangtime_ticks_rounded_up = game.player.max_hangtime_ticks.ceil() as i32;
+        let mut last_remaining_hangtime_ticks = game.player.remaining_hangtime_ticks;
+        for _ in 0..hangtime_ticks_rounded_up {
+            game.tick_physics();
+            assert!(nearly_equal(game.player.vel.y(), 0.0));
+            assert!(game.player.remaining_hangtime_ticks < last_remaining_hangtime_ticks);
+            last_remaining_hangtime_ticks = game.player.remaining_hangtime_ticks;
+        }
+        game.tick_physics();
+        assert!(game.player.vel.y() < 0.0);
+        assert!(game.player.remaining_hangtime_ticks == game.player.max_hangtime_ticks);
     }
 }

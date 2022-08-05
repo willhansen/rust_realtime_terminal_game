@@ -7,11 +7,12 @@ use derive_more::{Add, Div, Mul, Sub};
 use geo::algorithm::euclidean_distance::EuclideanDistance;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
 use geo::{point, CoordNum, Line, Point};
-use num::clamp;
 use num::traits::Pow;
+use num::{clamp, ToPrimitive};
 use ordered_float::OrderedFloat;
 use rand::distributions::uniform::SampleUniform;
 use rand::Rng;
+use std::cmp::max;
 use std::collections::HashMap;
 use std::f32::consts::TAU;
 
@@ -971,6 +972,16 @@ impl KinematicState {
         time_of_line_closest_approach_to_origin(self.accel, self.vel)
     }
     pub fn extrapolated_with_full_stop_at_slowest(&self, dt: f32) -> KinematicState {
+        self.extrapolated_with_full_stop_or_linear_motion_at_slowest(dt, true)
+    }
+    pub fn extrapolated_with_linear_motion_at_slowest(&self, dt: f32) -> KinematicState {
+        self.extrapolated_with_full_stop_or_linear_motion_at_slowest(dt, false)
+    }
+    pub fn extrapolated_with_full_stop_or_linear_motion_at_slowest(
+        &self,
+        dt: f32,
+        full_stop: bool,
+    ) -> KinematicState {
         let dt_to_slowest = self.dt_to_slowest_point();
         let slowest_point_is_in_past = dt_to_slowest < 0.0;
         let slowest_point_is_beyond_dt = dt < dt_to_slowest;
@@ -983,11 +994,14 @@ impl KinematicState {
         {
             return self.extrapolated(dt);
         }
-        KinematicState {
-            pos: self.extrapolated(dt_to_slowest).pos,
-            vel: zero_f(),
-            accel: zero_f(),
+        let mut mid_state = self.extrapolated(dt_to_slowest);
+        mid_state.accel = zero_f();
+        if full_stop {
+            mid_state.vel = zero_f();
+            return mid_state;
         }
+        let remaining_dt = dt - dt_to_slowest;
+        return mid_state.extrapolated(remaining_dt);
     }
     pub fn extrapolated_with_speed_cap(&self, dt: f32, speed_cap: f32) -> KinematicState {
         if magnitude(self.vel) <= speed_cap {
@@ -1015,6 +1029,9 @@ impl KinematicState {
     }
     pub fn extrapolated_delta_with_full_stop_at_slowest(&self, dt: f32) -> KinematicState {
         self.extrapolated_with_full_stop_at_slowest(dt) - *self
+    }
+    pub fn extrapolated_delta_with_linear_motion_at_slowest(&self, dt: f32) -> KinematicState {
+        self.extrapolated_with_linear_motion_at_slowest(dt) - *self
     }
 }
 
