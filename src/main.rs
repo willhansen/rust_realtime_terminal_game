@@ -1937,6 +1937,10 @@ impl Game {
 
     fn update_player_accelerations(&mut self) {
         let mut total_acceleration = zero_f();
+        let debug_print_acceleration = false;
+        if debug_print_acceleration {
+            dbg!(total_acceleration);
+        }
         let traction_acceleration_magnitude = if self.player_is_supported() {
             self.player.acceleration_from_floor_traction
         } else {
@@ -1945,10 +1949,19 @@ impl Game {
         if self.player_is_grabbing_wall() {
             // wall friction
             if self.player_is_sliding_down_wall() {
+                if debug_print_acceleration {
+                    dbg!(total_acceleration);
+                }
                 total_acceleration
                     .add_assign(up_f() * self.player.acceleration_from_floor_traction);
+                if debug_print_acceleration {
+                    dbg!(total_acceleration);
+                }
             }
         } else {
+            if debug_print_acceleration {
+                dbg!(total_acceleration);
+            }
             // floor/air traction.  Active horizontal motion
             let player_can_faster_x = self.player.vel.x().abs() < self.player.max_run_speed;
             let player_want_faster_x =
@@ -1959,19 +1972,44 @@ impl Game {
             let player_want_stop_x = self.player.desired_direction.x() == 0;
             // Apply traction
             if (player_can_faster_x && player_want_faster_x) || player_want_slower_x {
+                if debug_print_acceleration {
+                    dbg!(total_acceleration);
+                }
                 total_acceleration.add_assign(
                     project_a_onto_b(floatify(self.player.desired_direction), right_f())
                         * traction_acceleration_magnitude,
                 );
+                if debug_print_acceleration {
+                    dbg!(total_acceleration);
+                }
             } else if player_want_stop_x {
+                if debug_print_acceleration {
+                    dbg!(total_acceleration);
+                }
                 total_acceleration.add_assign(
                     project_a_onto_b(direction(-self.player.vel), right_f())
                         * traction_acceleration_magnitude,
                 );
+                if total_acceleration.x().is_nan() {
+                    dbg!(
+                        self.player.vel,
+                        direction(self.player.vel),
+                        project_a_onto_b(direction(-self.player.vel), right_f())
+                    );
+                }
+                if debug_print_acceleration {
+                    dbg!(total_acceleration);
+                }
+            }
+            if debug_print_acceleration {
+                dbg!(total_acceleration);
             }
             let moving_up = self.player.vel.y() > 0.0;
             let on_ground = self.player_is_supported() && !moving_up;
             if on_ground {
+                if debug_print_acceleration {
+                    dbg!(total_acceleration);
+                }
                 // floor friction
                 let fast_enough_for_friction_x =
                     self.player.vel.x().abs() > self.player.ground_friction_start_speed;
@@ -1980,19 +2018,34 @@ impl Game {
                         direction(-self.player.vel) * self.player.deceleration_from_ground_friction,
                     );
                 }
+                if debug_print_acceleration {
+                    dbg!(total_acceleration);
+                }
             } else {
+                if debug_print_acceleration {
+                    dbg!(total_acceleration);
+                }
                 // gravity
                 if !self.player_is_in_hangtime() {
                     total_acceleration.add_assign(down_f() * self.player.acceleration_from_gravity);
                 }
 
+                if debug_print_acceleration {
+                    dbg!(total_acceleration);
+                }
                 // air friction
                 if magnitude(self.player.vel) > self.player.air_friction_start_speed {
                     total_acceleration.add_assign(
                         direction(-self.player.vel) * self.player.deceleration_from_air_friction,
                     );
                 }
+                if debug_print_acceleration {
+                    dbg!(total_acceleration);
+                }
             }
+        }
+        if debug_print_acceleration {
+            dbg!(total_acceleration);
         }
 
         self.player.accel = total_acceleration;
@@ -3517,6 +3570,7 @@ mod tests {
         game.player_jump();
         for _ in 0..50 {
             game.tick_physics();
+            //dbg!("a", game.player.pos.y(),game.player.vel.y(), game.player.accel.y());
         }
         assert!(nearly_equal(game.player.pos.y(), start_pos.y()));
     }

@@ -586,7 +586,7 @@ pub fn magnitude_squared(vec: Point<f32>) -> f32 {
     return vec.x().pow(2.0) + vec.y().pow(2.0);
 }
 pub fn direction(vec: Point<f32>) -> Point<f32> {
-    if vec == zero_f() {
+    if vec == zero_f() || magnitude(vec) == 0.0 {
         return zero_f();
     }
     return vec / magnitude(vec);
@@ -1244,6 +1244,7 @@ mod tests {
     use super::*;
     use crate::RADIUS_OF_EXACTLY_TOUCHING_ZONE;
     use assert2::assert;
+    use ntest::assert_true;
     use std::f32::consts::PI;
 
     #[test]
@@ -1444,6 +1445,17 @@ mod tests {
         let end_point = start_point + right_f() * 10.0;
         assert!(!single_block_linecast(start_point, end_point, block_center).hit_something());
     }
+    #[test]
+    fn test_direction__nearly_zero() {
+        let input = p(0.0, 1e-23);
+        let output = direction(input);
+        assert_eq!(magnitude(input), 0.0);
+        assert!(!output.x().is_nan());
+        assert!(!output.y().is_nan());
+        assert!(!output.x().is_infinite());
+        assert!(!output.y().is_infinite());
+        assert_eq!(magnitude(output), 0.0);
+    }
 
     #[test]
     fn test_orthogonal_direction_generation() {
@@ -1473,12 +1485,18 @@ mod tests {
 
     #[test]
     fn test_projection() {
+        // positive easy case
         assert!(project_a_onto_b(p(1.0, 0.0), p(5.0, 0.0)) == p(1.0, 0.0));
         assert!(project_a_onto_b(p(1.0, 0.0), p(0.0, 5.0)) == p(0.0, 0.0));
+        // easy destination
         assert!(project_a_onto_b(p(1.0, 1.0), p(1.0, 0.0)) == p(1.0, 0.0));
         assert!(project_a_onto_b(p(6.0, 6.0), p(0.0, 1.0)) == p(0.0, 6.0));
+        // more complex input
         assert!(project_a_onto_b(p(2.0, 6.0), p(0.0, 1.0)) == p(0.0, 6.0));
+        // negative input
         assert!(project_a_onto_b(p(-6.0, 6.0), p(0.0, 1.0)) == p(0.0, 6.0));
+        // zero
+        assert!(project_a_onto_b(p(0.0, 0.0), p(0.0, 1.0)) == p(0.0, 0.0));
     }
     #[test]
     fn test_round_with_tie_break_to_inf() {
