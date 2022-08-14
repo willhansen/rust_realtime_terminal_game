@@ -48,8 +48,6 @@ const NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS: f32 = 8.0;
 
 const DEFAULT_PLAYER_COYOTE_TICKS_DURATION_S: f32 = 0.1;
 
-const DEFAULT_PLAYER_HANGTIME_TICKS_DURATION_S: f32 = 0.1;
-
 const DEFAULT_PLAYER_JUMP_HEIGHT_IN_GRID_COORDINATES: f32 = 2.0;
 const DEFAULT_PLAYER_JUMP_DURATION_IN_SECONDS: f32 = 0.3;
 
@@ -299,8 +297,6 @@ struct Player {
     deceleration_from_ground_friction: f32,
     remaining_coyote_ticks: f32,
     max_coyote_ticks: f32,
-    remaining_hangtime_ticks: f32,
-    max_hangtime_ticks: f32,
     dash_vel: f32,
     boost_behavior: BoostBehavior,
     time_of_last_boost: Option<f32>,
@@ -334,8 +330,6 @@ impl Player {
             deceleration_from_ground_friction: DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION,
             remaining_coyote_ticks: 0.0,
             max_coyote_ticks: (DEFAULT_PLAYER_COYOTE_TICKS_DURATION_S * MAX_FPS),
-            remaining_hangtime_ticks: 0.0,
-            max_hangtime_ticks: (DEFAULT_PLAYER_HANGTIME_TICKS_DURATION_S * MAX_FPS),
             dash_vel: DEFAULT_PLAYER_DASH_SPEED,
             boost_behavior: AddButInstantTurnAround,
             time_of_last_boost: None,
@@ -367,7 +361,6 @@ impl Player {
 
     fn jump_duration_in_ticks(&self) -> f32 {
         time_to_jump_landing(self.jump_delta_v, self.acceleration_from_gravity)
-            + self.max_hangtime_ticks
     }
 
     fn set_jump_duration_in_seconds_and_height_in_grid_squares(
@@ -728,7 +721,6 @@ impl Game {
         self.player.vel.add_assign(p(0.0, self.player.jump_delta_v));
 
         self.player.vel.add_assign(compression_bonus);
-        self.player.remaining_hangtime_ticks = self.player.max_hangtime_ticks;
     }
 
     fn player_is_exactly_on_square(&self) -> bool {
@@ -1711,8 +1703,6 @@ impl Game {
         let mut collision_occurred = false;
         let mut collisions_that_happened = Vec::new();
 
-        let mut spent_hangtime: f32 = 0.0;
-
         let mut timeout_counter = 0;
         while remaining_time > 0.0 {
             timeout_counter += 1;
@@ -1735,14 +1725,6 @@ impl Game {
             } else if self.player_is_supported() {
                 kinematic_state_at_start_of_submove
                     .extrapolated_delta_with_speed_cap(remaining_time, self.player.max_run_speed)
-            } else if self.player_is_before_peak_of_jump() && self.player_has_remaining_hangtime() {
-                let time_to_jump_peak = kinematic_state_at_start_of_submove.dt_to_slowest_point();
-                let about_to_reach_jump_peak: bool = remaining_time > time_to_jump_peak;
-                if about_to_reach_jump_peak {
-                    spent_hangtime += (remaining_time - time_to_jump_peak);
-                }
-                kinematic_state_at_start_of_submove
-                    .extrapolated_delta_with_linear_motion_at_slowest(remaining_time)
             } else {
                 kinematic_state_at_start_of_submove.extrapolated_delta(remaining_time)
             };
@@ -1848,15 +1830,9 @@ impl Game {
 
         if collision_occurred {
             self.player.moved_normal_to_collision_since_collision = false;
-            self.player.remaining_hangtime_ticks = 0.0;
         } else {
             if self.movement_is_normal_to_last_collision(step_taken) {
                 self.player.moved_normal_to_collision_since_collision = true;
-            }
-
-            if spent_hangtime > 0.0 {
-                self.player.remaining_hangtime_ticks =
-                    (self.player.remaining_hangtime_ticks - spent_hangtime).max(0.0);
             }
         }
 
@@ -2031,9 +2007,7 @@ impl Game {
                     dbg!(total_acceleration);
                 }
                 // gravity
-                if !self.player_is_in_hangtime() {
-                    total_acceleration.add_assign(down_f() * self.player.acceleration_from_gravity);
-                }
+                total_acceleration.add_assign(down_f() * self.player.acceleration_from_gravity);
 
                 if DEBUG_PRINT_ACCELERATION {
                     dbg!(total_acceleration);
@@ -2332,12 +2306,6 @@ impl Game {
     }
     fn player_is_before_peak_of_jump(&self) -> bool {
         !self.player_is_supported() && self.player.vel.y() > 0.0
-    }
-    fn player_is_in_hangtime(&self) -> bool {
-        self.player_has_remaining_hangtime() && self.player.vel.y() == 0.0
-    }
-    fn player_has_remaining_hangtime(&self) -> bool {
-        self.player.remaining_hangtime_ticks > 0.0
     }
 }
 fn init_platformer_test_world(width: u16, height: u16) -> Game {
@@ -2914,7 +2882,6 @@ mod tests {
 
     fn set_up_player_about_to_reach_peak_of_jump() -> Game {
         let mut game = set_up_just_player();
-        game.player.remaining_hangtime_ticks = game.player.max_hangtime_ticks;
         game.player.vel = up_f() * 0.0001;
         game
     }
@@ -3573,7 +3540,6 @@ mod tests {
     #[timeout(100)]
     fn test_land_after_jump__vertical() {
         let mut game = set_up_player_on_platform();
-        //game.player.max_hangtime_ticks = 0.0;
         let start_pos = game.player.pos;
 
         game.player_jump();
@@ -5791,7 +5757,6 @@ mod tests {
     #[timeout(100)]
     fn test_verify_time_to_jump_peak_function() {
         let mut game = set_up_player_on_platform();
-        game.player.max_hangtime_ticks = 0.0;
         be_in_vacuum(&mut game);
         game.player_jump_if_possible();
 
@@ -5819,7 +5784,6 @@ mod tests {
     #[timeout(100)]
     fn test_verify_jump_duration_calculation_with_hangtime() {
         let mut game = set_up_player_on_platform();
-        game.player.max_hangtime_ticks = 4.0; // arbitrary, but > 1
         be_in_vacuum(&mut game);
         game.player_jump_if_possible();
         game.apply_physics_in_n_steps(game.player.jump_duration_in_ticks(), 100);
@@ -6248,24 +6212,13 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     #[timeout(100)]
     fn test_jumps_have_hangtime_at_peak() {
         let mut game = set_up_player_about_to_reach_peak_of_jump();
-        assert!(game.player.max_hangtime_ticks > 0.0);
-        assert!(game.player.remaining_hangtime_ticks == game.player.max_hangtime_ticks);
+        let naive_jump_duration = game.player.jump_duration_in_ticks();
         assert!(game.player.vel.y() > 0.0);
         game.tick_physics();
         assert!(nearly_equal(game.player.vel.y(), 0.0));
-        let hangtime_ticks_rounded_up = game.player.max_hangtime_ticks.ceil() as i32;
-        let mut last_remaining_hangtime_ticks = game.player.remaining_hangtime_ticks;
-        for _ in 0..hangtime_ticks_rounded_up {
-            game.tick_physics();
-            assert!(nearly_equal(game.player.vel.y(), 0.0));
-            assert!(game.player.remaining_hangtime_ticks < last_remaining_hangtime_ticks);
-            last_remaining_hangtime_ticks = game.player.remaining_hangtime_ticks;
-        }
-        game.tick_physics();
-        assert!(game.player.vel.y() < 0.0);
-        assert!(game.player.remaining_hangtime_ticks == game.player.max_hangtime_ticks);
     }
 }
