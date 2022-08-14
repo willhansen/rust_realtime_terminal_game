@@ -1735,10 +1735,12 @@ impl Game {
             } else if self.player_is_supported() {
                 kinematic_state_at_start_of_submove
                     .extrapolated_delta_with_speed_cap(remaining_time, self.player.max_run_speed)
-            } else if self.player_is_approaching_peak_of_jump() {
-                spent_hangtime += (remaining_time
-                    - kinematic_state_at_start_of_submove.dt_to_slowest_point())
-                .max(0.0);
+            } else if self.player_is_before_peak_of_jump() && self.player_has_remaining_hangtime() {
+                let time_to_jump_peak = kinematic_state_at_start_of_submove.dt_to_slowest_point();
+                let about_to_reach_jump_peak: bool = remaining_time > time_to_jump_peak;
+                if about_to_reach_jump_peak {
+                    spent_hangtime += (remaining_time - time_to_jump_peak);
+                }
                 kinematic_state_at_start_of_submove
                     .extrapolated_delta_with_linear_motion_at_slowest(remaining_time)
             } else {
@@ -1851,6 +1853,7 @@ impl Game {
             if self.movement_is_normal_to_last_collision(step_taken) {
                 self.player.moved_normal_to_collision_since_collision = true;
             }
+
             if spent_hangtime > 0.0 {
                 self.player.remaining_hangtime_ticks =
                     (self.player.remaining_hangtime_ticks - spent_hangtime).max(0.0);
@@ -1936,9 +1939,11 @@ impl Game {
     }
 
     fn update_player_accelerations(&mut self) {
+        let DEBUG_PRINT_ACCELERATION = false;
+
         let mut total_acceleration = zero_f();
-        let debug_print_acceleration = false;
-        if debug_print_acceleration {
+
+        if DEBUG_PRINT_ACCELERATION {
             dbg!(total_acceleration);
         }
         let traction_acceleration_magnitude = if self.player_is_supported() {
@@ -1949,17 +1954,17 @@ impl Game {
         if self.player_is_grabbing_wall() {
             // wall friction
             if self.player_is_sliding_down_wall() {
-                if debug_print_acceleration {
+                if DEBUG_PRINT_ACCELERATION {
                     dbg!(total_acceleration);
                 }
                 total_acceleration
                     .add_assign(up_f() * self.player.acceleration_from_floor_traction);
-                if debug_print_acceleration {
+                if DEBUG_PRINT_ACCELERATION {
                     dbg!(total_acceleration);
                 }
             }
         } else {
-            if debug_print_acceleration {
+            if DEBUG_PRINT_ACCELERATION {
                 dbg!(total_acceleration);
             }
             // floor/air traction.  Active horizontal motion
@@ -1972,18 +1977,18 @@ impl Game {
             let player_want_stop_x = self.player.desired_direction.x() == 0;
             // Apply traction
             if (player_can_faster_x && player_want_faster_x) || player_want_slower_x {
-                if debug_print_acceleration {
+                if DEBUG_PRINT_ACCELERATION {
                     dbg!(total_acceleration);
                 }
                 total_acceleration.add_assign(
                     project_a_onto_b(floatify(self.player.desired_direction), right_f())
                         * traction_acceleration_magnitude,
                 );
-                if debug_print_acceleration {
+                if DEBUG_PRINT_ACCELERATION {
                     dbg!(total_acceleration);
                 }
             } else if player_want_stop_x {
-                if debug_print_acceleration {
+                if DEBUG_PRINT_ACCELERATION {
                     dbg!(total_acceleration);
                 }
                 total_acceleration.add_assign(
@@ -1997,17 +2002,17 @@ impl Game {
                         project_a_onto_b(direction(-self.player.vel), right_f())
                     );
                 }
-                if debug_print_acceleration {
+                if DEBUG_PRINT_ACCELERATION {
                     dbg!(total_acceleration);
                 }
             }
-            if debug_print_acceleration {
+            if DEBUG_PRINT_ACCELERATION {
                 dbg!(total_acceleration);
             }
             let moving_up = self.player.vel.y() > 0.0;
             let on_ground = self.player_is_supported() && !moving_up;
             if on_ground {
-                if debug_print_acceleration {
+                if DEBUG_PRINT_ACCELERATION {
                     dbg!(total_acceleration);
                 }
                 // floor friction
@@ -2018,11 +2023,11 @@ impl Game {
                         direction(-self.player.vel) * self.player.deceleration_from_ground_friction,
                     );
                 }
-                if debug_print_acceleration {
+                if DEBUG_PRINT_ACCELERATION {
                     dbg!(total_acceleration);
                 }
             } else {
-                if debug_print_acceleration {
+                if DEBUG_PRINT_ACCELERATION {
                     dbg!(total_acceleration);
                 }
                 // gravity
@@ -2030,7 +2035,7 @@ impl Game {
                     total_acceleration.add_assign(down_f() * self.player.acceleration_from_gravity);
                 }
 
-                if debug_print_acceleration {
+                if DEBUG_PRINT_ACCELERATION {
                     dbg!(total_acceleration);
                 }
                 // air friction
@@ -2039,12 +2044,12 @@ impl Game {
                         direction(-self.player.vel) * self.player.deceleration_from_air_friction,
                     );
                 }
-                if debug_print_acceleration {
+                if DEBUG_PRINT_ACCELERATION {
                     dbg!(total_acceleration);
                 }
             }
         }
-        if debug_print_acceleration {
+        if DEBUG_PRINT_ACCELERATION {
             dbg!(total_acceleration);
         }
 
@@ -2325,11 +2330,14 @@ impl Game {
         self.player_is_grabbing_wall()
             || (self.player_is_supported() && self.player.desired_direction.x() == 0)
     }
-    fn player_is_approaching_peak_of_jump(&self) -> bool {
+    fn player_is_before_peak_of_jump(&self) -> bool {
         !self.player_is_supported() && self.player.vel.y() > 0.0
     }
     fn player_is_in_hangtime(&self) -> bool {
-        self.player.remaining_hangtime_ticks > 0.0 && self.player.vel.y() == 0.0
+        self.player_has_remaining_hangtime() && self.player.vel.y() == 0.0
+    }
+    fn player_has_remaining_hangtime(&self) -> bool {
+        self.player.remaining_hangtime_ticks > 0.0
     }
 }
 fn init_platformer_test_world(width: u16, height: u16) -> Game {
@@ -3565,12 +3573,13 @@ mod tests {
     #[timeout(100)]
     fn test_land_after_jump__vertical() {
         let mut game = set_up_player_on_platform();
+        //game.player.max_hangtime_ticks = 0.0;
         let start_pos = game.player.pos;
 
         game.player_jump();
         for _ in 0..50 {
             game.tick_physics();
-            //dbg!("a", game.player.pos.y(),game.player.vel.y(), game.player.accel.y());
+            // dbg!( "a", game.player.pos.y(), game.player.vel.y(), game.player.accel.y() );
         }
         assert!(nearly_equal(game.player.pos.y(), start_pos.y()));
     }
