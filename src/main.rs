@@ -2,6 +2,8 @@
 #![feature(is_sorted)]
 #![allow(warnings)]
 mod glyph;
+mod jumpproperties;
+mod player;
 mod utility;
 
 extern crate geo;
@@ -13,6 +15,7 @@ extern crate termion;
 extern crate approx;
 
 use ntest::timeout;
+use player::Player;
 
 // use assert2::{assert, check};
 use enum_as_inner::EnumAsInner;
@@ -34,6 +37,7 @@ use termion::event::{Event, Key, MouseButton, MouseEvent};
 use termion::input::{MouseTerminal, TermRead};
 use termion::raw::{IntoRawMode, RawTerminal};
 
+use crate::jumpproperties::JumpProperties;
 use crate::BoostBehavior::AddButInstantTurnAround;
 use glyph::*;
 use utility::*;
@@ -48,8 +52,10 @@ const NUM_POSITIONS_TO_CHECK_PER_BLOCK_FOR_COLLISIONS: f32 = 8.0;
 
 const DEFAULT_PLAYER_JUMP_HEIGHT_IN_GRID_COORDINATES: f32 = 2.0;
 const DEFAULT_PLAYER_JUMP_DURATION_IN_SECONDS: f32 = 0.3;
+const DEFAULT_HANGTIME_GRAVITY_MULTIPLIER: f32 = 0.8;
+const DEFAULT_HANGTIME_JUMP_SPEED_FRACTION_THRESHOLD: f32 = 0.8;
 
-const VERTICAL_STRETCH_FACTOR: f32 = 2.0; // because the grid is not really square
+const VERTICAL_GRID_STRETCH_FACTOR: f32 = 2.0; // because the grid is not really square
 
 //const DEFAULT_PLAYER_ACCELERATION_FROM_GRAVITY: f32 = 0.1;
 const DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION: f32 = 0.2;
@@ -275,103 +281,6 @@ struct StepFoe {
     square: IPoint,
 }
 
-struct Player {
-    alive: bool,
-    pos: Point<f32>,
-    recent_kinematic_states: VecDeque<KinematicState>,
-    max_run_speed: f32,
-    ground_friction_start_speed: f32,
-    air_friction_start_speed: f32,
-    max_midair_move_speed: f32,
-    speed_of_blue: f32,
-    vel: Point<f32>,
-    accel: Point<f32>,
-    desired_direction: Point<i32>,
-    jump_delta_v: f32,
-    acceleration_from_gravity: f32,
-    acceleration_from_floor_traction: f32,
-    acceleration_from_air_traction: f32,
-    deceleration_from_air_friction: f32,
-    deceleration_from_ground_friction: f32,
-    dash_vel: f32,
-    boost_behavior: BoostBehavior,
-    time_of_last_boost: Option<f32>,
-    last_collision: Option<PlayerBlockCollision>,
-    moved_normal_to_collision_since_collision: bool,
-    speed_line_lifetime_in_ticks: f32,
-    speed_line_behavior: SpeedLineType,
-    enable_jump_compression_bonus: bool,
-    wall_jump_behavior: WallJumpBehavior,
-}
-
-impl Player {
-    fn new() -> Player {
-        let mut new_player = Player {
-            alive: false,
-            pos: p(0.0, 0.0),
-            recent_kinematic_states: VecDeque::<KinematicState>::new(),
-            max_run_speed: DEFAULT_PLAYER_MAX_RUN_SPEED,
-            ground_friction_start_speed: DEFAULT_PLAYER_GROUND_FRICTION_START_SPEED,
-            air_friction_start_speed: DEFAULT_PLAYER_AIR_FRICTION_START_SPEED,
-            max_midair_move_speed: DEFAULT_PLAYER_MIDAIR_MAX_MOVE_SPEED,
-            speed_of_blue: DEFAULT_PLAYER_DASH_SPEED,
-            vel: Point::<f32>::new(0.0, 0.0),
-            accel: Point::<f32>::new(0.0, 0.0),
-            desired_direction: p(0, 0),
-            jump_delta_v: 0.0,
-            acceleration_from_gravity: 0.0,
-            acceleration_from_floor_traction: DEFAULT_PLAYER_ACCELERATION_FROM_FLOOR_TRACTION,
-            acceleration_from_air_traction: DEFAULT_PLAYER_ACCELERATION_FROM_AIR_TRACTION,
-            deceleration_from_air_friction: DEFAULT_PLAYER_AIR_FRICTION_DECELERATION,
-            deceleration_from_ground_friction: DEFAULT_PLAYER_GROUND_FRICTION_DECELERATION,
-            dash_vel: DEFAULT_PLAYER_DASH_SPEED,
-            boost_behavior: AddButInstantTurnAround,
-            time_of_last_boost: None,
-            last_collision: None,
-            moved_normal_to_collision_since_collision: false,
-            speed_line_lifetime_in_ticks: DEFAULT_PARTICLE_LIFETIME_IN_TICKS,
-            speed_line_behavior: SpeedLineType::PerpendicularLines,
-            enable_jump_compression_bonus: ENABLE_JUMP_COMPRESSION_BONUS,
-            wall_jump_behavior: WallJumpBehavior::SwitchDirection,
-        };
-        new_player.set_jump_duration_in_seconds_and_height_in_grid_squares(
-            DEFAULT_PLAYER_JUMP_DURATION_IN_SECONDS,
-            DEFAULT_PLAYER_JUMP_HEIGHT_IN_GRID_COORDINATES,
-        );
-        new_player
-    }
-
-    fn kinematic_state(&self) -> KinematicState {
-        KinematicState {
-            pos: self.pos,
-            vel: self.vel,
-            accel: self.accel,
-        }
-    }
-
-    fn jump_height_in_world_coordinates(&self) -> f32 {
-        calc_jump_height_in_world_coordinates(self.jump_delta_v, self.acceleration_from_gravity)
-    }
-
-    fn jump_duration_in_ticks(&self) -> f32 {
-        time_to_jump_landing(self.jump_delta_v, self.acceleration_from_gravity)
-    }
-
-    fn set_jump_duration_in_seconds_and_height_in_grid_squares(
-        &mut self,
-        seconds: f32,
-        height: f32,
-    ) {
-        let jump_duration_in_ticks = seconds * MAX_FPS;
-
-        let g = g_from_jump_height_and_duration(height, jump_duration_in_ticks);
-        let jump_delta_v =
-            calc_jump_vel_from_height_in_grid_coordinates(height, g, VERTICAL_STRETCH_FACTOR);
-        self.acceleration_from_gravity = g;
-        self.jump_delta_v = jump_delta_v;
-    }
-}
-
 struct Game {
     time_from_start_in_ticks: f32,
     recent_tick_durations_s: VecDeque<f32>,
@@ -439,7 +348,19 @@ impl Game {
     }
 
     fn set_player_jump_delta_v(&mut self, delta_v: f32) {
-        self.player.jump_delta_v = delta_v;
+        self.player.jump_properties =
+            JumpProperties::from_delta_v_and_g(delta_v, self.player.jump_properties.g);
+    }
+
+    fn set_jump_duration_in_seconds_and_height_in_grid_squares(
+        &mut self,
+        duration_in_seconds: f32,
+        height_in_grid_squares: f32,
+    ) {
+        let duration_in_ticks = seconds_to_ticks(duration_in_seconds);
+        let height_in_world_squares = height_in_grid_squares * VERTICAL_GRID_STRETCH_FACTOR;
+        self.player.jump_properties =
+            JumpProperties::from_height_and_duration(height_in_world_squares, duration_in_ticks);
     }
 
     fn set_player_max_run_speed(&mut self, speed: f32) {
@@ -712,7 +633,9 @@ impl Game {
                 };
             }
         }
-        self.player.vel.add_assign(p(0.0, self.player.jump_delta_v));
+        self.player
+            .vel
+            .add_assign(p(0.0, self.player.jump_properties.delta_vy));
 
         self.player.vel.add_assign(compression_bonus);
     }
@@ -896,7 +819,7 @@ impl Game {
             direction(turret.laser_direction) * turret_range;
         let relative_endpoint_in_grid_coordinates = world_space_to_grid_space(
             relative_endpoint_in_world_coordinates,
-            VERTICAL_STRETCH_FACTOR,
+            VERTICAL_GRID_STRETCH_FACTOR,
         );
         self.fire_laser(
             laser_start_point,
@@ -1089,7 +1012,7 @@ impl Game {
                     + direction(random_direction())
                         * particle.random_walk_speed
                         * dt_in_ticks.sqrt(),
-                VERTICAL_STRETCH_FACTOR,
+                VERTICAL_GRID_STRETCH_FACTOR,
             );
             let mut start_pos = particle.pos;
             let mut end_pos = start_pos + step;
@@ -1185,17 +1108,16 @@ impl Game {
             panic!("Player in compression, but has no last collision");
         }
         let collision = &self.player.last_collision.as_ref().unwrap();
-        let g = self.player.acceleration_from_gravity;
+        let g = self.player.jump_properties.g;
         let normal_impact_vel =
             project_a_onto_b(-collision.collider_velocity, floatify(collision.normal));
         let stored_jump_height_in_world_coordinates =
-            calc_jump_height_in_world_coordinates(magnitude(normal_impact_vel), g);
-        let speed_for_adding_stored_height = calc_jump_vel_from_height_in_world_coordinates(
-            stored_jump_height_in_world_coordinates
-                + self.player.jump_height_in_world_coordinates(),
+            JumpProperties::height_from_jump_speed_and_g(magnitude(normal_impact_vel), g);
+        let speed_for_adding_stored_height = JumpProperties::jump_vel_from_height_and_g(
+            stored_jump_height_in_world_coordinates + self.player.jump_properties.height,
             g,
         );
-        let speed_to_add = speed_for_adding_stored_height - self.player.jump_delta_v;
+        let speed_to_add = speed_for_adding_stored_height - self.player.jump_properties.delta_vy;
         return direction(normal_impact_vel) * speed_to_add;
     }
 
@@ -1400,7 +1322,7 @@ impl Game {
     fn place_grid_space_particle_burst(&mut self, pos: Point<f32>, num_particles: i32, speed: f32) {
         for i in 0..num_particles {
             let dir = radial(1.0, (i as f32 / num_particles as f32) * f32::TAU());
-            let dir_in_grid_space = grid_space_to_world_space(dir, VERTICAL_STRETCH_FACTOR);
+            let dir_in_grid_space = grid_space_to_world_space(dir, VERTICAL_GRID_STRETCH_FACTOR);
             self.place_particle_with_velocity_and_lifetime(
                 pos,
                 dir_in_grid_space * speed,
@@ -1680,13 +1602,17 @@ impl Game {
         ));
     }
 
+    fn hangtime_speed_threshold(&self) -> f32 {
+        self.player.jump_properties.delta_vy * DEFAULT_HANGTIME_JUMP_SPEED_FRACTION_THRESHOLD
+    }
+
     fn get_gravitational_acceleration(&mut self) -> f32 {
-        let gravity_multiplier = if self.player.vel.y().abs() < self.player.jump_delta_v * 0.8 {
-            0.8
+        let gravity_multiplier = if self.player.vel.y().abs() < self.hangtime_speed_threshold() {
+            DEFAULT_HANGTIME_GRAVITY_MULTIPLIER
         } else {
             1.0
         };
-        return self.player.acceleration_from_gravity * gravity_multiplier;
+        return self.player.jump_properties.g * gravity_multiplier;
     }
 
     fn apply_player_kinematics(&mut self, dt_in_ticks: f32) {
@@ -1726,7 +1652,7 @@ impl Game {
                 kinematic_state_at_start_of_submove.extrapolated_delta(remaining_time)
             };
             target_state_delta.pos =
-                world_space_to_grid_space(target_state_delta.pos, VERTICAL_STRETCH_FACTOR);
+                world_space_to_grid_space(target_state_delta.pos, VERTICAL_GRID_STRETCH_FACTOR);
             let target_state: KinematicState =
                 kinematic_state_at_start_of_submove + target_state_delta;
 
@@ -2326,7 +2252,7 @@ fn init_test_world_1(width: u16, height: u16) -> Game {
     let mut game = Game::new(width, height);
     //let mut game = Game::new(10, 40);
     //game.set_player_jump_delta_v(1.0);
-    //game.player.acceleration_from_gravity = 0.05;
+    //game.player.jump_properties.g = 0.05;
     //game.player.acceleration_from_floor_traction = 0.6;
     //game.set_player_max_run_speed(0.7);
 
@@ -2456,7 +2382,7 @@ mod tests {
 
     fn set_up_tall_drop() -> Game {
         let mut game = Game::new(20, 40);
-        game.player.acceleration_from_gravity = 0.05;
+        game.player.jump_properties.g = 0.05;
         game.player.acceleration_from_floor_traction = 0.6;
         game.set_player_max_run_speed(0.7);
 
@@ -2510,7 +2436,7 @@ mod tests {
 
     fn set_up_player_in_zero_g() -> Game {
         let mut game = set_up_just_player();
-        game.player.acceleration_from_gravity = 0.0;
+        game.player.jump_properties.g = 0.0;
         return game;
     }
 
@@ -2568,12 +2494,7 @@ mod tests {
         PlayerBlockCollision {
             time_in_ticks: 0.0,
             normal: p(0, 1),
-            collider_velocity: down_f()
-                * calc_jump_vel_from_height_in_grid_coordinates(
-                    DEFAULT_PLAYER_JUMP_HEIGHT_IN_GRID_COORDINATES,
-                    player.acceleration_from_gravity,
-                    VERTICAL_STRETCH_FACTOR,
-                ),
+            collider_velocity: down_f() * player.jump_properties.delta_vy,
             collider_pos: p(5.0, 6.0),
             collided_block_square: p(5, 5),
         }
@@ -2630,10 +2551,12 @@ mod tests {
     fn set_up_player_fully_compressed_from_down_leftwards_impact_on_wall() -> Game {
         let mut game = set_up_player_hanging_on_wall_on_left();
         let mut collision = get_player_block_collision_from_running_into_wall_on_left();
-        collision.collider_velocity.set_y(-game.player.jump_delta_v);
+        collision
+            .collider_velocity
+            .set_y(-game.player.jump_properties.delta_vy);
         collision.time_in_ticks = game.time_in_ticks() - DEFAULT_TICKS_TO_MAX_COMPRESSION;
         game.player.last_collision = Some(collision);
-        game.player.vel = down_f() * game.player.jump_delta_v;
+        game.player.vel = down_f() * game.player.jump_properties.delta_vy;
         game
     }
 
@@ -3045,7 +2968,7 @@ mod tests {
     }
 
     fn be_in_zero_g(game: &mut Game) {
-        game.player.acceleration_from_gravity = 0.0
+        game.player.jump_properties.g = 0.0
     }
 
     fn be_in_space(game: &mut Game) {
@@ -3099,7 +3022,7 @@ mod tests {
     fn test_player_dies_when_falling_off_screen() {
         let mut game = Game::new(30, 30);
         game.place_player(15.0, 0.0);
-        game.player.acceleration_from_gravity = 1.0;
+        game.player.jump_properties.g = 1.0;
         game.tick_physics();
         game.tick_physics();
         assert!(game.player.alive == false);
@@ -3109,7 +3032,7 @@ mod tests {
     #[timeout(100)]
     fn test_player_falls_in_gravity() {
         let mut game = set_up_just_player();
-        game.player.acceleration_from_gravity = 1.0;
+        game.player.jump_properties.g = 1.0;
         let start_pos = game.player.pos;
         let start_vel = game.player.vel;
         game.tick_physics();
@@ -3503,7 +3426,7 @@ mod tests {
     fn test_player_gravity() {
         let mut game = Game::new(30, 30);
         game.place_player(15.0, 11.0);
-        game.player.acceleration_from_gravity = 1.0;
+        game.player.jump_properties.g = 1.0;
 
         game.tick_physics();
 
@@ -3528,14 +3451,13 @@ mod tests {
     #[timeout(100)]
     fn test_land_after_jump__moving_right() {
         let mut game = set_up_player_running_full_speed_to_right_on_platform();
-        game.player
-            .set_jump_duration_in_seconds_and_height_in_grid_squares(0.1, 0.1);
+        game.set_jump_duration_in_seconds_and_height_in_grid_squares(0.1, 0.1);
         be_in_vacuum(&mut game);
         let start_pos = game.player.pos;
 
         game.player_jump();
         let mut prev_vel_y = game.player.vel.y();
-        let jump_duration_in_ticks: i32 = game.player.jump_duration_in_ticks().ceil() as i32;
+        let jump_duration_in_ticks: i32 = game.player.jump_properties.duration.ceil() as i32;
         for _ in 0..jump_duration_in_ticks {
             game.tick_physics();
             assert!(game.player.vel.x().abs() == game.player.max_run_speed);
@@ -3551,8 +3473,7 @@ mod tests {
     #[timeout(100)]
     fn test_land_after_jump__moving_left() {
         let mut game = set_up_player_running_full_speed_to_left_on_platform();
-        game.player
-            .set_jump_duration_in_seconds_and_height_in_grid_squares(0.1, 0.1);
+        game.set_jump_duration_in_seconds_and_height_in_grid_squares(0.1, 0.1);
         be_in_vacuum(&mut game);
         let start_pos = game.player.pos;
 
@@ -3560,7 +3481,7 @@ mod tests {
         let initial_vy = game.player.vel.y();
         let mut prev_vel_y = game.player.vel.y();
         let mut initial_y = game.player.pos.y();
-        let jump_duration_in_ticks: i32 = game.player.jump_duration_in_ticks().ceil() as i32;
+        let jump_duration_in_ticks: i32 = game.player.jump_properties.duration.ceil() as i32;
         for _ in 0..jump_duration_in_ticks {
             game.tick_physics();
             assert!(game.player.vel.x().abs() == game.player.max_run_speed);
@@ -3683,7 +3604,7 @@ mod tests {
         game.player.pos.add_assign(p(0.0, 2.0));
         game.player.pos.set_x(wall_x as f32 + 1.0);
         game.player.vel = p(-3.0, 3.0);
-        game.player.acceleration_from_gravity = 0.0;
+        game.player.jump_properties.g = 0.0;
         game.player.deceleration_from_air_friction = 0.0;
 
         let start_y_vel = game.player.vel.y();
@@ -3702,7 +3623,7 @@ mod tests {
     fn test_coyote_ticks() {
         let mut game = set_up_just_player();
         let start_pos = game.player.pos;
-        game.player.acceleration_from_gravity = 1.0;
+        game.player.jump_properties.g = 1.0;
         game.tick_physics();
         assert!(game.player.pos.y() == start_pos.y());
         game.tick_physics();
@@ -4375,7 +4296,7 @@ mod tests {
     fn update_color_threshold_with_jump_delta_v_update() {
         let mut game = set_up_game();
         let start_thresh = game.player.speed_of_blue;
-        game.set_player_jump_delta_v(game.player.jump_delta_v + 1.0);
+        game.set_player_jump_delta_v(game.player.jump_properties.delta_vy + 1.0);
         assert!(game.player.speed_of_blue != start_thresh);
     }
 
@@ -4436,7 +4357,7 @@ mod tests {
     #[timeout(100)]
     fn test_bullet_time_slows_down_acceleration_from_gravity() {
         let mut game = set_up_just_player();
-        game.player.acceleration_from_gravity = 1.0;
+        game.player.jump_properties.g = 1.0;
         let start_vy = game.player.vel.y();
         game.bullet_time_factor = 0.5;
         game.toggle_bullet_time();
@@ -4510,7 +4431,7 @@ mod tests {
         game.player.vel = p(1.0, 1.0);
         game.tick_physics();
         let movement = game.player.pos - start_pos;
-        assert!(movement.x() == movement.y() * VERTICAL_STRETCH_FACTOR);
+        assert!(movement.x() == movement.y() * VERTICAL_GRID_STRETCH_FACTOR);
     }
 
     #[test]
@@ -4523,7 +4444,7 @@ mod tests {
 
         game.tick_physics();
         let movement = game.particles[0].pos - start_pos;
-        assert!(movement.x() == movement.y() * VERTICAL_STRETCH_FACTOR);
+        assert!(movement.x() == movement.y() * VERTICAL_GRID_STRETCH_FACTOR);
     }
 
     #[test]
@@ -4700,9 +4621,9 @@ mod tests {
         let distorted_diff2 = end_pos_2 - start_pos;
         let diff1 = grid_space_to_world_space(
             distorted_diff1 / game1.bullet_time_factor.sqrt(),
-            VERTICAL_STRETCH_FACTOR,
+            VERTICAL_GRID_STRETCH_FACTOR,
         );
-        let diff2 = grid_space_to_world_space(distorted_diff2, VERTICAL_STRETCH_FACTOR);
+        let diff2 = grid_space_to_world_space(distorted_diff2, VERTICAL_GRID_STRETCH_FACTOR);
 
         assert!(end_pos_1 != end_pos_2);
 
@@ -5131,7 +5052,9 @@ mod tests {
 
         let game1_time_before_impact = 1.0 - game1.ticks_since_last_player_collision().unwrap();
         let game2_time_before_impact = 1.0 - game2.ticks_since_last_player_collision().unwrap();
-        assert!(game1_time_before_impact == game2_time_before_impact * VERTICAL_STRETCH_FACTOR);
+        assert!(
+            game1_time_before_impact == game2_time_before_impact * VERTICAL_GRID_STRETCH_FACTOR
+        );
     }
 
     #[test]
@@ -5723,9 +5646,9 @@ mod tests {
 
         let start_pos = game.player.pos;
 
-        let g = game.player.acceleration_from_gravity.abs();
+        let g = game.player.jump_properties.g.abs();
         let vi = game.player.vel.y();
-        let time_to_peak = time_to_jump_peak(vi, g);
+        let time_to_peak = JumpProperties::time_to_jump_peak(vi, g);
 
         assert!(vi > 0.0);
         assert!(g > 0.0);
@@ -5747,7 +5670,7 @@ mod tests {
         let mut game = set_up_player_on_platform();
         be_in_vacuum(&mut game);
         game.player_jump_if_possible();
-        game.apply_physics_in_n_steps(game.player.jump_duration_in_ticks(), 100);
+        game.apply_physics_in_n_steps(game.player.jump_properties.duration, 100);
         assert!(game.ticks_since_last_player_collision().unwrap() < 1.0);
     }
 
@@ -5760,10 +5683,11 @@ mod tests {
 
         let y0 = game.player.pos.y();
 
-        let g = game.player.acceleration_from_gravity.abs();
+        let g = game.player.jump_properties.g.abs();
         let vi = game.player.vel.y();
-        let time_to_peak = time_to_jump_peak(vi, g);
-        let jump_peak_y = y0 + calc_jump_height_in_grid_coordinates(vi, g, VERTICAL_STRETCH_FACTOR);
+        let time_to_peak = JumpProperties::time_to_jump_peak(vi, g);
+        let jump_peak_y =
+            y0 + JumpProperties::height_from_jump_speed_and_g(vi, g) / VERTICAL_GRID_STRETCH_FACTOR;
 
         assert!(vi > 0.0);
         assert!(g > 0.0);
@@ -5786,12 +5710,12 @@ mod tests {
             accel: down_f() * g,
         };
 
-        let expected_time_to_peak = time_to_jump_peak(vi, g);
+        let expected_time_to_peak = JumpProperties::time_to_jump_peak(vi, g);
         assert!(nearly_equal(
             expected_time_to_peak,
             state.dt_to_slowest_point()
         ));
-        let expected_height = calc_jump_height_in_world_coordinates(vi, g);
+        let expected_height = JumpProperties::height_from_jump_speed_and_g(vi, g);
         assert!(nearly_equal(
             expected_height,
             state
@@ -5813,7 +5737,7 @@ mod tests {
     #[timeout(100)]
     fn test_do_not_warp_at_peak_of_jump() {
         let mut game = set_up_player_about_to_reach_peak_of_jump();
-        game.player.acceleration_from_gravity = 0.1;
+        game.player.jump_properties.g = 0.1;
         let start_pos = game.player.pos;
         game.tick_physics();
         let distance_from_start = magnitude(game.player.pos - start_pos);
@@ -6177,7 +6101,7 @@ mod tests {
     #[timeout(100)]
     fn test_jumps_have_hangtime_at_peak() {
         let mut game = set_up_player_about_to_reach_peak_of_jump();
-        let naive_jump_duration = game.player.jump_duration_in_ticks();
+        let naive_jump_duration = game.player.jump_properties.duration;
         assert!(game.player.vel.y() > 0.0);
         game.tick_physics();
         assert!(nearly_equal(game.player.vel.y(), 0.0));

@@ -908,44 +908,6 @@ pub fn flip_y(v: FPoint) -> FPoint {
     p(v.x(), -v.y())
 }
 
-pub fn calc_jump_height_in_world_coordinates(jump_vel: f32, grav_accel: f32) -> f32 {
-    0.5 * jump_vel * jump_vel / grav_accel.abs()
-}
-
-pub fn calc_jump_height_in_grid_coordinates(
-    jump_vel: f32,
-    grav_accel: f32,
-    vertical_stretch_factor: f32,
-) -> f32 {
-    calc_jump_height_in_world_coordinates(jump_vel, grav_accel) / vertical_stretch_factor
-}
-
-pub fn calc_jump_vel_from_height_in_world_coordinates(jump_height: f32, grav_accel: f32) -> f32 {
-    (2.0 * grav_accel.abs() * jump_height).sqrt()
-}
-
-pub fn calc_jump_vel_from_height_in_grid_coordinates(
-    jump_height: f32,
-    grav_accel: f32,
-    stretch_factor: f32,
-) -> f32 {
-    let world_jump_height = jump_height * stretch_factor;
-    calc_jump_vel_from_height_in_world_coordinates(world_jump_height, grav_accel)
-}
-
-pub fn time_to_jump_peak(jump_vel: f32, grav_accel: f32) -> f32 {
-    jump_vel.abs() / grav_accel.abs()
-}
-
-pub fn time_to_jump_landing(jump_vel: f32, grav_accel: f32) -> f32 {
-    time_to_jump_peak(jump_vel, grav_accel) * 2.0
-}
-
-pub fn g_from_jump_height_and_duration(jump_height: f32, duration: f32) -> f32 {
-    let time_to_peak = duration / 2.0;
-    2.0 * jump_height / (time_to_peak * time_to_peak)
-}
-
 pub fn ticks_to_stop_from_speed(v0: f32, a: f32) -> Option<f32> {
     if a == 0.0 {
         None
