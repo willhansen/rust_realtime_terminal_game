@@ -187,13 +187,13 @@ enum ParticleWallCollisionBehavior {
     Bounce,
 }
 #[derive(EnumIter, PartialEq, Debug, Clone, Copy)]
-enum WallJumpBehavior {
+pub enum WallJumpBehavior {
     SwitchDirection,
     Stop,
     KeepDirection,
 }
 #[derive(EnumIter, PartialEq, Debug, Clone, Copy)]
-enum BoostBehavior {
+pub enum BoostBehavior {
     Add,
     Set,
     AddButInstantTurnAround,
@@ -241,7 +241,7 @@ impl Particle {
 }
 
 #[derive(Debug)]
-struct PlayerBlockCollision {
+pub struct PlayerBlockCollision {
     time_in_ticks: f32,
     normal: Point<i32>,
     collider_velocity: Point<f32>,
@@ -250,7 +250,7 @@ struct PlayerBlockCollision {
 }
 
 #[derive(PartialEq, Debug)]
-enum SpeedLineType {
+pub enum SpeedLineType {
     StillLine,
     BurstChain,
     BurstOnDash,
