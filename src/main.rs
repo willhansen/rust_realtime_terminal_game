@@ -680,7 +680,7 @@ impl Game {
             match self.player.boost_behavior {
                 BoostBehavior::Add => self.player.vel.add_assign(dash_vel),
                 BoostBehavior::Set => self.player.vel = dash_vel,
-                BoostBehavior::AddButInstantTurnAround => {
+                AddButInstantTurnAround => {
                     let want_increase_speed = dash_vel.dot(self.player.vel) > 0.0;
                     if want_increase_speed {
                         self.player.vel.add_assign(dash_vel);
@@ -696,7 +696,7 @@ impl Game {
         self.is_bullet_time = !self.is_bullet_time;
     }
 
-    fn handle_event(&mut self, evt: termion::event::Event) {
+    fn handle_event(&mut self, evt: Event) {
         match evt {
             Event::Key(ke) => match ke {
                 Key::Char('q') => self.running = false,
@@ -1296,7 +1296,7 @@ impl Game {
         }
     }
     fn place_particle_blast(&mut self, pos: Point<f32>, num_particles: i32, max_speed: f32) {
-        for i in 0..num_particles {
+        for _i in 0..num_particles {
             let dir = random_direction();
             // want more even distribution over the blast
             let speed = rand_in_range(0.0f32, 1.0f32).sqrt() * max_speed;
@@ -1471,10 +1471,7 @@ impl Game {
         }
     }
 
-    fn update_screen(
-        &mut self,
-        stdout: &mut MouseTerminal<termion::raw::RawTerminal<std::io::Stdout>>,
-    ) {
+    fn update_screen(&mut self, stdout: &mut MouseTerminal<RawTerminal<std::io::Stdout>>) {
         let width = self.grid.len();
         let height = self.grid[0].len();
         // Now update the graphics where applicable
