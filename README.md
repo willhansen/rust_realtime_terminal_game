@@ -4,10 +4,8 @@ To run: `cargo run --release`
 
 Just one test map implemented for the time being
 
-![](default_map.png)
+![](media/default_map.png)
 
-![](jumpy.mp4)
-![](media/jumpy.mp4)
 
 ## Controls
 
