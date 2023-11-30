@@ -8,7 +8,8 @@ Just one test map implemented for the time being
 
 image::default_map.png[] 
 
-video::media/jumpy.mkv[]
+video::jumpy.mp4[]
+video::media/jumpy.mp4[]
 
 == Controls
 
