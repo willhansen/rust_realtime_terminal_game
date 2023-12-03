@@ -4,7 +4,7 @@ To run: `cargo run --release`
 
 Just one test map implemented for the time being
 
-![](media/default_map.png)
+https://github.com/willhansen/rust_realtime_terminal_game/assets/2918280/409170ee-11ba-408a-a33e-7b2e4e2194d2
 
 ## Controls
 
